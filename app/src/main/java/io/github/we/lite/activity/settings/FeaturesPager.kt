@@ -21,16 +21,10 @@ import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Arrow_back
 import com.composables.icons.materialsymbols.outlined.Close
-import com.composables.icons.materialsymbols.outlined.Fiber_new
 import com.composables.icons.materialsymbols.outlined.Search
 import io.github.we.lite.features.core.BaseFeature
 import io.github.we.lite.features.core.FeaturesProvider
 import io.github.we.lite.features.core.SwitchFeature
-import io.github.we.lite.preferences.WePrefs
-import io.github.we.lite.utils.android.showToastSuspend
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -39,7 +33,6 @@ import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.time.LocalDate
-
 
 // ---------------------------------------------------------------------------
 //  Shared switch state
@@ -152,29 +145,6 @@ fun FeaturesPager(onOpenCategory: (String) -> Unit) {
             }
         } else {
             // Its own card, so it reads as separate from the real categories below.
-            if (NEW_FEATURE_ITEMS.isNotEmpty()) {
-                item {
-                    Card(
-                        modifier = Modifier
-                            .padding(top = 12.dp)
-                            .fillMaxWidth()
-                    ) {
-                        ArrowPreference(
-                            title = "新功能",
-                            summary = "最近 ${30} 天新增 ${0} 项",
-                            startAction = {
-                                Icon(
-                                    imageVector = MaterialSymbols.Outlined.Fiber_new,
-                                    contentDescription = null,
-                                    modifier = Modifier.padding(end = 6.dp),
-                                    tint = MiuixTheme.colorScheme.onBackground,
-                                )
-                            },
-                            onClick = { onOpenCategory(NEW_FEATURES_CATEGORY) },
-                        )
-                    }
-                }
-            }
 
             item {
                 Card(
@@ -211,8 +181,7 @@ fun FeaturesPager(onOpenCategory: (String) -> Unit) {
 @Composable
 fun CategoryDetailScreen(categoryName: String, onBack: () -> Unit) {
     val items = remember(categoryName) {
-        if (categoryName == NEW_FEATURES_CATEGORY) NEW_FEATURE_ITEMS
-        else FeaturesProvider.ALL_HOOK_ITEMS.filter { categoryName in it.categories }
+        FeaturesProvider.ALL_HOOK_ITEMS.filter { categoryName in it.categories }
     }
 
     MiuixListScaffold(

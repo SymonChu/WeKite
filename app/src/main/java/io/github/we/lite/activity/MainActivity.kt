@@ -61,7 +61,6 @@ import io.github.we.lite.ui.content.DefaultColumn
 import io.github.we.lite.ui.content.IconButton
 import io.github.we.lite.ui.content.TextButton
 import io.github.we.lite.ui.utils.GitHubIcon
-import io.github.we.lite.ui.utils.TelegramIcon
 import io.github.we.lite.ui.utils.theme.ModuleAppTheme
 import io.github.we.lite.utils.android.androidUserId
 import io.github.we.lite.utils.android.getEnabled
@@ -70,8 +69,6 @@ import io.github.we.lite.utils.android.showToast
 import io.github.we.lite.utils.formatEpoch
 import io.github.we.lite.utils.hook_status.HookStatus
 import io.github.we.lite.utils.openInSystem
-import io.github.we.lite.utils.registerBshSnapshotDecompileLaunchers
-import io.github.we.lite.utils.serialization.DefaultJson
 
 class MainActivity : ComponentActivity() {
 
@@ -87,59 +84,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private val selectFileLauncher = registerBshSnapshotDecompileLaunchers()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        if (intent?.action == TelegramDatabaseImportContract.ACTION_PICK_ROOT_STICKER_SETS) {
-            if (!PackageNames.isWeChat(callingPackage.orEmpty())) {
-                setResult(
-                    RESULT_CANCELED,
-                    Intent().putExtra(
-                        TelegramDatabaseImportContract.EXTRA_ERROR,
-                        "只允许从微信内的 WeLite 面板启动此操作",
-                    ),
-                )
-                finish()
-                return
-            }
-            Shell.getShell()
-            setContent {
-                ModuleAppTheme {
-                    RootTelegramStickerSetPickerContent(
-                        discoverInstances = {
-                            RootTelegramStickerSetRepository.discoverInstances(
-                                applicationInfo.uid / 100000,
-                            )
-                        },
-                        readInstalledSets = { instance ->
-                            RootTelegramStickerSetRepository.readInstalledSets(
-                                cacheDir,
-                                applicationInfo.uid,
-                                instance,
-                            )
-                        },
-                        onCancel = {
-                            setResult(RESULT_CANCELED)
-                            finish()
-                        },
-                        onComplete = { stickerSets ->
-                            setResult(
-                                RESULT_OK,
-                                Intent().putExtra(
-                                    TelegramDatabaseImportContract.EXTRA_STICKER_SETS,
-                                    DefaultJson.encodeToString(stickerSets),
-                                ),
-                            )
-                            finish()
-                        },
-                    )
-                }
-            }
-            return
-        }
 
         if (BuildConfig.HAS_LIBXPOSED_ENTRY) {
             runCatching { HookStatus.init(this) }
@@ -624,14 +573,9 @@ class MainActivity : ComponentActivity() {
                     icon = GitHubIcon,
                     title = "GitHub",
                     subtitle = "SymonChu/WeLite",
-                    onClick = { onUrlClick("https://github.com/Ujhhgtg/WeKit") }
+                    onClick = { onUrlClick("https://github.com/SymonChu/WeLite") }
                 )
-                LinkCard(
-                    icon = TelegramIcon,
-                    title = "Telegram",
-                    subtitle = "https://t.me/+7j5dJ6g16B43OWVl",
-                    onClick = { onUrlClick("https://t.me/+7j5dJ6g16B43OWVl") }
-                )
+
             }
 
             if (showAboutDialog) {

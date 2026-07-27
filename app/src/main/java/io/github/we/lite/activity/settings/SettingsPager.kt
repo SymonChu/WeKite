@@ -1,6 +1,5 @@
 package io.github.we.lite.activity.settings
 
-
 import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -47,7 +46,6 @@ import coil3.compose.AsyncImage
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Account_circle
 import com.composables.icons.materialsymbols.outlined.Arrow_back
-import com.composables.icons.materialsymbols.outlined.Auto_delete
 import com.composables.icons.materialsymbols.outlined.Block
 import com.composables.icons.materialsymbols.outlined.Brightness_medium
 import com.composables.icons.materialsymbols.outlined.Build_circle
@@ -59,7 +57,6 @@ import com.composables.icons.materialsymbols.outlined.Download
 import com.composables.icons.materialsymbols.outlined.Frame_bug
 import com.composables.icons.materialsymbols.outlined.Label
 import com.composables.icons.materialsymbols.outlined.License
-import com.composables.icons.materialsymbols.outlined.Lightbulb_2
 import com.composables.icons.materialsymbols.outlined.Notifications
 import com.composables.icons.materialsymbols.outlined.Palette
 import com.composables.icons.materialsymbols.outlined.Rule_settings
@@ -68,7 +65,6 @@ import com.composables.icons.materialsymbols.outlined.Style
 import com.composables.icons.materialsymbols.outlined.Sync
 import com.composables.icons.materialsymbols.outlined.Update
 import com.composables.icons.materialsymbols.outlined.Upload
-import com.composables.icons.materialsymbols.outlined.Volunteer_activism
 import com.composables.icons.materialsymbols.outlined.Wallpaper
 import com.mikepenz.aboutlibraries.Libs
 import com.mikepenz.aboutlibraries.entity.Library
@@ -78,19 +74,14 @@ import io.github.we.lite.R
 import io.github.we.lite.activity.TransparentActivity
 import io.github.we.lite.constants.Preferences
 import io.github.we.lite.features.api.core.WeApi
-import io.github.we.lite.preferences.WePrefs
 import io.github.we.lite.ui.content.MiuixSmallTitle
 import io.github.we.lite.ui.utils.GitHubIcon
-import io.github.we.lite.ui.utils.TelegramIcon
 import io.github.we.lite.ui.utils.theme.AppColorSpec
 import io.github.we.lite.ui.utils.theme.AppPaletteStyle
 import io.github.we.lite.ui.utils.theme.AppThemeMode
 import io.github.we.lite.ui.utils.theme.ThemeSettings
-import io.github.we.lite.utils.AppUpdater
 import io.github.we.lite.utils.HostInfo
-import io.github.we.lite.utils.UpdateResult
 import io.github.we.lite.utils.WeLogger
-import io.github.we.lite.utils.android.showToastSuspend
 import io.github.we.lite.utils.formatEpoch
 import io.github.we.lite.utils.openInSystem
 import io.github.we.lite.utils.serialization.DefaultJson
@@ -140,12 +131,8 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
     val context = LocalComponentActivity.current
 
     var showClearConfirm by remember { mutableStateOf(false) }
-    var updateInfo by remember { mutableStateOf<UpdateResult.UpdateAvailable?>(null) }
-    var updateError by remember { mutableStateOf<String?>(null) }
 
     ClearConfigDialog(show = showClearConfirm, onDismiss = { showClearConfirm = false })
-    UpdateAvailableDialog(info = updateInfo, onDismiss = { updateInfo = null }, context = context)
-    UpdateErrorDialog(message = updateError, onDismiss = { updateError = null })
 
     MiuixListScaffold(title = "设置") {
         // Account info card — shown at top of Settings tab.
@@ -248,8 +235,8 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
                     icon = MaterialSymbols.Outlined.Update,
                     onClick = {
                         checkForUpdate(
-                            onAvailable = { updateInfo = it },
-                            onError = { updateError = it },
+                            onAvailable = { /* updateInfo = it */ },
+                            onError = { /* updateError = it */ },
                         )
                     },
                 )
@@ -262,11 +249,6 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
             Card(modifier = Modifier.fillMaxWidth()) {
                 PrefArrow(title = "版本", summary = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", icon = MaterialSymbols.Outlined.Label)
                 PrefArrow(title = "构建提交时间", summary = formatEpoch(BuildConfig.BUILD_TIMESTAMP, true), icon = MaterialSymbols.Outlined.Build_circle)
-                PrefArrow(
-                    title = "提示",
-                    summary = "牙膏要一点一点挤, 显卡要一刀一刀切, PPT 要一张一张放, 代码要一行一行写, 单个功能预计自出现在 commit 之日起, 三年内开发完毕",
-                    icon = MaterialSymbols.Outlined.Lightbulb_2,
-                )
                 PrefArrow(
                     title = "开放源代码许可",
                     summary = "本项目使用的开放源代码库许可",
@@ -457,7 +439,6 @@ private fun ThemeSection() {
                 labelOf = { it.displayName },
                 onSelected = {
                     ThemeSettings.updatePaletteStyle(it)
-                    // Keep the stored spec valid for the new style.
                     if (!it.supportsSpec2025 && ThemeSettings.colorSpec == AppColorSpec.SPEC_2025) {
                         ThemeSettings.updateColorSpec(AppColorSpec.SPEC_2021)
                     }
@@ -479,512 +460,14 @@ private fun ThemeSection() {
             var applyToWechat by remember { mutableStateOf(ThemeSettings.applyToWechat) }
             SwitchPreference(
                 title = "同时对微信生效",
-                summary = "将自定义配色应用到微信本身",
+                summary = "将对模块设置的颜色同时应用于微信内部 (会影响微信渲染性能)",
                 startAction = { PrefIcon(MaterialSymbols.Outlined.Sync) },
                 checked = applyToWechat,
                 onCheckedChange = {
                     applyToWechat = it
                     ThemeSettings.updateApplyToWechat(it)
-                    CoroutineScope(Dispatchers.Main).launch { showToastSuspend("重启微信生效") }
                 },
             )
-        }
-    }
-}
-
-/** miuix color-picker dialog for the custom seed color; commits to ThemeSettings on confirm. */
-@Composable
-private fun SeedColorPickerDialog(show: Boolean, onDismiss: () -> Unit) {
-    var picked by remember(show) { mutableStateOf(Color(ThemeSettings.seedColor)) }
-
-    WindowDialog(show = show, title = "自定义颜色", onDismissRequest = onDismiss) {
-        Column {
-            ColorPicker(
-                color = picked,
-                onColorChanged = { picked = it },
-            )
-            Spacer(Modifier.height(20.dp))
-            Row(modifier = Modifier.fillMaxWidth()) {
-                TextButton(
-                    text = "重置",
-                    onClick = { picked = Color(ThemeSettings.DEFAULT_SEED_COLOR) },
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(20.dp))
-                TextButton(text = "取消", onClick = onDismiss, modifier = Modifier.weight(1f))
-                Spacer(Modifier.width(20.dp))
-                TextButton(
-                    text = "确定",
-                    onClick = {
-                        ThemeSettings.updateSeedColor(picked.toArgb())
-                        onDismiss()
-                    },
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.textButtonColorsPrimary(),
-                )
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-//  Preference helper composables
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun PrefSwitch(
-    key: String,
-    title: String,
-    summary: String,
-    icon: ImageVector,
-    default: Boolean = false,
-) {
-    // Must match the default declared on the matching `prefOption`, otherwise the switch shows
-    // "off" for a preference that is actually on until the user toggles it once.
-    var checked by remember(key, default) { mutableStateOf(WePrefs.getBoolOrDef(key, default)) }
-    SwitchPreference(
-        title = title,
-        summary = summary,
-        startAction = { PrefIcon(icon) },
-        checked = checked,
-        onCheckedChange = {
-            checked = it
-            WePrefs.putBool(key, it)
-        },
-    )
-}
-
-@Composable
-private fun PrefArrow(
-    title: String,
-    summary: String? = null,
-    icon: ImageVector? = null,
-    onClick: (() -> Unit)? = null,
-) {
-    if (onClick == null) {
-        // Informational row: no trailing arrow, no ripple.
-        BasicComponent(
-            title = title,
-            summary = summary,
-            startAction = icon?.let { { PrefIcon(it) } },
-        )
-    } else {
-        ArrowPreference(
-            title = title,
-            summary = summary,
-            startAction = icon?.let { { PrefIcon(it) } },
-            onClick = onClick,
-        )
-    }
-}
-
-@Composable
-private fun PrefIcon(icon: ImageVector) {
-    Icon(
-        imageVector = icon,
-        contentDescription = null,
-        modifier = Modifier.padding(end = 6.dp),
-        tint = MiuixTheme.colorScheme.onBackground,
-    )
-}
-// ---------------------------------------------------------------------------
-//  Config import / export / clear / update / search (migrated verbatim)
-// ---------------------------------------------------------------------------
-
-private fun exportConfig(context: Context) {
-    TransparentActivity.launch(context) {
-        val exportLauncher = registerForActivityResult(
-            ActivityResultContracts.CreateDocument("application/json")
-        ) { uri ->
-            if (uri == null) {
-                finish()
-                return@registerForActivityResult
-            }
-            lifecycleScope.launch(Dispatchers.IO) {
-                val exportJson = run {
-                    val map = WePrefs.default.getAll()
-                    val jsonObject = buildJsonObject {
-                        for ((key, value) in map) {
-                            when (value) {
-                                is Boolean -> put(key, value)
-                                is Int -> put(key, value)
-                                is Long -> put(key, value)
-                                is Float -> put(key, value)
-                                is Double -> put(key, value)
-                                is String -> put(key, value)
-                                is Set<*> -> put(key, buildJsonArray {
-                                    @Suppress("UNCHECKED_CAST")
-                                    (value as Set<String>).forEach { add(it) }
-                                })
-
-                                null -> put(key, JsonNull)
-                            }
-                        }
-                    }
-                    DefaultJson.encodeToString(jsonObject)
-                }
-                runCatching {
-                    HostInfo.application.contentResolver.openOutputStream(uri, "w")!!.use { fos ->
-                        fos.writer().use { it.write(exportJson) }
-                    }
-                }.onFailure {
-                    showToastSuspend("导出失败!")
-                    WeLogger.e("WePrefs", "failed to export", it)
-                }.onSuccess { showToastSuspend("导出成功") }
-                withContext(Dispatchers.Main) { finish() }
-            }
-        }
-        exportLauncher.launch("wekit_prefs_backup.json")
-    }
-}
-
-private fun importConfig(context: Context) {
-    TransparentActivity.launch(context) {
-        val importLauncher = registerForActivityResult(
-            ActivityResultContracts.OpenDocument()
-        ) { uri ->
-            if (uri == null) {
-                finish()
-                return@registerForActivityResult
-            }
-            lifecycleScope.launch(Dispatchers.IO) {
-                runCatching {
-                    val jsonString = LauncherUI.getInstance()!!.contentResolver.openInputStream(uri)?.use { fis ->
-                        fis.reader().readText()
-                    } ?: return@launch
-                    val jsonObject = DefaultJson.parseToJsonElement(jsonString).jsonObject
-                    for ((key, element) in jsonObject) {
-                        when (element) {
-                            is JsonNull -> WePrefs.default.remove(key)
-                            is JsonPrimitive -> when {
-                                element.isString -> WePrefs.default.putString(key, element.content)
-                                element.booleanOrNull != null && (element.content == "true" || element.content == "false") ->
-                                    WePrefs.putBool(key, element.boolean)
-
-                                element.longOrNull != null && element.intOrNull == null ->
-                                    WePrefs.putLong(key, element.long)
-
-                                element.intOrNull != null -> WePrefs.putInt(key, element.int)
-                                element.floatOrNull != null -> WePrefs.putFloat(key, element.float)
-                            }
-
-                            is JsonArray -> WePrefs.default.putStringSet(
-                                key,
-                                element.mapTo(HashSet()) { it.jsonPrimitive.content }
-                            )
-
-                            else -> Unit
-                        }
-                    }
-                }.onFailure {
-                    showToastSuspend("导入失败!")
-                    WeLogger.e("WePrefs", "failed to import", it)
-                }.onSuccess { showToastSuspend("导入成功") }
-                withContext(Dispatchers.Main) { finish() }
-            }
-        }
-        importLauncher.launch(arrayOf("application/json"))
-    }
-}
-
-private fun checkForUpdate(
-    onAvailable: (UpdateResult.UpdateAvailable) -> Unit,
-    onError: (String) -> Unit,
-) {
-    CoroutineScope(Dispatchers.Main).launch {
-        showToastSuspend("正在检查更新...")
-        when (val result = AppUpdater.checkForUpdate()) {
-            UpdateResult.UpToDate -> showToastSuspend("已是最新版本")
-            is UpdateResult.UpdateAvailable -> onAvailable(result)
-            is UpdateResult.Error -> {
-                WeLogger.e("AppUpdater", "failed to check for updates", result.cause)
-                onError(result.cause.message ?: "未知错误")
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-//  Dialogs (miuix WindowDialog)
-// ---------------------------------------------------------------------------
-
-@Composable
-private fun ClearConfigDialog(show: Boolean, onDismiss: () -> Unit) {
-    MiuixConfirmDialog(
-        show = show,
-        title = "清除模块配置",
-        message = "确定清除配置? (警告: 此操作不可逆!)",
-        confirmText = "清除",
-        onDismiss = onDismiss,
-        onConfirm = {
-            onDismiss()
-            CoroutineScope(Dispatchers.IO).launch {
-                showToastSuspend("正在清除...")
-                WePrefs.default.clear()
-                showToastSuspend("清除成功!")
-            }
-        },
-    )
-}
-
-@Composable
-private fun UpdateAvailableDialog(
-    info: UpdateResult.UpdateAvailable?,
-    onDismiss: () -> Unit,
-    context: ComponentActivity,
-) {
-    MiuixConfirmDialog(
-        show = info != null,
-        title = "检测到新版本",
-        message = if (info != null) {
-            "当前版本: ${BuildConfig.VERSION_NAME}\n新版本: ${info.info.versionName}\n是否下载并安装?"
-        } else "",
-        confirmText = "确定",
-        onDismiss = onDismiss,
-        onConfirm = {
-            val target = info ?: return@MiuixConfirmDialog
-            onDismiss()
-            // The activity's scope, so closing settings mid-download cancels the download wait
-            // (and with it the BroadcastReceiver it keeps registered on this activity).
-            // This UI is proxied into WeChat's process: an escaping exception here would take
-            // WeChat down with it, so nothing may leave this coroutine.
-            context.lifecycleScope.launch(Dispatchers.Default) {
-                runCatching { AppUpdater.downloadAndInstall(context, target.info) }
-                    .onFailure { e ->
-                        if (e is CancellationException) throw e
-                        WeLogger.e("AppUpdater", "failed to download update", e)
-                        showToastSuspend(context, "下载更新失败: ${e.message ?: "未知错误"}")
-                    }
-            }
-        },
-    )
-}
-
-@Composable
-private fun UpdateErrorDialog(message: String?, onDismiss: () -> Unit) {
-    MiuixMessageDialog(
-        show = message != null,
-        title = "检查更新失败",
-        message = "错误信息: ${message.orEmpty()}",
-        dismissText = "关闭",
-        onDismiss = onDismiss,
-    )
-}
-
-/** Two-button (cancel / confirm) miuix dialog. */
-@Composable
-private fun MiuixConfirmDialog(
-    show: Boolean,
-    title: String,
-    message: String,
-    confirmText: String,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-    dismissText: String = "取消",
-) {
-    WindowDialog(show = show, title = title, onDismissRequest = onDismiss) {
-        Column {
-            Text(text = message)
-            Spacer(Modifier.height(20.dp))
-            Row(modifier = Modifier.fillMaxWidth()) {
-                TextButton(text = dismissText, onClick = onDismiss, modifier = Modifier.weight(1f))
-                Spacer(Modifier.width(20.dp))
-                TextButton(
-                    text = confirmText,
-                    onClick = onConfirm,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.textButtonColorsPrimary(),
-                )
-            }
-        }
-    }
-}
-
-/** Single-button (dismiss only) miuix dialog. */
-@Composable
-private fun MiuixMessageDialog(
-    show: Boolean,
-    title: String,
-    message: String,
-    dismissText: String,
-    onDismiss: () -> Unit,
-) {
-    WindowDialog(show = show, title = title, onDismissRequest = onDismiss) {
-        Column {
-            Text(text = message)
-            Spacer(Modifier.height(20.dp))
-            TextButton(
-                text = dismissText,
-                onClick = onDismiss,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.textButtonColorsPrimary(),
-            )
-        }
-    }
-}
-
-
-// ---------------------------------------------------------------------------
-//  Open-source license screen
-// ---------------------------------------------------------------------------
-
-@Composable
-fun LicenseScreen(onBack: () -> Unit) {
-    val resources = LocalResources.current
-    val libraries = remember(resources) {
-        val json = resources.openRawResource(R.raw.aboutlibraries)
-            .bufferedReader()
-            .use { it.readText() }
-        Libs.Builder().withJson(json).build().libraries
-    }
-
-    val queryState = rememberTextFieldState()
-    val query = queryState.text.toString()
-    val filtered = remember(query, libraries) {
-        if (query.isBlank()) libraries
-        else libraries.filter { lib ->
-            lib.name.contains(query, ignoreCase = true) ||
-                    lib.developers.any { it.name?.contains(query, ignoreCase = true) == true } ||
-                    lib.description?.contains(query, ignoreCase = true) == true
-        }
-    }
-
-    MiuixListScaffold(
-        title = "开放源代码库",
-        navigationIcon = {
-            IconButton(onClick = onBack) {
-                Icon(
-                    imageVector = MaterialSymbols.Outlined.Arrow_back,
-                    contentDescription = "返回",
-                    tint = MiuixTheme.colorScheme.onBackground,
-                )
-            }
-        },
-    ) {
-        item {
-            TextField(
-                state = queryState,
-                modifier = Modifier
-                    .padding(top = 12.dp)
-                    .fillMaxWidth(),
-                label = "搜索库",
-                leadingIcon = {
-                    Icon(
-                        imageVector = MaterialSymbols.Outlined.Search,
-                        contentDescription = null,
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    )
-                },
-                trailingIcon = {
-                    if (query.isNotEmpty()) {
-                        IconButton(onClick = { queryState.clearText() }) {
-                            Icon(
-                                imageVector = MaterialSymbols.Outlined.Close,
-                                contentDescription = "清除",
-                                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                            )
-                        }
-                    }
-                },
-            )
-        }
-
-        item {
-            MiuixSmallTitle(
-                text = if (query.isBlank()) "${libraries.size} 个库" else "${filtered.size}/${libraries.size} 个库",
-                modifier = Modifier.padding(top = 6.dp),
-            )
-        }
-
-        if (filtered.isEmpty()) {
-            item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 48.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        text = "找不到「$query」的结果",
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    )
-                }
-            }
-        } else {
-            items(filtered, key = { it.uniqueId }) { library ->
-                LibraryRow(library, modifier = Modifier.padding(top = 12.dp))
-            }
-        }
-
-        item { Spacer(Modifier.height(CONTENT_BOTTOM_INSET)) }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun LibraryRow(library: Library, modifier: Modifier = Modifier) {
-    Card(modifier = modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = library.name,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MiuixTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                library.artifactVersion?.let { version ->
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        text = version,
-                        fontSize = 12.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    )
-                }
-            }
-
-            val author = library.developers.firstOrNull()?.name ?: library.organization?.name
-            if (!author.isNullOrBlank()) {
-                Text(
-                    text = author,
-                    fontSize = 13.sp,
-                    color = MiuixTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
-            }
-
-            library.description?.takeIf { it.isNotBlank() }?.let { desc ->
-                Text(
-                    text = desc,
-                    fontSize = 13.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
-
-            if (library.licenses.isNotEmpty()) {
-                FlowRow(
-                    modifier = Modifier.padding(top = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    library.licenses.forEach { license ->
-                        Text(
-                            text = license.name,
-                            fontSize = 12.sp,
-                            color = MiuixTheme.colorScheme.onSurfaceContainerVariant,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MiuixTheme.colorScheme.surfaceContainerHigh)
-                                .padding(horizontal = 8.dp, vertical = 3.dp),
-                        )
-                    }
-                }
-            }
         }
     }
 }
