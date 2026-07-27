@@ -47,7 +47,14 @@ jobs:
           cargo xtask build --native-only
 
       - name: Build APK
-        run: ./gradlew assembleStandardDebug --warning-mode all
+        run: ./gradlew assembleStandardDebug --warning-mode all --stacktrace --info --no-configuration-cache 2>&1 | tee gradle.log
+
+      - name: Upload gradle log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gradle-log
+          path: gradle.log
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
