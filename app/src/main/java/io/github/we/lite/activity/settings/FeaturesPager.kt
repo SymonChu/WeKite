@@ -25,6 +25,7 @@ import com.composables.icons.materialsymbols.outlined.Search
 import io.github.we.lite.features.core.BaseFeature
 import io.github.we.lite.features.core.FeaturesProvider
 import io.github.we.lite.features.core.SwitchFeature
+import io.github.we.lite.preferences.WePrefs
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -32,7 +33,6 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import java.time.LocalDate
 
 // ---------------------------------------------------------------------------
 //  Shared switch state
