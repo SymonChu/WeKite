@@ -1,7 +1,7 @@
 package me.hd.wauxv.hook
 
 import androidx.annotation.Keep
-import dev.ujhhgtg.wekit.loader.abc.IHookBridge
+import io.github.we.lite.loader.abc.IHookBridge
 
 @Keep
 class HookHandle(val unhook: IHookBridge.MemberUnhookHandle) {

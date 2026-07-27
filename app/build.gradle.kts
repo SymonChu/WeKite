@@ -50,7 +50,7 @@ android {
         }
 
         buildConfigField("String", "COMMIT_HASH", "\"${gitHash}\"")
-        buildConfigField("String", "TAG", "\"WeKit\"")
+        buildConfigField("String", "TAG", "\"WeLite\"")
         buildConfigField("long", "BUILD_TIMESTAMP", "${System.currentTimeMillis()}L")
     }
 
