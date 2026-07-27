@@ -25,7 +25,6 @@ import com.composables.icons.materialsymbols.outlined.Fiber_new
 import com.composables.icons.materialsymbols.outlined.Search
 import io.github.we.lite.features.core.BaseFeature
 import io.github.we.lite.features.core.FeaturesProvider
-import io.github.we.lite.features.core.NewFeatures
 import io.github.we.lite.features.core.SwitchFeature
 import io.github.we.lite.preferences.WePrefs
 import io.github.we.lite.utils.android.showToastSuspend
@@ -161,8 +160,8 @@ fun FeaturesPager(onOpenCategory: (String) -> Unit) {
                             .fillMaxWidth()
                     ) {
                         ArrowPreference(
-                            title = NEW_FEATURES_CATEGORY,
-                            summary = "最近 ${NewFeatures.WINDOW_DAYS} 天新增 ${NEW_FEATURE_ITEMS.size} 项",
+                            title = "新功能",
+                            summary = "最近 ${30} 天新增 ${0} 项",
                             startAction = {
                                 Icon(
                                     imageVector = MaterialSymbols.Outlined.Fiber_new,
