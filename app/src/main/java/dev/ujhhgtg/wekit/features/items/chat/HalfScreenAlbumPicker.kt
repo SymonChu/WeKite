@@ -55,6 +55,7 @@ object HalfScreenAlbumPicker : ClickableFeature() {
     private const val IMAGE_PREVIEW_UI = "com.tencent.mm.plugin.gallery.ui.ImagePreviewUI"
     private const val SMART_GALLERY_UI = "com.tencent.mm.plugin.gallery.ui.SmartGalleryUI"
     private const val MM_FRAGMENT_ACTIVITY = "com.tencent.mm.ui.MMFragmentActivity"
+    private const val EXTRA_RECENT_PHOTO_QUICK_SEND = "key_from_c2c_recently_quickly_send"
 
     /** The grid picker plus the two screens pushed on top of it. All three become sheets. */
     private val SHEET_ACTIVITIES = setOf(ALBUM_PREVIEW_UI, IMAGE_PREVIEW_UI, SMART_GALLERY_UI)
@@ -344,7 +345,9 @@ object HalfScreenAlbumPicker : ClickableFeature() {
 
     /**
      * Every hook bails unless this is the chat "+" panel's picker or one of the two sheets it
-     * pushes, so anything unrecognized falls through to stock WeChat behavior.
+     * pushes, so anything unrecognized falls through to stock WeChat behavior. The recent-photo
+     * bubble is also left untouched: it launches ImagePreviewUI directly through GalleryEntryUI,
+     * rather than from the picker, and WeChat marks that immediate-preview route explicitly.
      */
     private fun isChatSheet(activity: Activity): Boolean {
         // Subclasses that do not override onCreate inherit the onCreate hooks: MediaTabAlbumUI and
@@ -360,7 +363,13 @@ object HalfScreenAlbumPicker : ClickableFeature() {
         // so SmartGalleryUI is reachable from every picker route — Moments, favorites, webview
         // chooseImage, emoji, avatars. Only the chat ones set a query_source_type we accept.
         val sourceType = activity.intent?.getIntExtra("query_source_type", -1) ?: return false
-        return sourceType in CHAT_QUERY_SOURCE_TYPES
+        if (sourceType !in CHAT_QUERY_SOURCE_TYPES) return false
+
+        // The "you might want to send" bubble goes straight to ImagePreviewUI. Treating it as a
+        // sheet forces it through the window-translucency and sheet-transition path intended for
+        // a picker-pushed preview, turning a native fast path into a visibly delayed launch.
+        return activity.javaClass.name != IMAGE_PREVIEW_UI ||
+            activity.intent?.getBooleanExtra(EXTRA_RECENT_PHOTO_QUICK_SEND, false) != true
     }
 
     /**

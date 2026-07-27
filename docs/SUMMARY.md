@@ -180,9 +180,7 @@
 
 ## 娱乐
 
+* [图片旋转](features/entertain/image-rotation.md)
+* [彩虹文本](features/entertain/rainbow-text.md)
 * [清空资料信息](features/entertain/clear-profile-details.md)
 * [防止封号](features/entertain/troll-ban.md)
-
-## 彩蛋
-
-* [愚人节彩蛋](features/easter_egg/april-fools.md)

@@ -17,7 +17,6 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.core.view.isVisible
 import com.tencent.mm.pluginsdk.ui.chat.AppPanel
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooterBottom
@@ -28,6 +27,7 @@ import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
 import dev.ujhhgtg.wekit.features.core.Feature
 import dev.ujhhgtg.wekit.features.items.chat.FloatingChatFooter.PANEL_TOP_RESERVE_DP
+import dev.ujhhgtg.wekit.features.items.chat.FloatingChatFooter.maxPanelHeight
 import dev.ujhhgtg.wekit.features.items.chat.FloatingChatFooter.movePanelAbove
 import dev.ujhhgtg.wekit.features.items.chat.FloatingChatFooter.offscreenHeight
 import dev.ujhhgtg.wekit.preferences.WePrefs.Companion.prefOption
@@ -342,6 +342,22 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             if (footer.isImeVisible) return@hookBefore
             methodConfigPanel.method.invoke(footer, PANEL_STATE_NONE, true, -1)
             result = null
+        }
+
+        // RecentImageBubble 通过 ChatFooter.getYFromBottom() 把 popup 放在输入行上方。
+        // 原布局中面板在输入行下方且挤在屏幕外，footer 的总高度正好能代表这个偏移；面板
+        // 重排到上方后，它也被算进总高度，导致 popup 被额外抬过整个面板。只在面板实际
+        // 可见时扣除其当前高度，键盘压缩后的面板也会使用同一个真实高度。
+        ChatFooter::class.reflekt().firstMethod("getYFromBottom").hookAfter {
+            if (!movePanelAbove) return@hookAfter
+            val footer = thisObject as ChatFooter
+            val panel = footer.bottomPanel ?: return@hookAfter
+            if (panel.visibility != View.VISIBLE) return@hookAfter
+            val panelHeight = panel.height.takeIf { it > 0 }
+                ?: panel.layoutParams?.height?.takeIf { it > 0 }
+                ?: return@hookAfter
+            val yFromBottom = result as? Int ?: return@hookAfter
+            result = (yFromBottom - panelHeight).coerceAtLeast(0)
         }
     }
 

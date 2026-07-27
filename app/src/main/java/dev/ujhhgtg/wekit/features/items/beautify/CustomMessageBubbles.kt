@@ -53,6 +53,7 @@ import dev.ujhhgtg.wekit.features.api.ui.WeChatMessageViewApi
 import dev.ujhhgtg.wekit.features.core.ClickableFeature
 import dev.ujhhgtg.wekit.features.core.Feature
 import dev.ujhhgtg.wekit.features.items.beautify.CustomMessageBubbles.ICON_TINT_TAG
+import dev.ujhhgtg.wekit.features.items.beautify.CustomMessageBubbles.bubbleCache
 import dev.ujhhgtg.wekit.preferences.WePrefs.Companion.prefOption
 import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
 import dev.ujhhgtg.wekit.ui.content.Button
@@ -82,7 +83,7 @@ import kotlin.io.path.getLastModifiedTime
 @Feature(name = "自定义消息气泡", categories = ["界面美化", "聊天"], description = "自定义聊天中的消息气泡图片和颜色")
 object CustomMessageBubbles : ClickableFeature(), WeChatMessageViewApi.ICreateViewListener {
 
-    private val TAG = this::class.simpleName
+    private const val TAG = "CustomMessageBubbles"
 
     // Guards the parse-failure toast so it fires at most once per Feature lifecycle.
     private var colorParseErrorToasted = false

@@ -27,13 +27,7 @@ import dev.ujhhgtg.wekit.features.core.BaseFeature
 import dev.ujhhgtg.wekit.features.core.FeaturesProvider
 import dev.ujhhgtg.wekit.features.core.NewFeatures
 import dev.ujhhgtg.wekit.features.core.SwitchFeature
-import dev.ujhhgtg.wekit.features.items.easter_egg.AprilFools
-import dev.ujhhgtg.wekit.features.items.easter_egg.isAprilFools
 import dev.ujhhgtg.wekit.preferences.WePrefs
-import dev.ujhhgtg.wekit.utils.android.showToastSuspend
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -41,7 +35,6 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
-import java.time.LocalDate
 
 
 // ---------------------------------------------------------------------------
@@ -73,8 +66,6 @@ private fun featureChecked(item: BaseFeature): Boolean {
 
 @Composable
 fun FeaturesPager(onOpenCategory: (String) -> Unit) {
-    val showAprilFools = remember { LocalDate.now().isAprilFools }
-
     val queryState = rememberTextFieldState()
     val query = queryState.text.toString()
     val searching = query.isNotBlank()
@@ -154,25 +145,6 @@ fun FeaturesPager(onOpenCategory: (String) -> Unit) {
                 }
             }
         } else {
-            if (showAprilFools) {
-                item {
-                    Card(
-                        modifier = Modifier
-                            .padding(top = 12.dp)
-                            .fillMaxWidth()
-                    ) {
-                        ArrowPreference(
-                            title = "🏳",
-                            summary = "投降喵投降喵",
-                            onClick = {
-                                WePrefs.putBool(AprilFools.KEY_SURRENDER, true)
-                                CoroutineScope(Dispatchers.Main).launch { showToastSuspend("重启生效") }
-                            },
-                        )
-                    }
-                }
-            }
-
             // Its own card, so it reads as separate from the real categories below.
             if (NEW_FEATURE_ITEMS.isNotEmpty()) {
                 item {

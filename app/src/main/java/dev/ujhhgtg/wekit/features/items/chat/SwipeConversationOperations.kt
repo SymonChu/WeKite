@@ -179,7 +179,8 @@ object SwipeConversationOperations : ClickableFeature(), IResolveDex {
 
     private val settleInterpolator = DecelerateInterpolator()
 
-    private const val TAG = "SwipeToDeleteConversation"
+    private const val TAG = "SwipeConversationOperations"
+    private const val FOLD_CONVERSATION_TALKER = "message_fold"
 
     // WeChat has TWO home conversation-list adapters and picks one at runtime in MainUI.onCreate
     // (o75.s.f347101a.b()): the legacy ListView adapter com.tencent.mm.ui.conversation.p3
@@ -218,7 +219,7 @@ object SwipeConversationOperations : ClickableFeature(), IResolveDex {
         openState = null
     }
 
-    //── row binding: attach the swipe listener + keep talker / conversation fresh ─
+    // ── row binding: attach the swipe listener + keep talker / conversation fresh ─
 
     private fun hookAdapter(adapter: DexClassDelegate) {
         if (adapter.isPlaceholder) return
@@ -239,6 +240,11 @@ object SwipeConversationOperations : ClickableFeature(), IResolveDex {
                         .firstFieldOrNull { name = "field_username"; superclass() }
                         ?.get() as? String
                 }.getOrNull()
+
+                if (talker == FOLD_CONVERSATION_TALKER) {
+                    disableSwipeForFoldConversation(view)
+                    return@hookAfter
+                }
 
                 val ctx = view.context
                 val state = view.getTag(VIEW_TAG_SWIPE_STATE) as? SwipeState
@@ -270,7 +276,12 @@ object SwipeConversationOperations : ClickableFeature(), IResolveDex {
     // per row and tagged so re-binds don't wrap twice.
     private fun setUpRow(row: View, s: SwipeState) {
         // Already wrapped this row (state is keyed by the row view, stable across recycles).
-        if (s.wrapper != null) return
+        if (s.wrapper != null) {
+            // A recycled row may previously have represented message_fold, whose sibling fold
+            // control needs this wrapper hidden to receive the full row width.
+            s.wrapper?.visibility = View.VISIBLE
+            return
+        }
 
         val group = row as? ViewGroup ?: return
 
@@ -305,6 +316,17 @@ object SwipeConversationOperations : ClickableFeature(), IResolveDex {
         s.panel = panel
         // Park the panel closed immediately.
         applyTranslation(s, 0f)
+    }
+
+    // message_fold shows the fold control (ciy), a sibling of the normal conversation content
+    // (cj0). The latter may already be inside our full-width wrapper from an earlier binding of
+    // this recycled row, so hiding the wrapper is necessary in addition to skipping swipe setup.
+    private fun disableSwipeForFoldConversation(row: View) {
+        val state = row.getTag(VIEW_TAG_SWIPE_STATE) as? SwipeState ?: return
+        resetRow(state)
+        state.talker = null
+        state.conversation = null
+        state.wrapper?.visibility = View.GONE
     }
 
     // Creates the action panel with ALL possible button slots. Buttons that are not currently
