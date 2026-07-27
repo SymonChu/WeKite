@@ -2,14 +2,14 @@ package io.github.we.lite.wekit.features.items.chat
 
 import android.view.View
 import dev.ujhhgtg.reflekt.reflekt
-import dev.ujhhgtg.wekit.features.api.core.WeMessageApi
-import dev.ujhhgtg.wekit.features.api.core.WeServiceApi
-import dev.ujhhgtg.wekit.features.api.core.models.MessageType
-import dev.ujhhgtg.wekit.features.api.ui.WeChatMessageViewApi
-import dev.ujhhgtg.wekit.features.core.Feature
-import dev.ujhhgtg.wekit.features.core.SwitchFeature
-import dev.ujhhgtg.wekit.utils.HookParam
-import dev.ujhhgtg.wekit.utils.collections.LruCache
+import io.github.we.lite.features.api.core.WeMessageApi
+import io.github.we.lite.features.api.core.WeServiceApi
+import io.github.we.lite.features.api.core.models.MessageType
+import io.github.we.lite.features.api.ui.WeChatMessageViewApi
+import io.github.we.lite.features.core.Feature
+import io.github.we.lite.features.core.SwitchFeature
+import io.github.we.lite.utils.HookParam
+import io.github.we.lite.utils.collections.LruCache
 import java.lang.reflect.InvocationTargetException
 
 @Feature(name = "自动语音转文字", categories = ["聊天"], description = "自动将语音消息转为文字")

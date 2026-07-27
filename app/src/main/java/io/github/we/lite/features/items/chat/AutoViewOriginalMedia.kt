@@ -3,10 +3,10 @@ package io.github.we.lite.wekit.features.items.chat
 import android.widget.Button
 import androidx.core.view.isVisible
 import dev.ujhhgtg.reflekt.reflekt
-import dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
-import dev.ujhhgtg.wekit.dexkit.dsl.dexMethod
-import dev.ujhhgtg.wekit.features.core.Feature
-import dev.ujhhgtg.wekit.features.core.SwitchFeature
+import io.github.we.lite.dexkit.abc.IResolveDex
+import io.github.we.lite.dexkit.dsl.dexMethod
+import io.github.we.lite.features.core.Feature
+import io.github.we.lite.features.core.SwitchFeature
 import org.luckypray.dexkit.DexKitBridge
 
 @Feature(name = "自动查看原图", categories = ["聊天"], description = "在打开图片和视频时自动点击查看原图")

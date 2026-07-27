@@ -12,22 +12,22 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import dev.ujhhgtg.wekit.features.api.core.WeDatabaseApi
-import dev.ujhhgtg.wekit.features.api.core.WeMessageApi
-import dev.ujhhgtg.wekit.features.api.core.WeXmlParserApi
-import dev.ujhhgtg.wekit.features.api.core.models.MessageInfo
-import dev.ujhhgtg.wekit.features.api.core.models.MessageType
-import dev.ujhhgtg.wekit.features.core.ClickableFeature
-import dev.ujhhgtg.wekit.features.core.Feature
-import dev.ujhhgtg.wekit.preferences.WePrefs.Companion.prefOption
-import dev.ujhhgtg.wekit.ui.content.AlertDialogContent
-import dev.ujhhgtg.wekit.ui.content.Button
-import dev.ujhhgtg.wekit.ui.content.DefaultColumn
-import dev.ujhhgtg.wekit.ui.content.TextButton
-import dev.ujhhgtg.wekit.ui.utils.showComposeDialog
-import dev.ujhhgtg.wekit.utils.HookParam
-import dev.ujhhgtg.wekit.utils.WeLogger
-import dev.ujhhgtg.wekit.utils.formatEpoch
+import io.github.we.lite.features.api.core.WeDatabaseApi
+import io.github.we.lite.features.api.core.WeMessageApi
+import io.github.we.lite.features.api.core.WeXmlParserApi
+import io.github.we.lite.features.api.core.models.MessageInfo
+import io.github.we.lite.features.api.core.models.MessageType
+import io.github.we.lite.features.core.ClickableFeature
+import io.github.we.lite.features.core.Feature
+import io.github.we.lite.preferences.WePrefs.Companion.prefOption
+import io.github.we.lite.ui.content.AlertDialogContent
+import io.github.we.lite.ui.content.Button
+import io.github.we.lite.ui.content.DefaultColumn
+import io.github.we.lite.ui.content.TextButton
+import io.github.we.lite.ui.utils.showComposeDialog
+import io.github.we.lite.utils.HookParam
+import io.github.we.lite.utils.WeLogger
+import io.github.we.lite.utils.formatEpoch
 
 @Feature(name = "防撤回", categories = ["聊天"], description = "阻止撤回消息")
 object AntiMessageRecall : ClickableFeature(), WeXmlParserApi.IAfterParseListener {
