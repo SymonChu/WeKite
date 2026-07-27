@@ -1,7 +1,7 @@
 package me.hd.wauxv.data.bean.info
 
 import androidx.annotation.Keep
-import dev.ujhhgtg.wekit.features.api.core.models.WeGroup
+import io.github.we.lite.features.api.core.models.WeGroup
 
 @Keep
 data class GroupInfo(

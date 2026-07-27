@@ -5,6 +5,7 @@ on:
     branches:
       - master
       - dev
+      - slim
     paths-ignore:
       - '**/*.md'
       - '**/*.txt'
@@ -154,7 +155,7 @@ jobs:
       - name: Upload Release APKs
         uses: actions/upload-artifact@v7
         with:
-          name: wekit-apk
+          name: welite-apk
           path: dist/apk/*.apk
 
       - name: Upload Release Obfuscation Mapping
@@ -199,7 +200,7 @@ jobs:
       - name: Download Release APK artifact
         uses: actions/download-artifact@v8
         with:
-          name: wekit-apk
+          name: welite-apk
           path: artifacts
 
       - name: Build Zygisk module
@@ -210,7 +211,7 @@ jobs:
       - name: Upload Zygisk module
         uses: actions/upload-artifact@v7
         with:
-          name: wekit-zygisk
+          name: welite-zygisk
           path: wekit-zygisk/release/*.zip
           if-no-files-found: error
 
@@ -231,14 +232,14 @@ jobs:
       - name: Download APK artifact
         uses: actions/download-artifact@v8
         with:
-          name: wekit-apk
+          name: welite-apk
           path: artifacts
 
       - name: Download Zygisk artifact
         if: ${{ needs.build_zygisk.result == 'success' }}
         uses: actions/download-artifact@v8
         with:
-          name: wekit-zygisk
+          name: welite-zygisk
           path: artifacts
 
       - name: Delete existing CI release (if exists)
@@ -302,14 +303,14 @@ jobs:
       - name: Download APK artifact
         uses: actions/download-artifact@v8
         with:
-          name: wekit-apk
+          name: welite-apk
           path: artifacts
 
       - name: Download Zygisk artifact
         if: ${{ needs.build_zygisk.result == 'success' }}
         uses: actions/download-artifact@v8
         with:
-          name: wekit-zygisk
+          name: welite-zygisk
           path: artifacts
 
       - name: Wait for Telegram API
