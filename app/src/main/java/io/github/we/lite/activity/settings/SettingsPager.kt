@@ -269,19 +269,6 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
                     icon = MaterialSymbols.Outlined.Lightbulb_2,
                 )
                 PrefArrow(
-                    title = "捐赠",
-                    summary = "支持项目开发 (模块完全开源免费, 捐赠无特权)",
-                    icon = MaterialSymbols.Outlined.Volunteer_activism,
-                    onClick = {
-//                        context.startActivity(Intent().apply {
-//                            setClassName(HostInfo.packageName, "${PackageNames.WECHAT}.plugin.collect.reward.ui.QrRewardSelectMoneyUI")
-//                            putExtra("key_qrcode_url", "m0n#Z7LGW*s4AVH!z'd(?)")
-//                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-//                        })
-                        "https://ifdian.net/a/symonchu".toUri().openInSystem(context, true)
-                    },
-                )
-                PrefArrow(
                     title = "开放源代码许可",
                     summary = "本项目使用的开放源代码库许可",
                     icon = MaterialSymbols.Outlined.License,
@@ -292,11 +279,6 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
                     summary = "SymonChu/WeLite",
                     icon = GitHubIcon,
                     onClick = { "https://github.com/SymonChu/WeLite".toUri().openInSystem(context, true) })
-                PrefArrow(
-                    title = "Telegram",
-                    summary = "https://t.me/+7j5dJ6g16B43OWVl",
-                    icon = TelegramIcon,
-                    onClick = { "https://t.me/+7j5dJ6g16B43OWVl".toUri().openInSystem(context, true) })
             }
         }
 
