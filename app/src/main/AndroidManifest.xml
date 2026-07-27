@@ -65,10 +65,6 @@
             android:exported="true"
             android:theme="@style/Theme.Material3.DynamicColors.DayNight.NoActionBar" />
 
-        <activity
-            android:exported="true"
-            android:theme="@style/Theme.Material3.DynamicColors.DayNight.NoActionBar" />
-
         <meta-data
             android:name="xposedmodule"
             android:value="true" />
