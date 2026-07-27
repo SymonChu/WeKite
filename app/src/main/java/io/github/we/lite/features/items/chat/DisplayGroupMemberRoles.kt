@@ -1,4 +1,4 @@
-package dev.ujhhgtg.wekit.features.items.chat
+package io.github.we.lite.wekit.features.items.chat
 
 import android.graphics.Canvas
 import android.graphics.Paint

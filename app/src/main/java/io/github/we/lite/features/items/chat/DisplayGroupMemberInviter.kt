@@ -1,4 +1,4 @@
-package dev.ujhhgtg.wekit.features.items.chat
+package io.github.we.lite.wekit.features.items.chat
 
 import android.app.Activity
 import dev.ujhhgtg.wekit.features.api.core.WeDatabaseApi
