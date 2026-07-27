@@ -257,8 +257,9 @@ object WeChatMessageContextMenuApi : ApiFeature(), IResolveDex {
                 val applicableItems = menuItems.values.flatten()
                     .filter { it.isSupported(msgInfoWrapper) }
 
-                // MergeChatMessageContextMenuItems removed in WeLite
-                    // collapse everything into a single "WeKit" entry backed by a Compose dialog
+                val mergesItems = false
+                if (mergesItems) {
+                    // MergeChatMessageContextMenuItems removed in WeLite
                     if (applicableItems.isNotEmpty()) {
                         addMenuItem.invoke(MERGED_MENU_ITEM_ID, "WeKit", ExtensionIcon)
                     }

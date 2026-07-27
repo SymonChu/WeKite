@@ -292,9 +292,9 @@ private fun ProfileCard() {
 
     val identity by produceState(WechatIdentity("", "")) {
         withContext(Dispatchers.IO) {
-            val db = dev.ujhhgtg.wekit.features.api.core.WeDatabaseApi
+            val db = io.github.we.lite.features.api.core.WeDatabaseApi
             val nickname = if (db.isReady) {
-                db.getSelfProfileField(dev.ujhhgtg.wekit.features.api.core.models.SelfProfileField.NAME, "")
+                db.getSelfProfileField(io.github.we.lite.features.api.core.models.SelfProfileField.NAME, "")
                     ?.toString().orEmpty()
             } else ""
             val avatarUrl = if (db.isReady && wxId.isNotEmpty()) db.getAvatarUrl(wxId) else ""
