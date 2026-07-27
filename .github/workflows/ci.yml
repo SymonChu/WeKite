@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master, fresh-start]
+    branches: [master]
   workflow_dispatch:
 
 jobs:
@@ -10,22 +10,47 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with: { fetch-depth: 0, submodules: recursive }
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
       - uses: actions/setup-java@v5
-        with: { distribution: temurin, java-version: 21, cache: gradle }
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
       - run: chmod +x gradlew
-      - uses: dtolnay/rust-toolchain@nightly
-        with: { targets: aarch64-linux-android,armv7-linux-androideabi }
-      - name: Install NDK
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          targets: aarch64-linux-android, armv7-linux-androideabi
+
+      - name: Install Android NDK
         run: |
           NDK_VER=$(sed -n 's/^ndk = "\(.*\)"/\1/p' gradle/libs.versions.toml)
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "ndk;$NDK_VER"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VER"
+
       - uses: Swatinem/rust-cache@v2
-        with: { cache-on-failure: true, workspaces: . -> target }
+        with:
+          cache-on-failure: true
+          workspaces: . -> target
+
       - run: sudo apt install -y gcc-multilib
-      - run: cargo xtask configure && cargo xtask build --native-only
-      - run: ./gradlew assembleStandardDebug
-      - run: mkdir -p dist/apk && cp app/build/outputs/apk/standard/debug/app-standard-debug.apk dist/apk/WeLite-debug.apk
-      - uses: actions/upload-artifact@v7
-        with: { name: welite-apk, path: dist/apk/*.apk }
+
+      - name: Build native library
+        run: |
+          cargo xtask configure
+          cargo xtask build --native-only
+
+      - name: Build APK
+        run: ./gradlew assembleStandardDebug --warning-mode all
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: welite-apk
+          path: app/build/outputs/apk/standard/debug/*.apk
