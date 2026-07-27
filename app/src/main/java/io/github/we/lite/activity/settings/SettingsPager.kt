@@ -78,7 +78,6 @@ import io.github.we.lite.R
 import io.github.we.lite.activity.TransparentActivity
 import io.github.we.lite.constants.Preferences
 import io.github.we.lite.features.api.core.WeApi
-import io.github.we.lite.features.items.debug.ResetDexCache
 import io.github.we.lite.preferences.WePrefs
 import io.github.we.lite.ui.content.MiuixSmallTitle
 import io.github.we.lite.ui.utils.GitHubIcon
@@ -203,7 +202,7 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
                     title = "重置适配信息",
                     summary = "清除 DEX 缓存, 等待下次启动时重新适配",
                     icon = MaterialSymbols.Outlined.Build_circle,
-                    onClick = { ResetDexCache.onClick(context) },
+                    onClick = { /** ResetDexCache removed in WeLite */ },
                 )
                 PrefSwitch(
                     key = Preferences.RESET_DEX_ON_HOT_UPDATE,

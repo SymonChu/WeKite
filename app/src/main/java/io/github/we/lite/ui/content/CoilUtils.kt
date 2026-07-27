@@ -4,7 +4,6 @@ import coil3.ImageLoader
 import coil3.gif.AnimatedImageDecoder
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.CachePolicy
-import io.github.we.lite.features.items.chat.panel.service.FunBoxCrypto
 import io.github.we.lite.utils.HostInfo
 import io.github.we.lite.utils.WeLogger
 import okhttp3.MediaType

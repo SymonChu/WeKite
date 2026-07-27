@@ -27,8 +27,6 @@ import io.github.we.lite.features.core.BaseFeature
 import io.github.we.lite.features.core.FeaturesProvider
 import io.github.we.lite.features.core.NewFeatures
 import io.github.we.lite.features.core.SwitchFeature
-import io.github.we.lite.features.items.easter_egg.AprilFools
-import io.github.we.lite.features.items.easter_egg.isAprilFools
 import io.github.we.lite.preferences.WePrefs
 import io.github.we.lite.utils.android.showToastSuspend
 import kotlinx.coroutines.CoroutineScope
@@ -73,7 +71,7 @@ private fun featureChecked(item: BaseFeature): Boolean {
 
 @Composable
 fun FeaturesPager(onOpenCategory: (String) -> Unit) {
-    val showAprilFools = remember { LocalDate.now().isAprilFools }
+    val showAprilFools = false
 
     val queryState = rememberTextFieldState()
     val query = queryState.text.toString()
@@ -154,25 +152,6 @@ fun FeaturesPager(onOpenCategory: (String) -> Unit) {
                 }
             }
         } else {
-            if (showAprilFools) {
-                item {
-                    Card(
-                        modifier = Modifier
-                            .padding(top = 12.dp)
-                            .fillMaxWidth()
-                    ) {
-                        ArrowPreference(
-                            title = "🏳",
-                            summary = "投降喵投降喵",
-                            onClick = {
-                                WePrefs.putBool(AprilFools.KEY_SURRENDER, true)
-                                CoroutineScope(Dispatchers.Main).launch { showToastSuspend("重启生效") }
-                            },
-                        )
-                    }
-                }
-            }
-
             // Its own card, so it reads as separate from the real categories below.
             if (NEW_FEATURE_ITEMS.isNotEmpty()) {
                 item {
