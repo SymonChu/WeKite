@@ -119,7 +119,7 @@ object AutoAcceptTransfers : ClickableFeature(), WeDatabaseListenerApi.IInsertLi
                 if (rules.autoReply.enabled) {
                     WeMessageApi.sendText(
                         msgInfo.talker,
-                        rules.autoReply.text.replace($$"$amount", transferMsg.feedesc)
+                        rules.autoReply.text.replace("{$amount}", transferMsg.feedesc)
                     )
                 }
 
