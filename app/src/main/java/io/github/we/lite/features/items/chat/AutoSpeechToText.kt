@@ -1,4 +1,4 @@
-package io.github.we.lite.wekit.features.items.chat
+package io.github.we.lite.features.items.chat
 
 import android.view.View
 import dev.ujhhgtg.reflekt.reflekt

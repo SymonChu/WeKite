@@ -95,6 +95,7 @@ class MainActivity : ComponentActivity() {
         }
 
         Shell.getShell()
+        val selectFileLauncher = registerForActivityResult(ActivityResultContracts.GetContent()) { /* no-op */ }
         setContent {
             ModuleAppTheme {
                 AppContent(

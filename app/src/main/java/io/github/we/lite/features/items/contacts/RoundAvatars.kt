@@ -125,10 +125,6 @@ object RoundAvatars : ClickableFeature(), IResolveDex {
     }
 
     private fun notifyCustomContactAvatarChanged() {
-        runCatching {
-            if (CustomLocalFriendAvatars.isActive) {
-                CustomLocalFriendAvatars.onRoundAvatarConfigChanged()
-            }
-        }
+        // CustomLocalFriendAvatars was removed in WeLite
     }
 }

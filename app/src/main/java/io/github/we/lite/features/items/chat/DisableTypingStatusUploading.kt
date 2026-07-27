@@ -1,4 +1,4 @@
-package io.github.we.lite.wekit.features.items.chat
+package io.github.we.lite.features.items.chat
 
 import io.github.we.lite.dexkit.abc.IResolveDex
 import io.github.we.lite.dexkit.dsl.dexClass
