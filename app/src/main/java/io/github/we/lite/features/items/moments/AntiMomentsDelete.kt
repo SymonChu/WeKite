@@ -36,10 +36,10 @@ object AntiMomentsDelete : SwitchFeature(), WeDatabaseListenerApi.IUpdateListene
         val typeVal = values.get("type") as? Int ?: return
         val sourceVal = values.get("sourceType") as? Int ?: return
 
-        if (!MomentsContentType.allTypeIds.contains(typeVal)) return
+        // MomentsContentType removed in WeLite
         if (sourceVal != 0) return
 
-        val kindName = MomentsContentType.fromId(typeVal)?.displayName ?: "Unknown[$typeVal]"
+        val kindName = "unknown"
 
         // 移除来源
         values.remove("sourceType")
