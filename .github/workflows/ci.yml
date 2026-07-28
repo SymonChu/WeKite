@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -49,8 +51,19 @@ jobs:
       - name: Build APK
         run: ./gradlew assembleStandardDebug --warning-mode all
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v7
-        with:
-          name: welite-apk
-          path: app/build/outputs/apk/*/debug/*.apk
+      - name: Upload APK as Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          find app/build/outputs -name '*.apk' | head -1 | while read apk; do
+            echo "Found APK: $apk"
+            echo "APK_PATH=$apk" >> $GITHUB_ENV
+          done
+
+      - name: Create Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete CI --yes --repo ${{ github.repository }} 2>/dev/null || true
+          gh release create CI --title "CI Build" --notes "Auto-built WeLite APK" --repo ${{ github.repository }}
+          gh release upload CI "${{ env.APK_PATH }}" --repo ${{ github.repository }} --clobber
