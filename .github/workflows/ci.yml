@@ -49,6 +49,9 @@ jobs:
       - name: Build APK
         run: ./gradlew assembleStandardDebug --warning-mode all --stacktrace --info --no-configuration-cache 2>&1 | tee gradle.log
 
+      - name: Find APK
+        run: find app/build/outputs -name '*.apk' -ls 2>/dev/null || echo "No APK found"
+
       - name: Upload gradle log
         if: failure()
         uses: actions/upload-artifact@v7
@@ -61,4 +64,5 @@ jobs:
         with:
           name: welite-apk
           path: |
-            app/build/outputs/apk/**/*.apk
+            app/build/outputs/apk/*/debug/*.apk
+            app/build/outputs/apk/debug/*.apk
