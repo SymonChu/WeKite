@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">WeLite</string>
+    <string name="app_name">WeKite</string>
     <string name="app_description">WeChat, now with superpowers\nSymonChu@github</string>
     <string name="res_inject_success">Resources injection success</string>
 </resources>

@@ -52,5 +52,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:
-          name: welite-apk
+          name: wekite-apk
           path: app/build/outputs/**/*.apk

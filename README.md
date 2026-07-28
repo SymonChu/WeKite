@@ -1,4 +1,4 @@
-# WeLite
+# WeKite
 
 适用于微信的 Xposed 模块 — 精简实用版
 
@@ -37,15 +37,15 @@
 ## 📥 安装
 
 1. 手机需安装 [LSPosed](https://github.com/LSPosed/LSPosed) 或其它 Xposed 框架
-2. 下载 APK 从 [Releases](https://github.com/SymonChu/WeLite/releases)
-3. 在 Xposed 模块中启用 WeLite，作用域勾选微信
+2. 下载 APK 从 [Releases](https://github.com/SymonChu/WeKite/releases)
+3. 在 Xposed 模块中启用 WeKite，作用域勾选微信
 4. 重启微信
 
 ## 🛠 构建
 
 ```bash
-git clone https://github.com/SymonChu/WeLite.git
-cd WeLite
+git clone https://github.com/SymonChu/WeKite.git
+cd WeKite
 ./x build
 ```
 
