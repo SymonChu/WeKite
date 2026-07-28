@@ -8,9 +8,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -52,13 +49,8 @@ jobs:
       - name: Build APK
         run: ./gradlew assembleStandardDebug --warning-mode all
 
-      - name: Rename and move APK
-        run: |
-          find app/build/outputs -name '*.apk' -exec cp {} WeLite.apk \; -exec echo "Found APK: {}" \;
-          ls -la WeLite.apk || echo "No APK found at standard paths"
-
       - name: Upload APK
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v3.2.2
         with:
           name: welite-apk
-          path: WeLite.apk
+          path: app/build/outputs/apk/*/debug/*.apk
