@@ -47,7 +47,7 @@ jobs:
           cargo xtask build --native-only
 
       - name: Build APK
-        run: ./gradlew assembleStandardDebug --warning-mode all
+        run: ./gradlew assembleStandardDebug --warning-mode all --rerun-tasks
 
       - name: Upload APK
         uses: actions/upload-artifact@v7
