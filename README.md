@@ -1,50 +1,71 @@
-# WeKit
+# WeLite
 
-适用于微信的 Xposed 模块
+适用于微信的 Xposed 模块 — 精简实用版
 
-<img alt="fabric" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/supported/fabric_vector.svg"> <img alt="forge" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/unsupported/forge_vector.svg">
+基于 [WeKit](https://github.com/Ujhhgtg/WeKit) 精简而来，**仅保留常用核心功能**，砍掉了 AI 智能体、脚本引擎、界面美化等非必要模块，体积更小、更专注。
 
-<a href="https://ifdian.net/a/ujhhgtg"><img alt="buymeacoffee-plural" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/donate/buymeacoffee-plural_vector.svg"></a>
-<a href="https://ujhhgtgteams.gitbook.io/wekit-docs"><img alt="gitbook" height="56" src="https://cdn.jsdelivr.net/npm/@intergrav/devins-badges@3/assets/cozy/documentation/gitbook_vector.svg"></a>
+## ✨ 功能
 
-## 文档
+### 💬 聊天
+- 防撤回 · 自动语音转文字 · 禁止上传输入状态
+- 自动启用发送原图 · 自动查看原图
+- 显示群成员身份 · 群成员行为监控 · 查看群员邀请者
 
-请参阅 [文档](https://ujhhgtgteams.gitbook.io/wekit-docs) 以使用本模块。
+### 👥 联系人与群组
+- 查看群员历史消息 · 圆角头像 · 检测单向删除好友
 
-- [🚀 快速开始](https://ujhhgtgteams.gitbook.io/wekit-docs/getting-started)
-- [📥 安装指南](https://ujhhgtgteams.gitbook.io/wekit-docs/installation)
-- [⚙️ 配置指南](https://ujhhgtgteams.gitbook.io/wekit-docs/configuration)
-- [❓ 常见问题](https://ujhhgtgteams.gitbook.io/wekit-docs/faq)
-- [🛠 开发指南](https://ujhhgtgteams.gitbook.io/wekit-docs/development)
+### 📸 朋友圈
+- 朋友圈防撤回 · 评论防撤回 · 自动点赞 · 拦截朋友圈广告
 
-## 联系
+### 🧧 红包与支付
+- 自动抢红包 · 自动接收转账 · 允许领取私聊红包
+- 红包页面详情 · 指纹支付 · 修改余额/转账显示 · 历史红包
 
-[Telegram 超级群组](https://t.me/+7j5dJ6g16B43OWVl)
+### 🔧 系统与隐私
+- 去除文章广告 · 强制平板模式 · 恢复旧版「我」界面卡包
+- 省电模式 · 禁止屏幕高亮度 · 禁止微信检测 Xposed
+- 禁用微信热更新 · 移除二维码扫描限制 · 移除媒体发送数量限制
+- 阻止微信清理模块数据 · 隐藏模块应用 · 二维码扫描记录
+- 清理缓存垃圾 · 自动批准设备登录
 
-[爱发电](https://ifdian.net/a/ujhhgtg)
+### 📱 小程序
+- 伪装宿主版本 · 去除菜单限制 · 移除开屏广告 · 移除视频广告
 
-## 致谢
+### 🔇 其他
+- 屏蔽铃声 · 隐藏消息头像
 
-[WeKit 上游](https://github.com/cwuom/WeKit)
+## 📥 安装
 
-[WAuxiliary](https://github.com/HdShare/WAuxiliary_Public)
+1. 手机需安装 [LSPosed](https://github.com/LSPosed/LSPosed) 或其它 Xposed 框架
+2. 下载 APK 从 [Releases](https://github.com/SymonChu/WeLite/releases)
+3. 在 Xposed 模块中启用 WeLite，作用域勾选微信
+4. 重启微信
 
-[NewMiko](https://github.com/dartcv/NewMiko/blob/archives/)
+## 🛠 构建
 
-[QAuxiliary](https://github.com/cinit/QAuxiliary)
+```bash
+git clone https://github.com/SymonChu/WeLite.git
+cd WeLite
+./x build
+```
 
-[FingerprintPay](https://github.com/eritpchy/FingerprintPay)
+APK 输出在 `app/build/outputs/apk/standard/debug/`
 
-[WADN](https://github.com/Ujhhgtg/wauxv_deobf_new) [WAD](https://github.com/Ujhhgtg/wauxv_deobf)
+### 构建要求
+- JDK 21
+- Android SDK + NDK
+- Rust toolchain + Android targets
 
-*^^^ 如果你需要一些我尚未从 WAuxiliary ~~抄袭~~提取的功能, 你可以自行从此处移植; 欢迎 PR!*
+## 📄 许可
 
-[FunBox](https://github.com/Ujhhgtg/funbox_deobf)
+[GPL-3.0 License](LICENSE)
 
-[I-Am-Pad](https://github.com/Houvven/I-Am-Pad)
+## 🙏 致谢
 
----
-
-<p align="center">
-  <img src="https://github.com/Coopydood/ultimate-macOS-KVM/assets/39441479/39d78d4b-8ce8-44f4-bba7-fefdbf2f80db" width="10%"> </img>
-</p>
+- [WeKit](https://github.com/Ujhhgtg/WeKit) — 上游项目
+- [WAuxiliary](https://github.com/HdShare/WAuxiliary_Public)
+- [NewMiko](https://github.com/dartcv/NewMiko)
+- [QAuxiliary](https://github.com/cinit/QAuxiliary)
+- [FingerprintPay](https://github.com/eritpchy/FingerprintPay)
+- [FunBox](https://github.com/Ujhhgtg/funbox_deobf)
+- [I-Am-Pad](https://github.com/Houvven/I-Am-Pad)
