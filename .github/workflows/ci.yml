@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -47,22 +50,15 @@ jobs:
           cargo xtask build --native-only
 
       - name: Build APK
-        run: ./gradlew assembleStandardDebug --warning-mode all --stacktrace --info --no-configuration-cache 2>&1 | tee gradle.log
+        run: ./gradlew assembleStandardDebug --warning-mode all
 
-      - name: Find APK
-        run: find app/build/outputs -name '*.apk' -ls 2>/dev/null || echo "No APK found"
-
-      - name: Upload gradle log
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: gradle-log
-          path: gradle.log
+      - name: Rename and move APK
+        run: |
+          find app/build/outputs -name '*.apk' -exec cp {} WeLite.apk \; -exec echo "Found APK: {}" \;
+          ls -la WeLite.apk || echo "No APK found at standard paths"
 
       - name: Upload APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v3
         with:
           name: welite-apk
-          path: |
-            app/build/outputs/apk/*/debug/*.apk
-            app/build/outputs/apk/debug/*.apk
+          path: WeLite.apk
