@@ -22,6 +22,7 @@ private val imageHttpClient by lazy {
             val originalContentType = response.body.contentType()
             val encrypted = response.body.bytes()
             val decoded = try {
+                encrypted
             } catch (error: Throwable) {
                 WeLogger.w(TAG, "failed to decode secured image response", error)
                 throw IOException("failed to decode secured image response", error)
