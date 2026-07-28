@@ -50,7 +50,7 @@ jobs:
         run: ./gradlew assembleStandardDebug --warning-mode all
 
       - name: Upload APK
-        uses: actions/upload-artifact@v3.2.2
+        uses: actions/upload-artifact@v7
         with:
           name: welite-apk
           path: app/build/outputs/apk/*/debug/*.apk
