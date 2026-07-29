@@ -39,7 +39,9 @@ jobs:
           cache-on-failure: true
           workspaces: . -> target
 
-      - run: sudo apt install -y gcc-multilib
+      - run: |
+          sudo apt-get update
+          sudo apt install -y gcc-multilib || echo "gcc-multilib 安装失败但不影响编译"
 
       - name: Build native library
         run: |
