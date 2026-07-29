@@ -26,9 +26,7 @@ import io.github.we.lite.features.api.core.WeMessageApi
 import io.github.we.lite.features.api.core.models.MessageInfo
 import io.github.we.lite.features.core.ApiFeature
 import io.github.we.lite.features.core.Feature
-import io.github.we.lite.features.items.chat.MergeChatMessageContextMenuItems
 import io.github.we.lite.ui.content.AlertDialogContent
-import io.github.we.lite.ui.content.Button
 import io.github.we.lite.ui.utils.ExtensionIcon
 import io.github.we.lite.ui.utils.showComposeDialog
 import io.github.we.lite.utils.WeLogger
@@ -258,17 +256,10 @@ object WeChatMessageContextMenuApi : ApiFeature(), IResolveDex {
                 val applicableItems = menuItems.values.flatten()
                     .filter { it.isSupported(msgInfoWrapper) }
 
-                if (MergeChatMessageContextMenuItems.isEnabled) {
-                    // collapse everything into a single "WeKit" entry backed by a Compose dialog
-                    if (applicableItems.isNotEmpty()) {
-                        addMenuItem.invoke(MERGED_MENU_ITEM_ID, "WeKit", ExtensionIcon)
-                    }
-                } else {
-                    for (item in applicableItems) {
+                for (item in applicableItems) {
                         addMenuItem.invoke(item.id, "${item.text} [K]", item.drawable)
                     }
-                }
-            } catch (ex: Throwable) {
+                } catch (ex: Throwable) {
                 WeLogger.e(
                     TAG,
                     "exception occurred threw while providing menu items",

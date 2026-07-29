@@ -267,7 +267,6 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
                     icon = MaterialSymbols.Outlined.Lightbulb_2,
                 )
                 PrefArrow(
-                PrefArrow(
                     title = "开放源代码许可",
                     summary = "本项目使用的开放源代码库许可",
                     icon = MaterialSymbols.Outlined.License,

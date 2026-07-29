@@ -70,7 +70,6 @@ import io.github.we.lite.utils.formatEpoch
 import io.github.we.lite.utils.hook_status.HookStatus
 import io.github.we.lite.utils.openInSystem
 import io.github.we.lite.utils.registerBshSnapshotDecompileLaunchers
-import io.github.we.lite.utils.serialization.DefaultJson
 
 class MainActivity : ComponentActivity() {
 
@@ -91,54 +90,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-
-        if (intent?.action == TelegramDatabaseImportContract.ACTION_PICK_ROOT_STICKER_SETS) {
-            if (!PackageNames.isWeChat(callingPackage.orEmpty())) {
-                setResult(
-                    RESULT_CANCELED,
-                    Intent().putExtra(
-                        TelegramDatabaseImportContract.EXTRA_ERROR,
-                        "只允许从微信内的 WeKit 面板启动此操作",
-                    ),
-                )
-                finish()
-                return
-            }
-            Shell.getShell()
-            setContent {
-                ModuleAppTheme {
-                    RootTelegramStickerSetPickerContent(
-                        discoverInstances = {
-                            RootTelegramStickerSetRepository.discoverInstances(
-                                applicationInfo.uid / 100000,
-                            )
-                        },
-                        readInstalledSets = { instance ->
-                            RootTelegramStickerSetRepository.readInstalledSets(
-                                cacheDir,
-                                applicationInfo.uid,
-                                instance,
-                            )
-                        },
-                        onCancel = {
-                            setResult(RESULT_CANCELED)
-                            finish()
-                        },
-                        onComplete = { stickerSets ->
-                            setResult(
-                                RESULT_OK,
-                                Intent().putExtra(
-                                    TelegramDatabaseImportContract.EXTRA_STICKER_SETS,
-                                    DefaultJson.encodeToString(stickerSets),
-                                ),
-                            )
-                            finish()
-                        },
-                    )
-                }
-            }
-            return
-        }
 
         if (BuildConfig.HAS_LIBXPOSED_ENTRY) {
             runCatching { HookStatus.init(this) }
