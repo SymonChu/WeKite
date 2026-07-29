@@ -27,6 +27,7 @@ import io.github.we.lite.features.api.core.models.MessageInfo
 import io.github.we.lite.features.core.ApiFeature
 import io.github.we.lite.features.core.Feature
 import io.github.we.lite.ui.content.AlertDialogContent
+import io.github.we.lite.ui.content.Button
 import io.github.we.lite.ui.utils.ExtensionIcon
 import io.github.we.lite.ui.utils.showComposeDialog
 import io.github.we.lite.utils.WeLogger
