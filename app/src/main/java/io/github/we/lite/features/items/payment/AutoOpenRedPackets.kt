@@ -146,7 +146,7 @@ object AutoOpenRedPackets : ClickableFeature(), WeDatabaseListenerApi.IInsertLis
 
             val reply = info.autoReply
             if (reply.isNotBlank()) {
-                WeMessageApi.sendText(info.talker, reply.replace(transferMsg.feedesc, "¥$displayAmount"))
+                WeMessageApi.sendText(info.talker, reply.replace("¥", "¥$displayAmount"))
             }
 
             if (!info.notificationEnabled) return@hookAfter

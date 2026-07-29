@@ -178,16 +178,13 @@ object QrCodeRecord : ClickableFeature(), IResolveDex {
                                                 })
                                         }) {
                                             Icon(
-                                                imageVector =
-                                                    if (LinkExternalAppJump.isEnabled) MaterialSymbols.Outlined.Open_in_new
-                                                    else MaterialSymbols.Outlined.Globe,
+                                                imageVector = MaterialSymbols.Outlined.Open_in_new,
                                                 contentDescription = "Open",
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
-                                        if (!LinkExternalAppJump.isEnabled) {
-                                            IconButton({
-                                                record.url.toUri().openInSystem(context, true)
+                                        IconButton({
+                                            record.url.toUri().openInSystem(context, true)
                                             }) {
                                                 Icon(
                                                     imageVector = MaterialSymbols.Outlined.Open_in_new,
@@ -197,7 +194,6 @@ object QrCodeRecord : ClickableFeature(), IResolveDex {
                                             }
                                         }
                                     }
-                                }
 
                                 HorizontalDivider(
                                     color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
