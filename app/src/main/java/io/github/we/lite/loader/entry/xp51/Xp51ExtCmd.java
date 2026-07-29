@@ -1,4 +1,4 @@
-package dev.ujhhgtg.wekit.loader.entry.xp51;
+package io.github.we.lite.loader.entry.xp51;
 
 import androidx.annotation.NonNull;
 

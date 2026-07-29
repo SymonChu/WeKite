@@ -1,4 +1,4 @@
-package dev.ujhhgtg.wekit.loader.entry.xp51;
+package io.github.we.lite.loader.entry.xp51;
 
 import android.text.TextUtils;
 
@@ -14,10 +14,10 @@ import java.util.Objects;
 import java.util.Set;
 
 import de.robv.android.xposed.XposedBridge;
-import dev.ujhhgtg.wekit.BuildConfig;
-import dev.ujhhgtg.wekit.loader.abc.IClassLoaderHelper;
-import dev.ujhhgtg.wekit.loader.abc.IHookBridge;
-import dev.ujhhgtg.wekit.loader.abc.ILoaderService;
+import io.github.we.lite.BuildConfig;
+import io.github.we.lite.loader.abc.IClassLoaderHelper;
+import io.github.we.lite.loader.abc.IHookBridge;
+import io.github.we.lite.loader.abc.ILoaderService;
 import lombok.SneakyThrows;
 
 public class Xp51HookImpl implements IHookBridge, ILoaderService {
@@ -118,7 +118,7 @@ public class Xp51HookImpl implements IHookBridge, ILoaderService {
     @NonNull
     @Override
     public String getEntryPointName() {
-        return "dev.ujhhgtg.wekit.loader.entry.xp51.Xp51HookImpl";
+        return "io.github.we.lite.loader.entry.xp51.Xp51HookImpl";
     }
 
     @NonNull

@@ -1,4 +1,4 @@
-package dev.ujhhgtg.wekit.loader.entry.xp51;
+package io.github.we.lite.loader.entry.xp51;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -9,7 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 import de.robv.android.xposed.XC_MethodHook;
-import dev.ujhhgtg.wekit.loader.abc.IHookBridge;
+import io.github.we.lite.loader.abc.IHookBridge;
 
 public class Xp51HookWrapper {
 

@@ -1,12 +1,12 @@
-package dev.ujhhgtg.wekit.loader.entry.xp51;
+package io.github.we.lite.loader.entry.xp51;
 
 import androidx.annotation.Keep;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.IXposedHookZygoteInit;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
-import dev.ujhhgtg.wekit.constants.PackageNames;
-import dev.ujhhgtg.wekit.loader.entry.common.ModuleLoader;
+import io.github.we.lite.constants.PackageNames;
+import io.github.we.lite.loader.entry.common.ModuleLoader;
 
 @Keep
 public class Xp51HookEntry implements IXposedHookLoadPackage, IXposedHookZygoteInit {
