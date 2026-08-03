@@ -1,4 +1,4 @@
-//! WeKit xtask — build automation for the WeKit Android project.
+//! WeKite xtask — build automation for the WeKite Android project.
 //!
 //! Usage: cargo xtask <COMMAND>
 //!
@@ -69,7 +69,7 @@ static RELEASE_ABIS: &[&str] = &["arm64-v8a", "armeabi-v7a"];
 
 const ZYGISK_CARGO_PACKAGE: &str = "wekit-zygisk";
 const ZYGISK_MODULE_ID: &str = "wekit_zygisk";
-const ZYGISK_MODULE_NAME: &str = "WeKit";
+const ZYGISK_MODULE_NAME: &str = "WeKite";
 
 struct ZygiskAbiSpec {
     android_name: &'static str,
@@ -95,7 +95,7 @@ static ZYGISK_ABIS: &[ZygiskAbiSpec] = &[
 #[derive(Parser)]
 #[command(
     name = "cargo xtask",
-    about = "WeKit build automation",
+    about = "WeKite build automation",
     long_about = None,
     disable_help_subcommand = true,
 )]
@@ -336,7 +336,7 @@ fn print_banner() {
     | |/ |/ /  __/ /| |/ / /_
     |__/|__/\___/_/ |_/_/\__/
 
-[WeKit] WeChat, now with superpowers
+[WeKite] WeChat, now with superpowers
 "#
     );
 }
@@ -370,7 +370,7 @@ fn workspace_root() -> PathBuf {
         }
         dir = dir
             .parent()
-            .unwrap_or_else(|| panic!("workspace root not found; run from inside the WeKit repo"))
+            .unwrap_or_else(|| panic!("workspace root not found; run from inside the WeKite repo"))
             .to_owned();
     }
 }
@@ -971,7 +971,7 @@ fn resolve_zygisk_payload_apk(
     let candidates = if let Some(path) = provided {
         vec![
             path.canonicalize()
-                .with_context(|| format!("WeKit APK does not exist: {}", path.display()))?,
+                .with_context(|| format!("WeKite APK does not exist: {}", path.display()))?,
         ]
     } else {
         let output_dir = root.join("app/build/outputs/apk");
@@ -996,7 +996,7 @@ fn resolve_zygisk_payload_apk(
     let mut resolved: Option<(bool, std::time::SystemTime, PathBuf)> = None;
     for candidate in candidates {
         if !candidate.is_file() {
-            bail!("WeKit APK does not exist: {}", candidate.display());
+            bail!("WeKite APK does not exist: {}", candidate.display());
         }
         let abis = apk_abis(&candidate)?;
         if !ZYGISK_ABIS
@@ -1028,7 +1028,7 @@ fn resolve_zygisk_payload_apk(
             "app/build/outputs/apk"
         };
         format!(
-            "no universal WeKit APK containing {} found in {source}",
+            "no universal WeKite APK containing {} found in {source}",
             ZYGISK_ABIS
                 .iter()
                 .map(|abi| abi.android_name)
@@ -1366,7 +1366,7 @@ fn latest_zygisk_zip(root: &Path, profile: ZygiskBuildProfile) -> Result<PathBuf
             path.is_file()
                 && path
                     .file_name()
-                    .is_some_and(|name| name.to_string_lossy().starts_with("WeKit-"))
+                    .is_some_and(|name| name.to_string_lossy().starts_with("WeKite-"))
                 && path
                     .file_name()
                     .is_some_and(|name| name.to_string_lossy().ends_with(&suffix))
