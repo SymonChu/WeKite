@@ -23,7 +23,8 @@ Open the WeKite module page in KernelSU to manage injection targets.
 The module ships static RRO overlays that theme WeChat natively:
 
 - **Monet 基础主题** — replaces the brand green with the wallpaper accent
-- **气泡 Pro / 经典气泡** — modern and classic chat bubble styles
+- **现代圆角气泡 / 经典气泡** — modern rounded and classic chat bubble styles
+  (switch via the module Action menu, volume key)
 - **多场景圆角** — rounded corners for input bar / message quote / pay keyboard
 - **纯色底栏** — solid-color bottom tab bar
 

@@ -197,7 +197,7 @@ if [ "$MONET_WECHAT_VERSION_CODE" = "3083" ] || [ "$MONET_WECHAT_VERSION_CODE" =
       install_overlay_apk "MonetWeChatClassicBubble"
       ;;
     *)
-      ui_print "- 气泡样式: 气泡 Pro (现代圆角)"
+      ui_print "- 气泡样式: 现代圆角"
       install_overlay_apk "MonetWeChatBubblePro"
       ;;
   esac

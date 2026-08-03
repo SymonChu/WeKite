@@ -30,7 +30,7 @@ switch_bubble() {
   current=${current:-modern}
 
   echo "=========================================="
-  echo "  当前气泡样式: $([ "$current" = "classic" ] && echo '经典气泡' || echo '气泡Pro (现代圆角)')"
+  echo "  当前气泡样式: $([ "$current" = "classic" ] && echo '经典气泡' || echo '现代圆角')"
   echo "  音量+ = 切换气泡样式"
   echo "  音量- = 保持当前样式, 重启微信"
   echo "=========================================="
@@ -55,7 +55,7 @@ switch_bubble() {
     else
       echo "bubble_style=\"$new_style\"" >> "$CONFIG_FILE"
     fi
-    echo "- 已切换气泡样式: $([ "$new_style" = "classic" ] && echo '经典气泡' || echo '气泡Pro (现代圆角)')"
+    echo "- 已切换气泡样式: $([ "$new_style" = "classic" ] && echo '经典气泡' || echo '现代圆角')"
     echo "- 请重启微信或重启设备使覆盖生效"
     exit 0
   fi
