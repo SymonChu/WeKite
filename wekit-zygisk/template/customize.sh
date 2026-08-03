@@ -162,6 +162,27 @@ set_perm "$MODPATH/config.sh" 0 0 0755
 set_perm "$MODPATH/action.sh" 0 0 0755
 set_perm "$MODPATH/uninstall.sh" 0 0 0755
 
+ui_print "- Installing WeChat Monet overlays"
+set_perm_recursive "$MODPATH/system/priv-app" 0 0 0755 0644
+
+# ── WeChat Monet overlays (Play 版微信 8.0.72, versionCode 3083/3084) ──────
+# Static RRO overlays: Monet 基础主题 / 气泡 Pro / 经典气泡 / 多场景圆角 / 纯色底栏
+MONET_TARGET_PACKAGE=com.tencent.mm
+MONET_WECHAT_VERSION_CODE=$(dumpsys package com.tencent.mm 2>/dev/null | sed -n 's/.*versionCode=\([0-9][0-9]*\).*/\1/p' | head -n 1)
+
+if [ "$MONET_WECHAT_VERSION_CODE" = "3083" ] || [ "$MONET_WECHAT_VERSION_CODE" = "3084" ]; then
+  ui_print "- WeChat Play 8.0.72 确认 (versionCode=$MONET_WECHAT_VERSION_CODE)"
+  ui_print "- 安装莫奈取色基础主题 + 气泡/圆角/底栏 overlay"
+  # overlay APK 已由模板放入 $MODPATH/system/priv-app/<name>/<name>.apk
+  # 静态 overlay (android:isStatic=true) 由系统在启动时自动加载
+  ui_print "- Monet overlays 安装完成 (重启后生效)"
+else
+  ui_print "! 当前微信 versionCode=${MONET_WECHAT_VERSION_CODE:-未知}, 莫奈 overlay 仅适配 Play 版 8.0.72"
+  ui_print "! 模块其他功能不受影响, 莫奈覆盖将不生效"
+  # 移除不匹配的 overlay, 避免系统加载错误资源
+  rm -rf "$MODPATH/system/priv-app"
+fi
+
 # KernelSU assigns the WebUI directory's mode and SELinux context itself.
 # Do not include $MODPATH/webroot in a recursive set_perm call.
 
