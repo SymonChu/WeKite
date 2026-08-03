@@ -1,95 +1,91 @@
 # WeKite
 
-适用于微信的 Xposed / Zygisk 模块 — 精简实用版
+让微信更好用的轻量级增强模块 — 支持 LSPosed 与 Zygisk 双模式
 
-基于 [WeKit](https://github.com/Ujhhgtg/WeKit) 精简而来，**仅保留常用核心功能**，砍掉了 AI 智能体、脚本引擎等非必要模块，体积更小、更专注。内置 **莫奈取色引擎**，让微信跟随系统壁纸主题色。
+WeKite 是一套针对微信的模块化增强方案：核心功能全部围绕「不打扰、可开关、低开销」设计，并内置 **Monet 动态取色引擎**，让微信界面跟随系统壁纸主题色自然变化。
 
-## ✨ 功能
+## ✨ 功能一览
 
-### 💬 聊天
-- 防撤回 · 自动语音转文字 · 禁止上传输入状态
-- 自动启用发送原图 · 自动查看原图
-- 显示群成员身份 · 群成员行为监控 · 查看群员邀请者
+### 💬 聊天增强
+- 消息防撤回 · 语音自动转文字 · 输入状态隐藏
+- 自动发送原图 · 自动查看原图
+- 群成员身份展示 · 群行为监控 · 群员邀请者查询
 
 ### 👥 联系人与群组
-- 查看群员历史消息 · 圆角头像 · 检测单向删除好友
+- 群员历史消息 · 圆角头像 · 单向好友检测
 
 ### 📸 朋友圈
-- 朋友圈防撤回 · 评论防撤回 · 自动点赞 · 拦截朋友圈广告
+- 防撤回 · 评论防撤回 · 自动点赞 · 广告拦截
 
 ### 🧧 红包与支付
-- 自动抢红包 · 自动接收转账 · 允许领取私聊红包
-- 红包页面详情 · 指纹支付 · 修改余额/转账显示 · 历史红包
+- 自动抢红包 · 自动收转账 · 私聊红包领取
+- 红包详情 · 指纹支付 · 余额显示定制 · 红包记录
 
-### 🎨 莫奈取色（Monet）
+### 🎨 Monet 动态取色
 - **莫奈引擎**：微信原生组件（按钮/气泡/开关/光标）跟随主题色
-- **动态壁纸取色**：从系统壁纸提取主题色应用到微信（Android 12+）
-- **自定义颜色**：手动选择种子色，支持浅色/深色模式
-- Zygisk 版内置 **WeChat Monet overlays**（Play 版微信 8.0.72）：
+- **动态壁纸取色**：Android 12+ 从系统壁纸提取主色
+- **自定义种子色**：手动选色，支持明暗双模式
+- Zygisk 版附带原生 Overlay 主题包（适配 Play 版微信 8.0.72）：
   - Monet 基础主题 · 气泡 Pro · 经典气泡 · 多场景圆角 · 纯色底栏
 
 ### 🔧 系统与隐私
-- 去除文章广告 · 强制平板模式 · 恢复旧版「我」界面卡包
-- 省电模式 · 禁止屏幕高亮度 · 禁止微信检测 Xposed
-- 禁用微信热更新 · 移除二维码扫描限制 · 移除媒体发送数量限制
-- 阻止微信清理模块数据 · 隐藏模块应用 · 二维码扫描记录
-- 清理缓存垃圾 · 自动批准设备登录
+- 文章广告移除 · 平板模式强制 · 旧版「我」页卡包恢复
+- 省电模式 · 高亮限制 · Xposed 检测规避
+- 热更新禁用 · 扫码限制移除 · 媒体数量限制移除
+- 模块数据保护 · 模块隐藏 · 扫码记录
+- 缓存清理 · 设备登录自动批准
 
 ### 📱 小程序
-- 伪装宿主版本 · 去除菜单限制 · 移除开屏广告 · 移除视频广告
+- 宿主版本伪装 · 菜单限制解除 · 开屏/视频广告移除
 
 ### 🔇 其他
-- 屏蔽铃声 · 隐藏消息头像
+- 铃声屏蔽 · 消息头像隐藏
 
 ## 📥 安装
 
-### 方式一：Xposed（LSPosed）
+### 方式一：LSPosed（Xposed 模式）
 
-1. 手机需安装 [LSPosed](https://github.com/LSPosed/LSPosed) 或其它 Xposed 框架
-2. 下载 APK 从 [Releases](https://github.com/SymonChu/WeKite/releases)
-3. 在 LSPosed 中启用 WeKite，作用域勾选微信
+1. 安装 [LSPosed](https://github.com/LSPosed/LSPosed) 框架
+2. 从 [Releases](https://github.com/SymonChu/WeKite/releases) 下载 APK 并安装
+3. LSPosed → 模块 → 启用 WeKite，作用域勾选微信
 4. 重启微信
-5. 设置入口：桌面 WeKite 图标，或 LSPosed 模块列表点击 WeKite
+
+设置入口：桌面 WeKite 图标，或 LSPosed 模块页点击 WeKite。
 
 ### 方式二：Zygisk（Magisk / KernelSU）
 
-1. 下载 Zygisk 模块 zip（`wekit-zygisk-*.zip`）从 [Releases](https://github.com/SymonChu/WeKite/releases)
-2. 在 Magisk / KernelSU 中刷入模块
+1. 从 [Releases](https://github.com/SymonChu/WeKite/releases) 下载 `wekit-zygisk-*.zip`
+2. Magisk / KernelSU 刷入模块
 3. 重启设备
-4. 模块内置莫奈 overlay（Play 版微信 8.0.72 自动生效）+ 注入管理（KernelSU WebUI）
+4. 微信 Monet Overlay 自动生效（Play 版 8.0.72）；注入管理在 KernelSU WebUI
 
 ## 🎨 莫奈取色使用
 
-1. 打开 WeKite 设置 → 主题
+1. 打开 WeKite → 主题设置
 2. 开启「自定义颜色」
-3. 开启「动态壁纸取色」（跟随壁纸）或手动选种子色
-4. 开启「将自定义配色应用到微信本身」
+3. 选择「动态壁纸取色」或手动指定种子色
+4. 开启「应用到微信本身」
 5. 重启微信生效
 
-Zygisk 版：刷入后莫奈 overlay 自动安装（需 Play 版微信 8.0.72，versionCode 3083/3084），重启后微信自动取色。
+Zygisk 版刷入后 Overlay 自动安装，无需额外配置。
 
 ## 🛠 构建
 
 ```bash
 git clone https://github.com/SymonChu/WeKite.git --recursive
 cd WeKite
-./x build            # Xposed APK（debug）
-./x build --release  # Xposed APK（release，R8 压缩）
-./x zygisk build --apk-release --release  # Zygisk 模块 zip
+./x build --release          # Xposed APK
+./x zygisk build --apk-release --release   # Zygisk 模块
 ```
 
-- APK 输出：`app/build/outputs/apk/standard/release/`
-- Zygisk 模块：`wekit-zygisk/release/*.zip`
+产物：
+- APK → `app/build/outputs/apk/standard/release/`
+- Zygisk → `wekit-zygisk/release/*.zip`
 
-### 构建要求
-- JDK 21
-- Android SDK + NDK
-- Rust toolchain (nightly) + Android targets
+### 环境要求
+- JDK 21 · Android SDK + NDK · Rust nightly + Android targets
 
-### CI 构建
-GitHub Actions 自动构建，产物：
-- `wekite-apk`：Xposed 版 APK（Release 压缩）
-- `wekite-zygisk`：Zygisk 模块 zip（含莫奈 overlays）
+GitHub Actions 自动构建并产出 APK 与 Zygisk 模块。
 
 ## 📄 许可
 
@@ -98,10 +94,5 @@ GitHub Actions 自动构建，产物：
 ## 🙏 致谢
 
 - [WeKit](https://github.com/Ujhhgtg/WeKit) — 上游项目
-- [WeChatMonet Pro](https://github.com/SaiOogcn/WechatMonet) — 莫奈 overlay 参考
-- [WAuxiliary](https://github.com/HdShare/WAuxiliary_Public)
-- [NewMiko](https://github.com/dartcv/NewMiko)
-- [QAuxiliary](https://github.com/cinit/QAuxiliary)
-- [FingerprintPay](https://github.com/eritpchy/FingerprintPay)
-- [FunBox](https://github.com/Ujhhgtg/funbox_deobf)
-- [I-Am-Pad](https://github.com/Houvven/I-Am-Pad)
+- [WechatMonet](https://github.com/SaiOogcn/WechatMonet) — Overlay 主题参考
+- [WAuxiliary](https://github.com/HdShare/WAuxiliary_Public) · [QAuxiliary](https://github.com/cinit/QAuxiliary) · [FingerprintPay](https://github.com/eritpchy/FingerprintPay)

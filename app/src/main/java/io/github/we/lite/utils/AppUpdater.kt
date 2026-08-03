@@ -72,12 +72,12 @@ private fun apkUrlForDevice(): String {
 
 /** Matches the release name emitted by the Zygisk packager. */
 private fun zygiskModuleFileName(info: UpdateInfo): String =
-    "WeKit-${info.versionCode}-${info.versionName}-release.zip"
+    "WeKite-${info.versionCode}-${info.versionName}-release.zip"
 
 // ─── AppUpdater ───────────────────────────────────────────────────────────────
 
 /**
- * Self-contained in-app updater for WeKit.
+ * Self-contained in-app updater for WeKite.
  *
  * Usage:
  * ```
@@ -188,7 +188,7 @@ object AppUpdater {
         mimeType: String,
     ): Long {
         val request = DownloadManager.Request(url.toUri()).apply {
-            setTitle("WeKit 更新")
+            setTitle("WeKite 更新")
             setDescription("正在下载更新...")
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)

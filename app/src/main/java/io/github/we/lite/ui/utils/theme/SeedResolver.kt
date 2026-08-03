@@ -14,7 +14,7 @@ import io.github.we.lite.ui.utils.theme.SeedResolver.customSeed
 /**
  * Single source of truth for turning [ThemeSettings] into a concrete accent seed and the derived
  * Material 3 / miuix color schemes. Shared by [ModuleTheme], [io.github.we.lite.ui.utils.InjectedUiTheme], and
- * [io.github.we.lite.features.items.beautify.MonetEngine] so the module UI, the WeKit UI injected
+ * [io.github.we.lite.features.items.beautify.MonetEngine] so the module UI, the WeKite UI injected
  * into WeChat, and the native-view recoloring all agree on the same colors.
  */
 object SeedResolver {

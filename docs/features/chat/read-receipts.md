@@ -19,7 +19,7 @@
 - 消息会附带一个透明追踪像素 URL, 收件人加载消息时自动向服务器上报
 - 已读计数基于 IP 去重, 每 5 秒自动刷新
 
-需要自行搭建配套的已读追踪服务器 (`wekit-read-receipts-server`), 并在功能配置中填写服务器地址。
+需要自行搭建配套的已读追踪服务器 (`wekite-read-receipts-server`), 并在功能配置中填写服务器地址。
 
 ## 使用方法
 
@@ -68,8 +68,8 @@ sudo apt install build-essential pkg-config libssl-dev
 ### 2. 编译与运行
 
 ```bash
-git clone https://github.com/Ujhhgtg/WeKit.git
-cd ./WeKit/contrib/wekit-read-receipts-server
+git clone https://github.com/SymonChu/WeKite.git
+cd ./WeKite/contrib/wekite-read-receipts-server
 cargo run --release
 ```
 

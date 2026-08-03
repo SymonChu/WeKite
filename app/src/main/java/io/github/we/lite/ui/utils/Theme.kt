@@ -13,7 +13,7 @@ import io.github.we.lite.ui.utils.theme.lightScheme
 import io.github.we.lite.utils.HostInfo
 
 /**
- * Theme for WeKit UI injected INTO WeChat.
+ * Theme for WeKite UI injected INTO WeChat.
  *
  * The seed is [SeedResolver.injectedSeed]: WeChat green by default, or the user's custom color when
  * they opted it into WeChat ([ThemeSettings.applyToWechat]). This is read once when the composition

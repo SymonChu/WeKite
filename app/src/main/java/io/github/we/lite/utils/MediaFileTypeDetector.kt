@@ -8,7 +8,7 @@ import java.nio.file.Path
  * Identifies panel media from bytes, never from the name supplied by a document provider.
  *
  * The detector intentionally only reports formats that the panel can preserve or pass to the
- * existing WeKit conversion/send paths.  A caller can use [extension] when it needs a stable
+ * existing WeKite conversion/send paths.  A caller can use [extension] when it needs a stable
  * filename after importing a file whose extension is missing or incorrect.
  */
 object MediaFileTypeDetector {

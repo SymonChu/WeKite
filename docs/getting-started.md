@@ -1,8 +1,8 @@
 # 快速开始
 
-## 什么是 WeKit？
+## 什么是 WeKite？
 
-WeKit 是一个微信增强模块, 可以通过 Xposed、Zygisk 或免 Root 注入框架加载, 为微信提供大量额外功能和界面定制选项。
+WeKite 是一个微信增强模块, 可以通过 Xposed、Zygisk 或免 Root 注入框架加载, 为微信提供大量额外功能和界面定制选项。
 
 ## 需求
 

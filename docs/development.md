@@ -4,7 +4,7 @@
 
 ```bash
 git clone https://github.com/SymonChu/WeKite.git --recursive
-cd WeKit
+cd WeKite
 ```
 
 ## 2. 环境要求

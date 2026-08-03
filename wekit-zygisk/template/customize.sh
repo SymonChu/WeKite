@@ -146,11 +146,11 @@ extract_payload_dex() {
   done
 }
 
-ui_print "- Extracting WeKit payload"
+ui_print "- Extracting WeKite payload"
 mkdir -p "$MODPATH/payload"
 extract "$ZIPFILE" "payload/wekit.apk" "$MODPATH"
 extract_payload_dex "$MODPATH/payload/wekit.apk" "$MODPATH/payload"
-ui_print "  WeKit payload installed to $MODPATH/payload"
+ui_print "  WeKite payload installed to $MODPATH/payload"
 
 ui_print "- Setting permissions"
 set_perm_recursive "$MODPATH/zygisk" 0 0 0755 0644

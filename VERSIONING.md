@@ -1,6 +1,6 @@
 # Versioning
 
-WeKit does not use semantic versioning. The module is distributed as CI-built "nightly" artifacts
+WeKite does not use semantic versioning. The module is distributed as CI-built "nightly" artifacts
 with a deterministic, git-derived version scheme. There are no manual version bumps or release
 branches.
 
@@ -20,7 +20,7 @@ Both values are computed at build time in `app/build.gradle.kts`.
 The APK also embeds these in `BuildConfig`:
 
 - `BuildConfig.COMMIT_HASH` — short commit hash
-- `BuildConfig.TAG` — always `"WeKit"`
+- `BuildConfig.TAG` — always `"WeKite"`
 - `BuildConfig.BUILD_TIMESTAMP` — `System.currentTimeMillis()` at build time
 
 ## Release Model

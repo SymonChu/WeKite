@@ -30,7 +30,7 @@ import io.github.we.lite.utils.android.isDarkMode
  * NOT a user-toggleable feature (hence [ApiFeature] + the API category, so it stays out of the
  * feature list). The hooks only install when the user opted their custom color into WeChat
  * ([ThemeSettings.applyToWechat] with 自定义颜色 on); the accent comes from the same seed the injected
- * WeKit UI uses ([SeedResolver.customSeed] → the wallpaper accent or the chosen seed color, run
+ * WeKite UI uses ([SeedResolver.customSeed] → the wallpaper accent or the chosen seed color, run
  * through the selected palette style + color spec). Colors are resolved once per WeChat launch
  * (restart required for a change to apply).
  */

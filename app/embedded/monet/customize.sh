@@ -6,7 +6,7 @@ ui_print '            | | /| / / _ \/ ,<  / / __/'
 ui_print '            | |/ |/ /  __/ /| |/ / /_'
 ui_print '            |__/|__/\___/_/ |_/_/\__/'
 ui_print " "
-ui_print "       [WeKit] WeChat, now with superpowers"
+ui_print "       [WeKite] WeChat, now with superpowers"
 ui_print " "
 ui_print "模块已安装!"
 ui_print " "

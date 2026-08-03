@@ -1,11 +1,11 @@
-# WeKit Zygisk Module
+# WeKite Zygisk Module
 
-WeKit can be loaded through Zygisk on a per-Android-user, per-package basis.
+WeKite can be loaded through Zygisk on a per-Android-user, per-package basis.
 The module is disabled for every process immediately after installation.
 
 ## KernelSU WebUI
 
-Open the WeKit module page in KernelSU to manage injection targets.
+Open the WeKite module page in KernelSU to manage injection targets.
 
 - The first page open scans every Android user and adds every installed package
   matching `PackageNames.isWeChat` (`com.tencent.mm*`) as a disabled target.
@@ -18,55 +18,14 @@ Open the WeKit module page in KernelSU to manage injection targets.
   the current result, preserves switches for surviving rows, and disables newly
   discovered rows. The WebUI intentionally has no manual add or delete action.
 
-The persisted target list is `/data/adb/wekit_zygisk/injection-targets.tsv`. Module
-updates retain it; uninstall removes it without touching app data.
+## WeChat Monet overlays
 
-## Hot Update
+The module ships static RRO overlays that theme WeChat natively:
 
-The installer exports `MODULE_HOT_INSTALL_REQUEST=true`, the hot-install
-request used by compatible KernelSU-family root managers. On such a manager an
-updated module is activated without a device reboot. Stop and restart WeChat
-after the update: the Zygisk companion opens the shared universal payload for
-every newly specialized WeChat process, so it receives the updated APK.
+- **Monet 基础主题** — replaces the brand green with the wallpaper accent
+- **气泡 Pro / 经典气泡** — modern and classic chat bubble styles
+- **多场景圆角** — rounded corners for input bar / message quote / pay keyboard
+- **纯色底栏** — solid-color bottom tab bar
 
-This does not replace code in an already running WeChat process. Root managers
-that do not implement the hot-install protocol retain their normal reboot or
-restart requirements.
-
-## Build
-
-```bash
-# Build the standard universal APK, both Zygisk loader ABIs, and the installable debug ZIP.
-./x zygisk build
-
-# Build a release ZIP.
-./x zygisk build --release
-
-# Only compile the Zygisk native loader(s).
-./x zygisk native --abi arm64-v8a
-
-# Reuse an existing universal APK output, or explicitly select one.
-./x zygisk build --skip-apk-build
-./x zygisk build --skip-apk-build --apk path/to/universal.apk
-
-# Build and install with adb; omit --root to let install_module.sh detect it.
-./x zygisk flash --device SERIAL --root ksu --reboot
-
-# Install the newest ZIP for the requested profile without rebuilding.
-./x zygisk flash --skip-build
-```
-
-`./x zygisk build` defaults to a debug standard universal APK payload and both
-supported Zygisk loader ABIs (`arm64-v8a` and `armeabi-v7a`). The ZIP is output
-to `release/`.
-Run `./x zygisk --help` or `./x zygisk <subcommand> --help` for every option.
-
-## Development environment
-
-- Rust toolchain with the Android targets
-- rust-analyzer
-- Android NDK
-
-## See also
-
-<https://github.com/topjohnwu/zygisk-module-sample>
+Overlays are installed only when WeChat is the Play-store 8.0.72 build
+(versionCode 3083/3084); otherwise they are skipped gracefully.

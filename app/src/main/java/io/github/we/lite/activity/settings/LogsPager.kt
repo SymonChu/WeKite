@@ -127,7 +127,7 @@ private data class CrashSection(
 //   ts    = yyyy-MM-dd HH:mm:ss.SSS
 //   level = one of V D I W E A
 //   $TAG  = BuildConfig.TAG (the module tag), $tag = caller tag
-// e.g. "2026-07-05 14:30:22.123 E/WeKit AggregateChats: something failed"
+// e.g. "2026-07-05 14:30:22.123 E/WeKite AggregateChats: something failed"
 // Groups: 1=date 2=time(+ms) 3=level 4=moduleTag 5=callerTag 6=message
 private val RUN_LOG_REGEX = Regex(
     """^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}\.\d{3}) ([VDIWEAF])/(\S+)\s+([^:]*): (.*)$""",

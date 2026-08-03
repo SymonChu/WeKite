@@ -1,6 +1,6 @@
-# WeKit
+# WeKite
 
-WeKit 是一个功能丰富的微信增强模块, 支持通过 Xposed 框架或 Zygisk 模块加载, 提供大量微信增强功能。
+WeKite 是一个微信增强模块, 支持通过 Xposed 框架或 Zygisk 模块加载, 提供大量微信增强功能。
 
 [![CI 状态](https://github.com/SymonChu/WeKite/actions/workflows/ci.yml/badge.svg)](https://github.com/SymonChu/WeKite/actions/workflows/ci.yml)
 
@@ -13,7 +13,7 @@ WeKit 是一个功能丰富的微信增强模块, 支持通过 Xposed 框架或 
 - [❓ 常见问题](faq.md)
 - [🛠 开发指南](development.md)
 
-## 修改内容 (相比 [上游](https://github.com/cwuom/WeKit))
+## 修改内容 (相比 [上游](https://github.com/Ujhhgtg/WeKit))
 
 - 添加 Auxiliary 与 NewMiko 目前公开源代码中的部分功能
 - 移除全部校验, 减少模块体积, 避免不必要性能开销
@@ -35,7 +35,7 @@ WeKit 是一个功能丰富的微信增强模块, 支持通过 Xposed 框架或 
 
 ## 致谢
 
-[WeKit 上游](https://github.com/cwuom/WeKit)
+[上游项目](https://github.com/Ujhhgtg/WeKit)
 
 [WAuxiliary](https://github.com/HdShare/WAuxiliary_Public)
 

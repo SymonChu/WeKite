@@ -73,7 +73,7 @@ abstract class AutoMomentsBase : ClickableFeature() {
             if (!attachedRoots.add(root)) return
         }
 
-        // A RecyclerView.OnScrollListener would be the natural fit, but WeKit deliberately never
+        // A RecyclerView.OnScrollListener would be the natural fit, but WeKite deliberately never
         // links against androidx.recyclerview (the host owns that class; our WxRecyclerView stub is
         // a plain ViewGroup), so use the framework-level equivalent: RecyclerView.dispatchOnScrolled
         // calls View.onScrollChanged, which makes the ViewTreeObserver fire this listener once per

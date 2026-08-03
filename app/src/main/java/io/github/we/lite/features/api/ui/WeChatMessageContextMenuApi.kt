@@ -330,8 +330,8 @@ object WeChatMessageContextMenuApi : ApiFeature(), IResolveDex {
                         returnType = android.view.MenuItem::class
                     }
 
-                // collapse everything into a single "WeKit" entry backed by a Compose dialog
-                addMenuItem.invoke(MERGED_MENU_ITEM_ID, "WeKit", ExtensionIcon)
+                // collapse everything into a single "WeKite" entry backed by a Compose dialog
+                addMenuItem.invoke(MERGED_MENU_ITEM_ID, "WeKite", ExtensionIcon)
             } catch (ex: Throwable) {
                 WeLogger.e(
                     TAG,
@@ -373,7 +373,7 @@ object WeChatMessageContextMenuApi : ApiFeature(), IResolveDex {
     ) {
         showComposeDialog(view.context) {
             AlertDialogContent(
-                title = { Text("WeKit") },
+                title = { Text("WeKite") },
                 text = {
                     LazyColumn(
                         Modifier
@@ -450,13 +450,13 @@ object WeChatMessageContextMenuApi : ApiFeature(), IResolveDex {
         }
 
         if (adaptedRows.isEmpty() && autoRows.isEmpty()) {
-            showToast("没有可用于所选消息的 WeKit 菜单项")
+            showToast("没有可用于所选消息的 WeKite 菜单项")
             return
         }
 
         showComposeDialog(view.context) {
             AlertDialogContent(
-                title = { Text("WeKit (${msgInfos.size} 条消息)") },
+                title = { Text("WeKite (${msgInfos.size} 条消息)") },
                 text = {
                     LazyColumn(
                         Modifier

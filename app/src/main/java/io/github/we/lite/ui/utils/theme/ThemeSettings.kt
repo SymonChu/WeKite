@@ -113,7 +113,7 @@ object ThemeSettings {
         private set
 
     /**
-     * Whether the custom color also applies to WeChat itself (injected WeKit ComposeUI + native
+     * Whether the custom color also applies to WeChat itself (injected WeKite ComposeUI + native
      * recoloring via [io.github.we.lite.features.items.beautify.MonetEngine]). Does NOT take effect live — requires restarting WeChat.
      */
     var applyToWechat by mutableStateOf(WePrefs.getBoolOrFalse(Preferences.THEME_APPLY_TO_WECHAT))

@@ -360,8 +360,8 @@ object WeSettingsInjector : ApiFeature(), IResolveDex, WeChatInputBarApi.IInputB
         )
 
         settingsManager.createItem {
-            key = "SettingGroup_Main_WeKitTest1"
-            title = "WeKit 设置"
+            key = "SettingGroup_Main_WeKiteSettings"
+            title = "WeKite 设置"
             level = 1
             groupTitle = "插件"
             pageClass = SettingGroupMain::class.java

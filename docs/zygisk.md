@@ -1,21 +1,21 @@
 # Zygisk 模式
 
-WeKit 支持通过 Zygisk 注入微信, 无须安装 Xposed 框架。
+WeKite 支持通过 Zygisk 注入微信, 无须安装 Xposed 框架。
 
 ## 使用条件
 
 - 设备已 Root
 - Root 管理器已启用任意 Zygisk 实现
 - Root 管理器支持打开 KernelSU WebUI, 或安装了独立 WebUI 实现
-- 微信版本在 WeKit 的 [支持范围](getting-started.md#宿主版本支持) 内
+- 微信版本在 WeKite 的 [支持范围](getting-started.md#宿主版本支持) 内
 
 ## 安装
 
 1. 从 [下载渠道](installation.md#下载) 获取最新的 `wekit-zygisk` ZIP。
 2. 在 Root 管理器中安装模块 ZIP。
 3. 按照 Root 管理器的提示重启设备。
-4. 打开 Root 管理器中的 WeKit 模块 WebUI。
-5. 为需要使用 WeKit 的微信打开开关。
+4. 打开 Root 管理器中的 WeKite 模块 WebUI。
+5. 为需要使用 WeKite 的微信打开开关。
 6. 完全结束并重新启动对应的微信。
 
 Zygisk 版本安装后默认不注入任何应用, 必须先在 WebUI 中打开目标开关。
@@ -25,7 +25,7 @@ Zygisk 版本安装后默认不注入任何应用, 必须先在 WebUI 中打开�
 WebUI 会自动列出设备上所有 Android 用户中包名以 `com.tencent.mm` 开头的应用。
 
 一个开关对应一个 Android 用户下的一个微信包。打开后, 该微信的主进程和子进程都会
-注入 WeKit。
+注入 WeKite。
 
 页面首次打开时会自动扫描。安装、卸载或新增微信分身后, 点击「刷新列表」即可重新
 扫描。重新扫描会保留已有目标的开关状态, 新发现的目标默认关闭。
@@ -38,12 +38,12 @@ WebUI 会自动列出设备上所有 Android 用户中包名以 `com.tencent.mm`
 
 ## 常见问题
 
-### 安装后 WeKit 没有加载
+### 安装后 WeKite 没有加载
 
 依次确认:
 
 1. Root 管理器中的 Zygisk 已启用。
-2. WeKit 模块已启用。
+2. WeKite 模块已启用。
 3. WebUI 中正确 Android 用户和微信包名的开关已打开。
 4. 打开开关或更新模块后, 微信已经完全结束并重新启动。
 5. 使用的是最新 release ZIP, 而不是 debug 包或旧构建。
@@ -73,7 +73,7 @@ WebUI 页面底部的「WebUI 日志」用于排查应用扫描和开关保存�
 - WebUI 导出的 `logcat.log`
 - 页面底部显示的 WebUI 日志
 - 微信版本、Android 版本、Root 管理器及其版本
-- WeKit Zygisk ZIP 的版本
+- WeKite Zygisk ZIP 的版本
 - 出现问题的 Android 用户和微信包名
 
 完整要求见 [问题反馈指南](bug-report-guide.md)。
