@@ -168,8 +168,13 @@ ui_print "- Installing WeChat Monet overlays"
 # Static RRO overlays: Monet 基础主题 / 气泡 Pro / 经典气泡 / 多场景圆角 / 纯色底栏
 # 气泡二选一: BubblePro 与 ClassicBubble 不能同时存在(都会覆盖气泡资源), 默认装 BubblePro
 # APK 源保存在 $MODPATH/files/, 安装时复制选中项到 system/priv-app/, 以便 action.sh 运行时切换
+#
+# ⚠️ 关键兼容性: overlay APK 要求 minSdk 34 (Android 14+), 且为 isStatic=true 静态覆盖,
+#    系统在开机阶段强制加载。若系统版本低于 14, 安装会导致开机卡在启动界面 (bootloop)!
+#    因此必须检查 SDK 版本, 不满足则跳过 overlay (模块注入功能不受影响)。
 MONET_TARGET_PACKAGE=com.tencent.mm
 MONET_WECHAT_VERSION_CODE=$(dumpsys package com.tencent.mm 2>/dev/null | sed -n 's/.*versionCode=\([0-9][0-9]*\).*/\1/p' | head -n 1)
+MONET_SDK_VERSION=$(getprop ro.build.version.sdk)
 
 install_overlay_apk() {
   local name="$1"
@@ -180,7 +185,11 @@ install_overlay_apk() {
   chmod 0644 "$target_dir/$name.apk" 2>/dev/null
 }
 
-if [ "$MONET_WECHAT_VERSION_CODE" = "3083" ] || [ "$MONET_WECHAT_VERSION_CODE" = "3084" ]; then
+if [ -z "$MONET_SDK_VERSION" ] || [ "$MONET_SDK_VERSION" -lt 34 ]; then
+  ui_print "! 系统 Android 版本低于 14 (SDK ${MONET_SDK_VERSION:-未知}), 莫奈 overlay 要求 Android 14+"
+  ui_print "! 已跳过 overlay 安装, 避免开机卡启动; 模块注入功能不受影响"
+  rm -rf "$MODPATH/system/priv-app"
+elif [ "$MONET_WECHAT_VERSION_CODE" = "3083" ] || [ "$MONET_WECHAT_VERSION_CODE" = "3084" ]; then
   ui_print "- WeChat Play 8.0.72 确认 (versionCode=$MONET_WECHAT_VERSION_CODE)"
 
   # 读取已有气泡选择 (默认 modern -> 气泡 Pro), 未安装过则默认 Pro
@@ -221,7 +230,7 @@ fi
 
 OLD_MODULE_DIR=/data/adb/modules/wekit
 OLD_TARGETS_FILE=/data/adb/wekit/injection-targets.tsv
-NEW_STATE_DIR=/data/adb/wekit_zygisk
+NEW_STATE_DIR=/data/adb/wekite_zygisk
 NEW_TARGETS_FILE=$NEW_STATE_DIR/injection-targets.tsv
 
 if [ -f "$OLD_TARGETS_FILE" ] || [ -d "$OLD_MODULE_DIR" ]; then

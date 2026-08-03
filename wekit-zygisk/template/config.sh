@@ -1,9 +1,9 @@
 #!/system/bin/sh
 
 # Persistent selection state intentionally lives outside the module directory.
-# Module upgrades replace /data/adb/modules/wekit_zygisk, while this file must retain
+# Module upgrades replace /data/adb/modules/wekite_zygisk, while this file must retain
 # the user's per-Android-user choices across upgrades.
-STATE_DIR=/data/adb/wekit_zygisk
+STATE_DIR=/data/adb/wekite_zygisk
 TARGETS_FILE=$STATE_DIR/injection-targets.tsv
 LOCK_DIR=$STATE_DIR/.injection-targets.lock
 LOG_FILE=$STATE_DIR/webui.log

@@ -68,7 +68,7 @@ static ABI_TABLE: &[AbiSpec] = &[
 static RELEASE_ABIS: &[&str] = &["arm64-v8a", "armeabi-v7a"];
 
 const ZYGISK_CARGO_PACKAGE: &str = "wekit-zygisk";
-const ZYGISK_MODULE_ID: &str = "wekit_zygisk";
+const ZYGISK_MODULE_ID: &str = "wekite_zygisk";
 const ZYGISK_MODULE_NAME: &str = "WeKite";
 
 struct ZygiskAbiSpec {
@@ -1411,7 +1411,7 @@ fn install_zygisk_zip(
         .and_then(|name| name.to_str())
         .context("Zygisk ZIP name must be UTF-8")?;
     let remote_zip = format!("/data/local/tmp/{zip_name}");
-    let remote_script = "/data/local/tmp/install_wekit_zygisk.sh";
+    let remote_script = "/data/local/tmp/install_wekite_zygisk.sh";
     let script = zygisk_dir(root).join("scripts/install_module.sh");
     run_adb(
         root,
