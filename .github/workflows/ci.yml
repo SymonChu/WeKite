@@ -98,8 +98,11 @@ jobs:
 
       - name: Build Zygisk module
         run: |
+          APK_PATH=$(find artifacts -name "app-standard-release.apk" | head -1)
+          echo "APK: $APK_PATH"
+          test -n "$APK_PATH"
           ./x zygisk build --apk-release --release --skip-apk-build \
-            --apk artifacts/app-standard-release.apk
+            --apk "$APK_PATH"
 
       - name: Upload Zygisk module
         uses: actions/upload-artifact@v7
