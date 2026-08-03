@@ -2,7 +2,7 @@
 
 WeKit 是一个功能丰富的微信增强模块, 支持通过 Xposed 框架或 Zygisk 模块加载, 提供大量微信增强功能。
 
-[![CI 状态](https://github.com/Ujhhgtg/WeKit/actions/workflows/ci.yml/badge.svg)](https://github.com/Ujhhgtg/WeKit/actions/workflows/ci.yml)
+[![CI 状态](https://github.com/SymonChu/WeKite/actions/workflows/ci.yml/badge.svg)](https://github.com/SymonChu/WeKite/actions/workflows/ci.yml)
 
 ## 导航
 
@@ -29,7 +29,7 @@ WeKit 是一个功能丰富的微信增强模块, 支持通过 Xposed 框架或 
 
 ## 联系
 
-[GitHub 仓库](https://github.com/Ujhhgtg/WeKit)
+[GitHub 仓库](https://github.com/SymonChu/WeKite)
 
 [Telegram 超级群组](https://t.me/+7j5dJ6g16B43OWVl)
 

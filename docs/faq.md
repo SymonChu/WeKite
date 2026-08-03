@@ -65,4 +65,4 @@ Zygisk 模式先确认 WebUI 中对应 Android 用户和微信的开关已经打
 
 ## 10. 其他问题
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Ujhhgtg/WeKit)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/SymonChu/WeKite)

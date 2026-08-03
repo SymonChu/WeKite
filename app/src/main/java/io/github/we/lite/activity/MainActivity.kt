@@ -573,8 +573,8 @@ class MainActivity : ComponentActivity() {
                 LinkCard(
                     icon = GitHubIcon,
                     title = "GitHub",
-                    subtitle = "Ujhhgtg/WeKit",
-                    onClick = { onUrlClick("https://github.com/SymonChu/WeLite") }
+                    subtitle = "SymonChu/WeKite",
+                    onClick = { onUrlClick("https://github.com/SymonChu/WeKite") }
                 )
 
             }
@@ -589,7 +589,7 @@ class MainActivity : ComponentActivity() {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("版本: ${BuildConfig.VERSION_NAME}")
                             Text("版本号: ${BuildConfig.VERSION_CODE}")
-                            Text("作者：Ujhhgtg@github, cwuom@github")
+                            Text("作者：SymonChu@github")
                         }
                     },
                     confirmButton = {

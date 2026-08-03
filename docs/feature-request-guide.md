@@ -4,7 +4,7 @@
 
 ## 反馈渠道
 
-**唯一的反馈渠道是 [GitHub Issues](https://github.com/Ujhhgtg/WeKit/issues)。**
+**唯一的反馈渠道是 [GitHub Issues](https://github.com/SymonChu/WeKite/issues)。**
 
 请勿通过以下渠道反馈建议, 此类反馈不会被处理:
 
@@ -16,7 +16,7 @@
 
 在提交建议前, 请先确认:
 
-1. **你的建议是否已经有人提过？** 搜索 [已有 Issues](https://github.com/Ujhhgtg/WeKit/issues) 和 [常见问题](faq.md) 避免重复提交。
+1. **你的建议是否已经有人提过？** 搜索 [已有 Issues](https://github.com/SymonChu/WeKite/issues) 和 [常见问题](faq.md) 避免重复提交。
 2. **是否与模块现有功能重叠？** 确认该功能目前确实不存在, 而非尚未发现已有实现。
 
 ## 高质量的建议应当包含

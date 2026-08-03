@@ -3,7 +3,7 @@
 ## 1. 克隆仓库
 
 ```bash
-git clone https://github.com/Ujhhgtg/WeKit.git --recursive
+git clone https://github.com/SymonChu/WeKite.git --recursive
 cd WeKit
 ```
 

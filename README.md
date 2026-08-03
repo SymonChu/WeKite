@@ -2,7 +2,7 @@
 
 适用于微信的 Xposed 模块 — 精简实用版
 
-基于 [WeKit](https://github.com/Ujhhgtg/WeKit) 精简而来，**仅保留常用核心功能**，砍掉了 AI 智能体、脚本引擎、界面美化等非必要模块，体积更小、更专注。
+基于 [WeKit](https://github.com/SymonChu/WeKite) 精简而来，**仅保留常用核心功能**，砍掉了 AI 智能体、脚本引擎、界面美化等非必要模块，体积更小、更专注。
 
 ## ✨ 功能
 
@@ -62,7 +62,7 @@ APK 输出在 `app/build/outputs/apk/standard/debug/`
 
 ## 🙏 致谢
 
-- [WeKit](https://github.com/Ujhhgtg/WeKit) — 上游项目
+- [WeKit](https://github.com/SymonChu/WeKite) — 上游项目
 - [WAuxiliary](https://github.com/HdShare/WAuxiliary_Public)
 - [NewMiko](https://github.com/dartcv/NewMiko)
 - [QAuxiliary](https://github.com/cinit/QAuxiliary)
