@@ -59,10 +59,6 @@ Zygisk 模式先确认 WebUI 中对应 Android 用户和微信的开关已经打
 
 4. 用 `DB Browser for SQLite` 或类似工具打开 `decrypted_wechat.db`
 
-## 9. 「指纹支付」在分身微信里加解密崩溃
-
-原因为 ROM 提供的应用分身功能不兼容指纹, 不会修复
-
-## 10. 其他问题
+## 9. 其他问题
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/SymonChu/WeKite)

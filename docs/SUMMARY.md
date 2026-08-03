@@ -82,9 +82,6 @@
 
 * [自动抢红包](features/payment/auto-open-red-packets.md)
 * [自动接收转账](features/payment/auto-accept-transfers.md)
-* [指纹支付](features/payment/fingerprint-pay.md)
-* [修改转账显示余额](features/payment/modify-transfer-wallet-balance-display.md)
-* [修改显示余额](features/payment/modify-wallet-balance-display.md)
 * [允许领取私聊红包](features/payment/allow-private-chat-receive-outgoing-red-packets.md)
 
 ## 界面美化
