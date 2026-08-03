@@ -6,12 +6,22 @@ CONFIG_SCRIPT=$MODDIR/config.sh
 # Module actions run from a root-manager environment that may have a sparse PATH.
 export PATH=/system/bin:/system/xbin:/vendor/bin:/product/bin:/apex/com.android.runtime/bin:$PATH
 
-# ── WeKite Monet 气泡切换 ──────────────────────────────────────────────────
-# 音量+ = 切换气泡样式 (气泡Pro / 经典气泡)
-# 音量- = 重启微信 (原有功能)
+# ── WeKite Monet 可选覆盖管理 ─────────────────────────────────────────────
+# 音量+ = 切换气泡样式 (现代圆角 / 经典气泡)
+# 音量- = 继续: 启用/停用其他覆盖 (圆角/底栏), 最后重启微信
 CONFIG_FILE="$MODDIR/config.conf"
 OVERLAY_DIR="$MODDIR/system/priv-app"
 FILES_DIR="$MODDIR/files"
+
+# 基础主题必须存在; 若缺失则先补装 (升级场景)
+ensure_base_overlay() {
+  if [ -d "$FILES_DIR" ] && [ ! -f "$OVERLAY_DIR/MonetWeChat/MonetWeChat.apk" ]; then
+    mkdir -p "$OVERLAY_DIR/MonetWeChat"
+    cp -f "$FILES_DIR/MonetWeChat.apk" "$OVERLAY_DIR/MonetWeChat/MonetWeChat.apk"
+    chmod 0755 "$OVERLAY_DIR" "$OVERLAY_DIR/MonetWeChat" 2>/dev/null
+    chmod 0644 "$OVERLAY_DIR/MonetWeChat/MonetWeChat.apk" 2>/dev/null
+  fi
+}
 
 listen_volume_key() {
   local key_events
@@ -20,61 +30,131 @@ listen_volume_key() {
     *KEY_VOLUMEDOWN*) return 1 ;;
     *KEY_VOLUMEUP*) return 0 ;;
   esac
-  # 无按键输入时默认走重启微信分支
+  # 无按键输入时默认继续 (不走切换分支)
   return 1
 }
 
+get_conf() {
+  local key="$1" default="$2" value
+  value=$(grep -E "^${key}=" "$CONFIG_FILE" 2>/dev/null | head -n1 | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+  [ -n "$value" ] && echo "$value" || echo "$default"
+}
+
+set_conf() {
+  local key="$1" value="$2"
+  mkdir -p "$(dirname "$CONFIG_FILE")"
+  touch "$CONFIG_FILE"
+  if grep -q -E "^${key}=" "$CONFIG_FILE"; then
+    sed -i "s|^${key}=.*|${key}=\"${value}\"|" "$CONFIG_FILE"
+  else
+    echo "${key}=\"${value}\"" >> "$CONFIG_FILE"
+  fi
+}
+
+install_overlay() {
+  local name="$1"
+  local target_dir="$OVERLAY_DIR/$name"
+  mkdir -p "$target_dir"
+  cp -f "$FILES_DIR/$name.apk" "$target_dir/$name.apk"
+  chmod 0755 "$OVERLAY_DIR" "$target_dir" 2>/dev/null
+  chmod 0644 "$target_dir/$name.apk" 2>/dev/null
+}
+
+remove_overlay() {
+  rm -rf "$OVERLAY_DIR/$1"
+}
+
+# 气泡切换: 音量+ = 切换, 音量- = 继续到下一个菜单
 switch_bubble() {
-  local current
-  current=$(grep -E "^bubble_style=" "$CONFIG_FILE" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
-  current=${current:-modern}
+  local current new_style
+  current=$(get_conf "bubble_style" "modern")
 
   echo "=========================================="
+  echo "  WeKite Monet 覆盖管理"
   echo "  当前气泡样式: $([ "$current" = "classic" ] && echo '经典气泡' || echo '现代圆角')"
   echo "  音量+ = 切换气泡样式"
-  echo "  音量- = 保持当前样式, 重启微信"
+  echo "  音量- = 继续 (管理圆角/底栏)"
   echo "=========================================="
 
   if listen_volume_key; then
-    # 先清掉两个气泡 overlay, 再装选中的那个
-    rm -rf "$OVERLAY_DIR/MonetWeChatBubblePro" "$OVERLAY_DIR/MonetWeChatClassicBubble"
+    # 清掉两个气泡 overlay, 再装选中的那个
+    remove_overlay "MonetWeChatBubblePro"
+    remove_overlay "MonetWeChatClassicBubble"
     if [ "$current" = "classic" ]; then
-      new_style="pro"
-      mkdir -p "$OVERLAY_DIR/MonetWeChatBubblePro"
-      cp -f "$FILES_DIR/MonetWeChatBubblePro.apk" "$OVERLAY_DIR/MonetWeChatBubblePro/MonetWeChatBubblePro.apk"
+      new_style="modern"
+      install_overlay "MonetWeChatBubblePro"
     else
       new_style="classic"
-      mkdir -p "$OVERLAY_DIR/MonetWeChatClassicBubble"
-      cp -f "$FILES_DIR/MonetWeChatClassicBubble.apk" "$OVERLAY_DIR/MonetWeChatClassicBubble/MonetWeChatClassicBubble.apk"
+      install_overlay "MonetWeChatClassicBubble"
     fi
-    chmod 0755 "$OVERLAY_DIR" "$OVERLAY_DIR"/* 2>/dev/null
-    chmod 0644 "$OVERLAY_DIR"/*/*.apk 2>/dev/null
-    # 更新配置
-    if grep -q "^bubble_style=" "$CONFIG_FILE" 2>/dev/null; then
-      sed -i "s|^bubble_style=.*|bubble_style=\"$new_style\"|" "$CONFIG_FILE"
-    else
-      echo "bubble_style=\"$new_style\"" >> "$CONFIG_FILE"
-    fi
+    set_conf "bubble_style" "$new_style"
     echo "- 已切换气泡样式: $([ "$new_style" = "classic" ] && echo '经典气泡' || echo '现代圆角')"
     echo "- 请重启微信或重启设备使覆盖生效"
     exit 0
   fi
 }
 
-# 有 files 源且存在 overlay 目录时才提供气泡切换
-if [ -d "$OVERLAY_DIR" ] && [ -d "$FILES_DIR" ]; then
+# 圆角/底栏开关: 音量+ = 切换当前项, 音量- = 下一项
+manage_optional_overlays() {
+  local corners_enabled tab_enabled
+  corners_enabled=$(get_conf "multi_scene_corners_enabled" "0")
+  tab_enabled=$(get_conf "solid_tab_enabled" "0")
+
+  echo "=========================================="
+  echo "  多场景圆角: $([ "$corners_enabled" = "1" ] && echo '已启用' || echo '已停用')"
+  echo "  音量+ = 切换圆角  |  音量- = 下一项"
+  echo "=========================================="
+  if listen_volume_key; then
+    if [ "$corners_enabled" = "1" ]; then
+      remove_overlay "MonetWeChatMultiSceneCorners"
+      set_conf "multi_scene_corners_enabled" "0"
+      echo "- 已停用多场景圆角"
+    else
+      install_overlay "MonetWeChatMultiSceneCorners"
+      set_conf "multi_scene_corners_enabled" "1"
+      echo "- 已启用多场景圆角"
+    fi
+    exit 0
+  fi
+
+  echo "=========================================="
+  echo "  纯色底栏: $([ "$tab_enabled" = "1" ] && echo '已启用' || echo '已停用')"
+  echo "  音量+ = 切换底栏  |  音量- = 完成"
+  echo "=========================================="
+  if listen_volume_key; then
+    if [ "$tab_enabled" = "1" ]; then
+      remove_overlay "MonetWeChatSolidTab"
+      set_conf "solid_tab_enabled" "0"
+      echo "- 已停用纯色底栏"
+    else
+      install_overlay "MonetWeChatSolidTab"
+      set_conf "solid_tab_enabled" "1"
+      echo "- 已启用纯色底栏"
+    fi
+    exit 0
+  fi
+
+  echo "- 覆盖配置完成, 请重启微信或重启设备使覆盖生效"
+  exit 0
+}
+
+# 有 files 源才提供覆盖管理
+if [ -d "$FILES_DIR" ]; then
+  ensure_base_overlay
   switch_bubble
+  manage_optional_overlays
 fi
 
+# ── 原有功能: 重启微信 ─────────────────────────────────────────────────────
 if [ ! -x "$CONFIG_SCRIPT" ]; then
-  echo "Unable to read WeKit Zygisk targets: $CONFIG_SCRIPT is unavailable" >&2
+  echo "Unable to read WeKite Zygisk targets: $CONFIG_SCRIPT is unavailable" >&2
   exit 1
 fi
 
 target_rows=$("$CONFIG_SCRIPT" list)
 list_status=$?
 if [ "$list_status" -ne 0 ]; then
-  echo "Unable to read WeKit Zygisk targets (exit $list_status)" >&2
+  echo "Unable to read WeKite Zygisk targets (exit $list_status)" >&2
   exit "$list_status"
 fi
 
@@ -101,7 +181,7 @@ selected_target=$(printf '%s\n' "$target_rows" | awk -F '\t' '
 ')
 
 if [ -z "$selected_target" ]; then
-  echo "No enabled WeKit Zygisk targets. Enable one in the module WebUI first." >&2
+  echo "No enabled WeKite Zygisk targets. Enable one in the module WebUI first." >&2
   exit 1
 fi
 

@@ -196,20 +196,11 @@ elif [ "$MONET_WECHAT_VERSION_CODE" = "3083" ] || [ "$MONET_WECHAT_VERSION_CODE"
   MONET_BUBBLE=$(grep -E "^bubble_style=" "$MODPATH/config.conf" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
   MONET_BUBBLE=${MONET_BUBBLE:-modern}
 
-  ui_print "- 安装莫奈基础主题 + 圆角 + 底栏 overlay"
+  # 默认只安装基础主题 overlay (最低风险, 与微信兼容性最好)
+  # 气泡/圆角/底栏为可选覆盖, 通过模块「执行」(Action) 菜单按需启用,
+  # 避免多个静态 overlay 同时加载导致系统启动异常
+  ui_print "- 安装 Monet 基础主题 overlay"
   install_overlay_apk "MonetWeChat"
-  install_overlay_apk "MonetWeChatMultiSceneCorners"
-  install_overlay_apk "MonetWeChatSolidTab"
-  case "$MONET_BUBBLE" in
-    classic)
-      ui_print "- 气泡样式: 经典气泡"
-      install_overlay_apk "MonetWeChatClassicBubble"
-      ;;
-    *)
-      ui_print "- 气泡样式: 现代圆角"
-      install_overlay_apk "MonetWeChatBubblePro"
-      ;;
-  esac
   # 保留 config.conf 记录, 供 action.sh 切换
   mkdir -p "$MODPATH"
   if ! grep -q "^bubble_style=" "$MODPATH/config.conf" 2>/dev/null; then
@@ -217,7 +208,8 @@ elif [ "$MONET_WECHAT_VERSION_CODE" = "3083" ] || [ "$MONET_WECHAT_VERSION_CODE"
   fi
   set_perm_recursive "$MODPATH/system/priv-app" 0 0 0755 0644
   set_perm "$MODPATH/config.conf" 0 0 0644
-  ui_print "- Monet overlays 安装完成 (重启后生效)"
+  ui_print "- Monet 基础主题安装完成 (重启后生效)"
+  ui_print "- 气泡/圆角/底栏: 模块「执行」菜单按需启用"
 else
   ui_print "! 当前微信 versionCode=${MONET_WECHAT_VERSION_CODE:-未知}, 莫奈 overlay 仅适配 Play 版 8.0.72"
   ui_print "! 模块其他功能不受影响, 莫奈覆盖将不生效"
