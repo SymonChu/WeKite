@@ -56,3 +56,54 @@ jobs:
         with:
           name: wekite-apk
           path: app/build/outputs/**/*.apk
+
+  build_zygisk:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ needs.build.result == 'success' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - name: Install Android NDK
+        run: |
+          NDK_VERSION=$(sed -n 's/^ndk = "\(.*\)"/\1/p' gradle/libs.versions.toml)
+          MIN_SDK=$(sed -n 's/^minSdk = "\(.*\)"/\1/p' gradle/libs.versions.toml)
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION"
+          NDK_BIN="$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -x "$NDK_BIN/aarch64-linux-android$MIN_SDK-clang"
+          test -x "$NDK_BIN/armv7a-linux-androideabi$MIN_SDK-clang"
+          test -x "$NDK_BIN/llvm-strip"
+
+      - name: Download Release APK artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: wekite-apk
+          path: artifacts
+
+      - name: Build Zygisk module
+        run: |
+          ./x zygisk build --apk-release --release --skip-apk-build \
+            --apk artifacts/app-standard-release.apk
+
+      - name: Upload Zygisk module
+        uses: actions/upload-artifact@v7
+        with:
+          name: wekite-zygisk
+          path: wekit-zygisk/release/*.zip
+          if-no-files-found: error
