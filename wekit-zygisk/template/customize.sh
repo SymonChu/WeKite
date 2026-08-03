@@ -163,18 +163,51 @@ set_perm "$MODPATH/action.sh" 0 0 0755
 set_perm "$MODPATH/uninstall.sh" 0 0 0755
 
 ui_print "- Installing WeChat Monet overlays"
-set_perm_recursive "$MODPATH/system/priv-app" 0 0 0755 0644
 
 # ── WeChat Monet overlays (Play 版微信 8.0.72, versionCode 3083/3084) ──────
 # Static RRO overlays: Monet 基础主题 / 气泡 Pro / 经典气泡 / 多场景圆角 / 纯色底栏
+# 气泡二选一: BubblePro 与 ClassicBubble 不能同时存在(都会覆盖气泡资源), 默认装 BubblePro
+# APK 源保存在 $MODPATH/files/, 安装时复制选中项到 system/priv-app/, 以便 action.sh 运行时切换
 MONET_TARGET_PACKAGE=com.tencent.mm
 MONET_WECHAT_VERSION_CODE=$(dumpsys package com.tencent.mm 2>/dev/null | sed -n 's/.*versionCode=\([0-9][0-9]*\).*/\1/p' | head -n 1)
 
+install_overlay_apk() {
+  local name="$1"
+  local target_dir="$MODPATH/system/priv-app/$name"
+  mkdir -p "$target_dir"
+  cp -f "$MODPATH/files/$name.apk" "$target_dir/$name.apk"
+  chmod 0755 "$MODPATH/system" "$MODPATH/system/priv-app" "$target_dir" 2>/dev/null
+  chmod 0644 "$target_dir/$name.apk" 2>/dev/null
+}
+
 if [ "$MONET_WECHAT_VERSION_CODE" = "3083" ] || [ "$MONET_WECHAT_VERSION_CODE" = "3084" ]; then
   ui_print "- WeChat Play 8.0.72 确认 (versionCode=$MONET_WECHAT_VERSION_CODE)"
-  ui_print "- 安装莫奈取色基础主题 + 气泡/圆角/底栏 overlay"
-  # overlay APK 已由模板放入 $MODPATH/system/priv-app/<name>/<name>.apk
-  # 静态 overlay (android:isStatic=true) 由系统在启动时自动加载
+
+  # 读取已有气泡选择 (默认 modern -> 气泡 Pro), 未安装过则默认 Pro
+  MONET_BUBBLE=$(grep -E "^bubble_style=" "$MODPATH/config.conf" 2>/dev/null | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+  MONET_BUBBLE=${MONET_BUBBLE:-modern}
+
+  ui_print "- 安装莫奈基础主题 + 圆角 + 底栏 overlay"
+  install_overlay_apk "MonetWeChat"
+  install_overlay_apk "MonetWeChatMultiSceneCorners"
+  install_overlay_apk "MonetWeChatSolidTab"
+  case "$MONET_BUBBLE" in
+    classic)
+      ui_print "- 气泡样式: 经典气泡"
+      install_overlay_apk "MonetWeChatClassicBubble"
+      ;;
+    *)
+      ui_print "- 气泡样式: 气泡 Pro (现代圆角)"
+      install_overlay_apk "MonetWeChatBubblePro"
+      ;;
+  esac
+  # 保留 config.conf 记录, 供 action.sh 切换
+  mkdir -p "$MODPATH"
+  if ! grep -q "^bubble_style=" "$MODPATH/config.conf" 2>/dev/null; then
+    echo "bubble_style=\"$MONET_BUBBLE\"" >> "$MODPATH/config.conf"
+  fi
+  set_perm_recursive "$MODPATH/system/priv-app" 0 0 0755 0644
+  set_perm "$MODPATH/config.conf" 0 0 0644
   ui_print "- Monet overlays 安装完成 (重启后生效)"
 else
   ui_print "! 当前微信 versionCode=${MONET_WECHAT_VERSION_CODE:-未知}, 莫奈 overlay 仅适配 Play 版 8.0.72"
