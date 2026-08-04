@@ -264,7 +264,9 @@ fun DexResolver(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
             ) {
-                if (phase !is DialogPhase.Scanning) {
+                if (phase is DialogPhase.Scanning) {
+                    TextButton(onClick = dismiss) { Text("跳过 (后台继续)") }
+                } else {
                     TextButton(onClick = dismiss) { Text("关闭") }
                 }
                 if (phase is DialogPhase.Idle) {

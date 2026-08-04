@@ -125,7 +125,7 @@ object FeaturesLoader {
 
             val boundActivity = activity
             withContext(Dispatchers.Main) {
-                showComposeDialog(boundActivity, directlyDismissable = false) {
+                showComposeDialog(boundActivity, directlyDismissable = true) {
                     DexResolver(
                         boundActivity,
                         brokenItems,
