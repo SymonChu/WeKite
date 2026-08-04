@@ -87,7 +87,7 @@ enum class AppColorSpec(
  *
  * Two consumers:
  * - the module's own UI ([ModuleTheme]) re-themes live from every value here;
- * - the UI injected into WeChat ([io.github.we.lite.ui.utils.InjectedUiTheme]) + native recoloring ([io.github.we.lite.features.items.beautify.MonetEngine]) only
+ * - the UI injected into WeChat ([io.github.we.lite.ui.utils.InjectedUiTheme]) only
  *   consult [applyToWechat]/[dynamicWallpaper]/[seedColor]/[paletteStyle]/[colorSpec], and NOT live —
  *   they read the persisted values once per WeChat launch.
  */
@@ -114,7 +114,7 @@ object ThemeSettings {
 
     /**
      * Whether the custom color also applies to WeChat itself (injected WeKite ComposeUI + native
-     * recoloring via [io.github.we.lite.features.items.beautify.MonetEngine]). Does NOT take effect live — requires restarting WeChat.
+     * recoloring). Does NOT take effect live — requires restarting WeChat.
      */
     var applyToWechat by mutableStateOf(WePrefs.getBoolOrFalse(Preferences.THEME_APPLY_TO_WECHAT))
         private set
