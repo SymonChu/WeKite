@@ -4,6 +4,8 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.StateListDrawable
 import android.view.View
+import androidx.core.graphics.drawable.solidColor
+import androidx.core.graphics.drawable.strokeWidth
 import dev.ujhhgtg.reflekt.reflekt
 import io.github.we.lite.features.core.Feature
 import io.github.we.lite.features.core.SwitchFeature
@@ -61,7 +63,7 @@ object RoundedChatBubbles : SwitchFeature() {
                 // 只处理"看起来像气泡"的: 有填充色, 无描边, 且不是全屏大背景
                 val solid = drawable.solidColor
                 val hasStroke = drawable.strokeWidth > 0
-                if (solid != 0 && !hasStroke && isBubbleSized(drawable)) {
+                if (solid != null && !hasStroke && isBubbleSized(drawable)) {
                     drawable.cornerRadius = cornerRadiusPx
                 }
             }
