@@ -48,8 +48,22 @@ jobs:
           cargo xtask configure
           cargo xtask build --native-only
 
+      - name: Setup signing keystore
+        run: |
+          if [ -n "${{ secrets.WEKITE_KEYSTORE_B64 }}" ]; then
+            echo "${{ secrets.WEKITE_KEYSTORE_B64 }}" | base64 -d > wekite-release.jks
+            echo "keystore ready: $(stat -c%s wekite-release.jks) bytes"
+          else
+            echo "no keystore secret, using debug signing"
+          fi
+
       - name: Build APK
         run: ./gradlew assembleStandardRelease --warning-mode all --rerun-tasks
+        env:
+          WEKIT_KEYSTORE_FILE: ${{ github.workspace }}/wekite-release.jks
+          WEKIT_KEYSTORE_PASSWORD: ${{ secrets.WEKITE_KEYSTORE_PASSWORD }}
+          WEKIT_KEY_ALIAS: ${{ secrets.WEKITE_KEY_ALIAS }}
+          WEKIT_KEY_PASSWORD: ${{ secrets.WEKITE_KEY_PASSWORD }}
 
       - name: Verify DEX class names survive R8 (keepRules)
         run: |

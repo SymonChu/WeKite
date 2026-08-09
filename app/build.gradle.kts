@@ -97,7 +97,8 @@ android {
         val _keyPassword = System.getenv("WEKIT_KEY_PASSWORD")
             ?: runCatching { project.property("WEKIT_KEY_PASSWORD") }.getOrNull() as? String?
 
-        if (_storeFile != null && _storePassword != null && _keyAlias != null && _keyPassword != null) {
+        val keystoreFile = _storeFile?.let { file(it) }
+        if (keystoreFile != null && keystoreFile.exists() && _storePassword != null && _keyAlias != null && _keyPassword != null) {
             create("release") {
                 foundKeystore = true
                 storeFile = file(_storeFile)
