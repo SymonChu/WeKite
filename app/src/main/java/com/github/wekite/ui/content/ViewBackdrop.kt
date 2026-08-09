@@ -96,6 +96,12 @@ class ViewBackdrop internal constructor(
     // recapture) rather than just recompositing stale render nodes.
     private var version by mutableIntStateOf(0)
 
+    // Version captured by the last successful recordSource(). When the backdrop draw node re-runs
+    // for any reason other than a source redraw (bar animation, window move, …) we must NOT re-record
+    // the source: view.draw() on WeChat's whole ViewPager is expensive and can disturb its own
+    // drawing state. Only re-capture when the source actually dirtied (version changed).
+    private var lastRecordedVersion = -1
+
     // Coordinate lookups are done against the source view's window position, so the offset the
     // effect needs doesn't depend on Compose recomposition.
     override val isCoordinatesDependent: Boolean = true
@@ -119,6 +125,7 @@ class ViewBackdrop internal constructor(
      */
     internal fun recordSource(): Boolean {
         val view = sourceView ?: return false
+        if (version == lastRecordedVersion) return false
         val width = view.width
         val height = view.height
         if (width <= 0 || height <= 0) return false
@@ -138,6 +145,7 @@ class ViewBackdrop internal constructor(
                 }
             }
         }
+        lastRecordedVersion = version
         return true
     }
 

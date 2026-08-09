@@ -42,7 +42,7 @@ android {
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = commitCount
-        versionName = "git+$gitHash"
+        versionName = "0.9"
 
         ndk {
             // noinspection ChromeOsAbiSupport

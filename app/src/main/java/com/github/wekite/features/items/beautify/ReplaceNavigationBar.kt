@@ -560,10 +560,27 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
         // producing the short frosted-glass strip you see below our bar.
         // Hooking a() and forcing its first arg (frostedEnabled) to false is the
         // only reliable fix regardless of call timing.
+        //
+        // Scope guard: FrostedContentView is also used by other pages (e.g. the
+        // frosted card backgrounds on the "我" page). Disabling the frost on
+        // every instance made those card backgrounds render broken/misaligned,
+        // so only suppress the instance owned by the home tab activity.
         "com.tencent.mm.ui.FrostedContentView".toClass().firstMethod {
             parameters { it[0] == bool && it[1] == int }
         }.hookBefore {
-            if (useFloating) args[0] = false
+            if (useFloating) {
+                val view = thisObject as? View
+                if (view != null) {
+                    var ctx = view.context
+                    while (ctx is android.content.ContextWrapper) {
+                        ctx = ctx.baseContext
+                    }
+                    val className = ctx.javaClass.name
+                    if (className.contains("LauncherUI") || className.contains("MainUI")) {
+                        args[0] = false
+                    }
+                }
+            }
         }
     }
 
