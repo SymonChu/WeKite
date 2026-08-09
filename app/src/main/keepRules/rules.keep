@@ -1,5 +1,5 @@
 # App
--keepnames class * implements dev.ujhhgtg.wekit.dexkit.abc.IResolveDex
+-keepnames class * implements com.github.wekite.dexkit.abc.IResolveDex
 -keep class com.alibaba.fastjson2.** { *; }
 -keep class okhttp3.** { *; }
 

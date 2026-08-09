@@ -1,8 +1,8 @@
 package me.hd.wauxv.data.bean
 
 import androidx.annotation.Keep
-import com.github.welite.features.api.core.models.MessageInfo
-import com.github.welite.features.api.core.models.MessageType
+import com.github.wekite.features.api.core.models.MessageInfo
+import com.github.wekite.features.api.core.models.MessageType
 
 @Suppress("unused")
 @Keep

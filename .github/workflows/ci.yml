@@ -51,6 +51,28 @@ jobs:
       - name: Build APK
         run: ./gradlew assembleStandardRelease --warning-mode all --rerun-tasks
 
+      - name: Verify DEX class names survive R8 (keepRules)
+        run: |
+          APK=$(find app/build/outputs -name "*.apk" | head -1)
+          python3 - "$APK" <<'EOF'
+          import zipfile, sys
+          apk = sys.argv[1]
+          z = zipfile.ZipFile(apk)
+          dex_all = b""
+          for name in z.namelist():
+              if name.startswith('classes') and name.endswith('.dex'):
+                  dex_all += z.read(name)
+          # IResolveDex 实现类必须全部保留原始类名（keepRules 生效的证明）
+          required = [b'ReplaceNavigationBar', b'ApplyDialogBackgroundBlur',
+                      b'WeMainActivityBeautifyApi', b'WeChatMessageViewApi',
+                      b'WeDatabaseApi', b'MonetEngine', b'AutoCacheImages']
+          missing = [c.decode() for c in required if c not in dex_all]
+          if missing:
+              print("FAIL: keepRules/rules.keep broken — missing from DEX:", missing)
+              sys.exit(1)
+          print("OK: all IResolveDex class names preserved in DEX")
+          EOF
+
       - name: Upload APK
         uses: actions/upload-artifact@v7
         with:

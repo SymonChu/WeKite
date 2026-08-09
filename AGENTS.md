@@ -25,7 +25,7 @@
 - `app/` — main Android module, entrypoints, hooks, UI, native Rust lib
 - `libs/common/annotation-scanner/` — KSP annotation processor (`@Feature` scanner)
 - `libs/common/libxposed-api/` — compileOnly LibXposed API interface stubs (compileOnly since they are provided by user's Xposed framework)
-- `libs/common/bsh/` — submodule: forked BeanShell interpreter with snapshot serialization (`BshSnapshot`, `BshSnapshotHelper`); snapshots are encrypted AST byte representations used by the WAuxiliary Xposed module; `app/src/main/java/com.github.welite/utils/BshSnapshotDecompiler.kt` — decompiles encrypted BeanShell snapshot files back into Java-like source code; the AES key was recovered from WAuxiliary's decompiled source
+- `libs/common/bsh/` — submodule: forked BeanShell interpreter with snapshot serialization (`BshSnapshot`, `BshSnapshotHelper`); snapshots are encrypted AST byte representations used by the WAuxiliary Xposed module; `app/src/main/java/com.github.wekite/utils/BshSnapshotDecompiler.kt` — decompiles encrypted BeanShell snapshot files back into Java-like source code; the AES key was recovered from WAuxiliary's decompiled source
 - `libs/common/reflekt/` — submodule: reflection utility library (`dev.ujhhgtg.reflekt`)
 - `libs/common/stubs/` — compileOnly stubs for WeChat and Android hidden classes
 - `buildSrc/` — custom Gradle tasks: `GenerateMethodHashesTask` (`IResolveDex` `resolveDex` method MD5 cache), `GenerateNewFeaturesTask` (features whose source file was added within 30 days of the HEAD commit → `NewFeatures.ADDED_AT_BY_NAME`, backing the 新功能 pseudo-category)
@@ -34,7 +34,7 @@
 
 ## Entry Points & Architecture
 
-- Xposed entry: `com.github.welite.loader.entry.lsp10x.Lsp10xUnifiedHookEntry` (libxposed 101 & 100) and legacy Xposed API (51+) entry: `com.github.welite.loader.entry.xp51.Xp51HookEntry`
+- Xposed entry: `com.github.wekite.loader.entry.lsp10x.Lsp10xUnifiedHookEntry` (libxposed 101 & 100) and legacy Xposed API (51+) entry: `com.github.wekite.loader.entry.xp51.Xp51HookEntry`
 - Unified flow: `UnifiedEntryPoint.entry()` → `StartupAgent.startup()` → `WeLauncher.init()`
 - Hook items annotated with `@Feature(path, description)`, auto-discovered by KSP annotation scanner at compile time
 - Base classes: `SwitchFeature` (toggle on/off), `ClickableFeature` (toggle on/off with onClick event), `ApiFeature` (always-on), `BaseFeature` (abstract base, do not use directly)
@@ -47,7 +47,7 @@
 
 ## Key Conventions
 
-- Package namespace: `com.github.welite`
+- Package namespace: `com.github.wekite`
 - Min SDK 28, target SDK 37, compile SDK 37
 - Target: WeChat `com.tencent.mm`, versions 8.0.65–8.0.76. Current host info in `HostInfo`
 - Process targeting via `TargetProcesses`: override `startup()` to check
