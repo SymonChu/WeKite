@@ -1,23 +1,23 @@
 # ====================================================================
 # XPOSED ENTRY POINTS (Critical Startup)
 # ====================================================================
-Lio/github/we/lite/loader/entry/lsp10x/Lsp10xUnifiedHookEntry;
-Lio/github/we/lite/loader/entry/xp51/Xp51HookEntry;
+Lcom/github/welite/loader/entry/lsp10x/Lsp10xUnifiedHookEntry;
+Lcom/github/welite/loader/entry/xp51/Xp51HookEntry;
 
 # ====================================================================
 # CORE APIs & INTERNAL HOOKING INTERFACES
 # ====================================================================
-Lio/github/we/lite/hooks/api/core/WeAppMsgApi;
-Lio/github/we/lite/hooks/api/core/WeConversationApi;
-Lio/github/we/lite/hooks/api/core/WeDatabaseApi;
-Lio/github/we/lite/hooks/api/core/WeDatabaseListenerApi;
-Lio/github/we/lite/hooks/api/core/WeMessageApi;
-Lio/github/we/lite/hooks/api/core/WeServiceApi;
-Lio/github/we/lite/hooks/api/core/WeUnsafeApi;
+Lcom/github/welite/hooks/api/core/WeAppMsgApi;
+Lcom/github/welite/hooks/api/core/WeConversationApi;
+Lcom/github/welite/hooks/api/core/WeDatabaseApi;
+Lcom/github/welite/hooks/api/core/WeDatabaseListenerApi;
+Lcom/github/welite/hooks/api/core/WeMessageApi;
+Lcom/github/welite/hooks/api/core/WeServiceApi;
+Lcom/github/welite/hooks/api/core/WeUnsafeApi;
 
 # ====================================================================
 # NETWORK APIs & LISTENERS
 # ====================================================================
-Lio/github/we/lite/hooks/api/net/WeNetSceneApi;
-Lio/github/we/lite/hooks/api/net/WePacketHelper;
-Lio/github/we/lite/hooks/api/net/listener/WePacketDispatcher;
+Lcom/github/welite/hooks/api/net/WeNetSceneApi;
+Lcom/github/welite/hooks/api/net/WePacketHelper;
+Lcom/github/welite/hooks/api/net/listener/WePacketDispatcher;

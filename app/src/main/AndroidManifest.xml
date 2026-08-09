@@ -53,7 +53,7 @@
             android:launchMode="singleTask"
             android:resizeableActivity="true"
             android:supportsPictureInPicture="true"
-            android:taskAffinity="io.github.we.lite.voip_pip"
+            android:taskAffinity="com.github.welite.voip_pip"
             android:theme="@style/Theme.Material3.DynamicColors.DayNight.NoActionBar" />
 
         <receiver
