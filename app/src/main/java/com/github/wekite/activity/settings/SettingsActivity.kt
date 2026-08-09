@@ -142,18 +142,9 @@ val FEATURE_CATEGORIES = listOf(
     "朋友圈" to MaterialSymbols.Outlined.Camera,
     "系统与隐私" to MaterialSymbols.Outlined.Wand_stars,
     "音视频通话" to MaterialSymbols.Outlined.Call,
-    "通知" to MaterialSymbols.Outlined.Notifications,
     "界面美化" to MaterialSymbols.Outlined.Imagesearch_roller,
     "公众号" to MaterialSymbols.Outlined.Newspaper,
     "小程序" to MaterialSymbols.Outlined.Package_2,
-    "视频号" to MaterialSymbols.Outlined.Movie,
-    "个人资料" to MaterialSymbols.Outlined.Account_circle,
-    "调试" to MaterialSymbols.Outlined.Bug_report,
-    "脚本 (JS)" to MaterialSymbols.Outlined.Terminal,
-    "脚本 (Java)" to MaterialSymbols.Outlined.Terminal,
-    "娱乐" to MaterialSymbols.Outlined.Comedy_mask,
-    "批量操作" to MaterialSymbols.Outlined.Checklist,
-    "首页右上角菜单" to MaterialSymbols.Outlined.Add_circle,
     "联系人详情页面" to MaterialSymbols.Outlined.Contact_page,
 )
 

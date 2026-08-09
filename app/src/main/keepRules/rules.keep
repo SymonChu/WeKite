@@ -1,5 +1,7 @@
 # App
 -keepnames class * implements com.github.wekite.dexkit.abc.IResolveDex
+-keepnames class * implements com.github.wekite.features.api.ui.WeContactPrefsScreenApi$IContactInfoProvider
+-keepnames class * implements com.github.wekite.features.api.net.abc.IWePacketInterceptor
 -keep class com.alibaba.fastjson2.** { *; }
 -keep class okhttp3.** { *; }
 

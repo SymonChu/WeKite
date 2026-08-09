@@ -262,11 +262,6 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
                 PrefArrow(title = "版本", summary = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", icon = MaterialSymbols.Outlined.Label)
                 PrefArrow(title = "构建提交时间", summary = formatEpoch(BuildConfig.BUILD_TIMESTAMP, true), icon = MaterialSymbols.Outlined.Build_circle)
                 PrefArrow(
-                    title = "提示",
-                    summary = "牙膏要一点一点挤, 显卡要一刀一刀切, PPT 要一张一张放, 代码要一行一行写, 单个功能预计自出现在 commit 之日起, 三年内开发完毕",
-                    icon = MaterialSymbols.Outlined.Lightbulb_2,
-                )
-                PrefArrow(
                     title = "开放源代码许可",
                     summary = "本项目使用的开放源代码库许可",
                     icon = MaterialSymbols.Outlined.License,
