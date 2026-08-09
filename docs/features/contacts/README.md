@@ -11,7 +11,6 @@
 - [自定义好友本地头像](custom-local-friend-avatars.md) — 为指定联系人或群组使用本地图片替换微信头像
 - [移除消息批量转发限制](remove-message-batch-forward-limit.md) — 移除多选转发 9 个的数量限制
 - [退群监控](monitor-group-member-leave.md) — 监控群成员退出并插入系统消息提示
-- [圆角头像](round-avatars.md) — 自定义微信全局头像的圆角弧度
 - [显示隐藏朋友设置项](display-hidden-contact-settings.md) — 显示被微信隐藏的朋友设置项
 - [分裂群组](split-group-chats.md) — 将群聊复制出一份假群聊, 假群中的红包为假红包
 - [跳转对话](open-conversation.md) — 输入微信 ID 直接跳转到对应对话或好友主页

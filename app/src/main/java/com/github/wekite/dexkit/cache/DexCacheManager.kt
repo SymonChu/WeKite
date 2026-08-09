@@ -4,10 +4,12 @@ import com.github.wekite.constants.Preferences
 import com.github.wekite.dexkit.abc.IResolveDex
 import com.github.wekite.features.core.BaseFeature
 import com.github.wekite.preferences.WePrefs
+import com.github.wekite.utils.HostInfo
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.fs.KnownPaths
 import com.github.wekite.utils.fs.createDirsSafe
 import com.github.wekite.utils.unreachable
+import com.topjohnwu.superuser.Shell
 import org.json.JSONObject
 import java.nio.file.Path
 import kotlin.io.path.deleteIfExists
@@ -147,11 +149,45 @@ object DexCacheManager {
         getCacheFile(path).deleteIfExists()
     }
 
-    fun clearAllCache() {
-        cacheDir.listDirectoryEntries().forEach { path ->
-            path.deleteIfExists()
+    /**
+     * 清除全部 DEX 缓存, 返回是否成功 (宿主缓存部分)。
+     *
+     * 微信进程内调用时直接清当前进程的 [cacheDir]; 设置页运行在模块进程时,
+     * [cacheDir] 指向的是模块自身的空目录, 真正的缓存由微信进程写入其沙盒目录,
+     * 需要用 root 清除 ([KnownPaths.hostWechatDexCacheDir])。
+     */
+    fun clearAllCache(): Boolean {
+        var ok = true
+        runCatching {
+            cacheDir.listDirectoryEntries().forEach { path ->
+                path.deleteIfExists()
+            }
+        }.onFailure {
+            WeLogger.w(TAG, "failed to clear local cache dir", it)
+            ok = false
         }
-        WeLogger.i(TAG, "all cache cleared")
+
+        if (HostInfo.isModule) {
+            ok = clearHostWechatDexCache() && ok
+        }
+
+        WeLogger.i(TAG, "all cache cleared, ok=$ok")
+        return ok
+    }
+
+    private fun clearHostWechatDexCache(): Boolean {
+        val target = KnownPaths.hostWechatDexCacheDir ?: return true
+        // 只清目录内容, 保留目录本身 — 否则目录 owner 会变成 root,
+        // 微信进程将无法再写入缓存。
+        val result = Shell.cmd(
+            "if [ -d \"$target\" ]; then find \"$target\" -mindepth 1 -delete; fi"
+        ).exec()
+        if (result.isSuccess) {
+            WeLogger.i(TAG, "host wechat dex cache cleared via root: $target")
+        } else {
+            WeLogger.w(TAG, "failed to clear host wechat dex cache: ${result.err.joinToString()}")
+        }
+        return result.isSuccess
     }
 
     fun getOutdatedItems(items: List<IResolveDex>): List<IResolveDex> =

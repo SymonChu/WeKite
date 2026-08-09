@@ -83,6 +83,8 @@ import com.github.wekite.ui.utils.InjectedUiTheme
 import com.github.wekite.ui.utils.LifecycleOwnerProvider
 import com.github.wekite.ui.utils.setLifecycleOwner
 import com.github.wekite.ui.utils.showComposeDialog
+import com.github.wekite.ui.utils.theme.SeedResolver
+import com.github.wekite.ui.utils.theme.ThemeSettings
 import com.github.wekite.utils.reflection.bool
 import com.github.wekite.utils.reflection.int
 import kotlin.math.roundToInt
@@ -267,9 +269,18 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         val showFinderDot by showFinderDotState
                         val contactUnreadCount by contactUnreadCountState
 
-                        val backgroundColor = if (isSystemInDarkTheme()) Color(0xFF191919) else Color(0xFFF7F7F7)
-                        val activeColor = MaterialTheme.colorScheme.primary
-                        val inactiveColor = if (isSystemInDarkTheme()) Color(0xFF999999) else Color(0xFF181818)
+                        val isDark = isSystemInDarkTheme()
+                        val backgroundColor = if (isDark) Color(0xFF191919) else Color(0xFFF7F7F7)
+                        // 强调色与模块设置页保持一致: 自定义颜色开启时跟随用户主题
+                        // (同 SeedResolver 逻辑), 否则用 miuix 默认蓝 (light 0xFF3482FF /
+                        // dark 0xFF277AF7)。不能直接用 MaterialTheme.colorScheme.primary —
+                        // 注入 UI 的 InjectedUiTheme 默认是微信绿, 与模块设置页的强调色不一致。
+                        val activeColor = if (ThemeSettings.customColor) {
+                            SeedResolver.materialScheme(SeedResolver.customSeed(activity, isDark), isDark).primary
+                        } else {
+                            if (isDark) Color(0xFF277AF7) else Color(0xFF3482FF)
+                        }
+                        val inactiveColor = if (isDark) Color(0xFF999999) else Color(0xFF181818)
 
                         if (!useFloating) {
                             val offset by scrollOffsetState

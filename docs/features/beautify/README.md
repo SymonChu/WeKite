@@ -11,3 +11,4 @@
 - [资料卡居中](center-profile-card.md) — 居中「我」界面的个人资料卡
 - [DPI 修改](custom-dpi.md) — 自定义微信的屏幕密度 (DPI)
 - [主屏幕添加 FAB](add-main-screen-fab.md) — 在主页添加浮动操作按钮, 支持自定义快捷操作 (扫一扫、朋友圈、钱包、视频号、设置、全部已读等), 可自由增删和排序
+- [圆角头像](round-avatars.md) — 自定义微信全局头像的圆角弧度

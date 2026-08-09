@@ -64,7 +64,6 @@
 * [退群监控](lian-xi-ren-yu-qun-zu/tui-qun-jian-kong.md)
 * [跳转对话](features/contacts/open-conversation.md)
 * [移除消息批量转发限制](features/contacts/remove-message-batch-forward-limit.md)
-* [圆角头像](features/contacts/round-avatars.md)
 * [显示微信 ID](features/contacts/show-wx-id-in-contact-details.md)
 * [分裂群组](features/contacts/split-group-chats.md)
 
@@ -93,6 +92,7 @@
 * [DPI 修改](features/beautify/custom-dpi.md)
 * [隐藏主页下滑「最近」页](features/beautify/hide-home-screen-swipe-down-page.md)
 * [隐藏其他设备横幅](features/beautify/hide-other-devices-banner.md)
+* [圆角头像](features/beautify/round-avatars.md)
 
 ## 系统与隐私
 

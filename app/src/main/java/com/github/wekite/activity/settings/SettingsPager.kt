@@ -729,8 +729,8 @@ private fun ResetAdapterDialog(show: Boolean, onDismiss: () -> Unit) {
             onDismiss()
             CoroutineScope(Dispatchers.IO).launch {
                 showToastSuspend("正在清除...")
-                DexCacheManager.clearAllCache()
-                showToastSuspend("清除成功!")
+                val ok = DexCacheManager.clearAllCache()
+                showToastSuspend(if (ok) "已清除，重启微信后重新适配" else "清除失败：需要 Root 权限")
             }
         },
     )

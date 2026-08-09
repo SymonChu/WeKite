@@ -22,7 +22,7 @@ import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.utils.showComposeDialog
 
-@Feature(name = "屏蔽铃声", categories = ["聊天", "音视频通话"], description = "屏蔽音视频通话铃声")
+@Feature(name = "屏蔽铃声", categories = ["音视频通话"], description = "屏蔽音视频通话铃声")
 object BlockVoipRingtone : ClickableFeature(), IResolveDex {
 
     private var disableOutCall by prefOption("voip_disable_ringtone_out_call", true)
