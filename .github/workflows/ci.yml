@@ -77,7 +77,7 @@ jobs:
               if name.startswith('classes') and name.endswith('.dex'):
                   dex_all += z.read(name)
           # IResolveDex 实现类必须全部保留原始类名（keepRules 生效的证明）
-          required = [b'ReplaceNavigationBar', b'ApplyDialogBackgroundBlur',
+          required = [b'ReplaceNavigationBar',
                       b'WeMainActivityBeautifyApi', b'WeChatMessageViewApi',
                       b'WeDatabaseApi', b'MonetEngine', b'AutoCacheImages',
                       b'BlockVoipRingtone', b'VirtualVoipVideo', b'HideConversationListDividers',

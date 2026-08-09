@@ -21,11 +21,9 @@ import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Arrow_back
 import com.composables.icons.materialsymbols.outlined.Close
-import com.composables.icons.materialsymbols.outlined.Fiber_new
 import com.composables.icons.materialsymbols.outlined.Search
 import com.github.wekite.features.core.BaseFeature
 import com.github.wekite.features.core.FeaturesProvider
-import com.github.wekite.features.core.NewFeatures
 import com.github.wekite.features.core.SwitchFeature
 import com.github.wekite.preferences.WePrefs
 import top.yukonga.miuix.kmp.basic.Card
@@ -145,31 +143,6 @@ fun FeaturesPager(onOpenCategory: (String) -> Unit) {
                 }
             }
         } else {
-            // Its own card, so it reads as separate from the real categories below.
-            if (NEW_FEATURE_ITEMS.isNotEmpty()) {
-                item {
-                    Card(
-                        modifier = Modifier
-                            .padding(top = 12.dp)
-                            .fillMaxWidth()
-                    ) {
-                        ArrowPreference(
-                            title = NEW_FEATURES_CATEGORY,
-                            summary = "最近 ${NewFeatures.WINDOW_DAYS} 天新增 ${NEW_FEATURE_ITEMS.size} 项",
-                            startAction = {
-                                Icon(
-                                    imageVector = MaterialSymbols.Outlined.Fiber_new,
-                                    contentDescription = null,
-                                    modifier = Modifier.padding(end = 6.dp),
-                                    tint = MiuixTheme.colorScheme.onBackground,
-                                )
-                            },
-                            onClick = { onOpenCategory(NEW_FEATURES_CATEGORY) },
-                        )
-                    }
-                }
-            }
-
             item {
                 Card(
                     modifier = Modifier
@@ -205,8 +178,7 @@ fun FeaturesPager(onOpenCategory: (String) -> Unit) {
 @Composable
 fun CategoryDetailScreen(categoryName: String, onBack: () -> Unit) {
     val items = remember(categoryName) {
-        if (categoryName == NEW_FEATURES_CATEGORY) NEW_FEATURE_ITEMS
-        else FeaturesProvider.ALL_HOOK_ITEMS.filter { categoryName in it.categories }
+        FeaturesProvider.ALL_HOOK_ITEMS.filter { categoryName in it.categories }
     }
 
     MiuixListScaffold(

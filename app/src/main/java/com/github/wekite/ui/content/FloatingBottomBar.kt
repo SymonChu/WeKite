@@ -148,6 +148,9 @@ fun RowScope.FloatingBottomBarItem(
 @Composable
 fun FloatingBottomBar(
     modifier: Modifier = Modifier,
+    // Telegram 风格: 悬浮胶囊横跨大部分屏幕宽度 (两侧留 12dp), 高度更矮。
+    // 默认 false 保持紧凑包裹内容 (模块自身设置页沿用旧样式)。
+    fullWidth: Boolean = false,
     selectedIndex: () -> Int,
     onSelected: (index: Int) -> Unit,
     backdrop: Backdrop,
@@ -331,13 +334,20 @@ fun FloatingBottomBar(
     val combinedBackdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop)
 
     Box(
-        modifier = modifier.width(IntrinsicSize.Min),
+        modifier = modifier.then(
+            if (fullWidth) {
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+            } else {
+                Modifier.width(IntrinsicSize.Min)
+            }
+        ),
         contentAlignment = Alignment.CenterStart
     ) {
         // Base layer — unselected content.
         CompositionLocalProvider(LocalFloatingBottomBarContentColor provides colors.contentColor) {
             Row(
                 Modifier
+                    .then(if (fullWidth) Modifier.fillMaxWidth() else Modifier)
                     .onGloballyPositioned { coords ->
                         totalWidthPx = coords.size.width.toFloat()
                         val contentWidthPx = totalWidthPx - with(density) { 8.dp.toPx() }
@@ -386,7 +396,7 @@ fun FloatingBottomBar(
                         }
                     )
                     .then(interactiveHighlight?.modifier ?: Modifier)
-                    .height(64.dp)
+                    .height(56.dp)
                     .padding(4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 content = content
@@ -403,6 +413,7 @@ fun FloatingBottomBar(
             ) {
                 Row(
                     Modifier
+                        .then(if (fullWidth) Modifier.fillMaxWidth() else Modifier)
                         .clearAndSetSemantics {}
                         .alpha(0f)
                         .layerBackdrop(tabsBackdrop)
@@ -423,7 +434,7 @@ fun FloatingBottomBar(
                             onDrawSurface = { drawRect(containerColor) },
                         )
                         .then(interactiveHighlight?.modifier ?: Modifier)
-                        .height(56.dp)
+                        .height(48.dp)
                         .padding(horizontal = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -484,7 +495,7 @@ fun FloatingBottomBar(
                                 alpha = dampedDragAnimation.pressProgress,
                             )
                         }
-                        .height(56.dp)
+                        .height(48.dp)
                         .width(tabWidthDp)
                 )
             } else {
@@ -498,7 +509,7 @@ fun FloatingBottomBar(
                         .then(dampedDragAnimation.modifier)
                         .clip(pillShape)
                         .background(colors.indicatorColor.copy(alpha = 0.15f), pillShape)
-                        .height(56.dp)
+                        .height(48.dp)
                         .width(tabWidthDp),
                     // Force start alignment for the Box container to prevent centering
                     contentAlignment = Alignment.CenterStart
@@ -510,7 +521,7 @@ fun FloatingBottomBar(
                                 .clearAndSetSemantics {}
                                 .wrapContentWidth(align = Alignment.Start, unbounded = true)
                                 .requiredWidth(with(density) { (totalWidthPx - 8.dp.toPx()).toDp() })
-                                .height(56.dp)
+                                .height(48.dp)
                                 .graphicsLayer {
                                     val progressOffset = dampedDragAnimation.value * tabWidthPx
                                     translationX = if (isLtr) -progressOffset else progressOffset

@@ -77,8 +77,6 @@ import com.composables.icons.materialsymbols.outlinedfilled.Settings
 import com.composables.icons.materialsymbols.outlinedfilled.Tune
 import com.github.wekite.features.core.BaseFeature
 import com.github.wekite.features.core.ClickableFeature
-import com.github.wekite.features.core.FeaturesProvider
-import com.github.wekite.features.core.NewFeatures
 import com.github.wekite.features.core.SwitchFeature
 import com.github.wekite.preferences.WePrefs
 import com.github.wekite.ui.content.FloatingBottomBar
@@ -145,35 +143,7 @@ val FEATURE_CATEGORIES = listOf(
     "界面美化" to MaterialSymbols.Outlined.Imagesearch_roller,
     "公众号" to MaterialSymbols.Outlined.Newspaper,
     "小程序" to MaterialSymbols.Outlined.Package_2,
-    "联系人详情页面" to MaterialSymbols.Outlined.Contact_page,
 )
-
-/**
- * Pseudo-category shown above the real ones. Deliberately kept out of [FEATURE_CATEGORIES] —
- * it isn't something a feature can declare in its `@Feature(categories = ...)`.
- */
-const val NEW_FEATURES_CATEGORY = "新功能"
-
-/**
- * Features whose source file entered the repo within [NewFeatures.WINDOW_DAYS] days of the build's
- * HEAD commit (collected at compile time by `GenerateNewFeaturesTask`), newest first.
- *
- * Features that belong to no real category — the `API` internals — are dropped: they carry no
- * switch a user would meaningfully flip.
- */
-val NEW_FEATURE_ITEMS: List<BaseFeature> by lazy {
-    val visibleCategories = FEATURE_CATEGORIES.mapTo(mutableSetOf()) { it.first }
-    FeaturesProvider.ALL_HOOK_ITEMS.associateBy { it.name }.values
-        .mapNotNull { item ->
-            NewFeatures.ADDED_AT_BY_NAME[item.name]?.let { addedAt -> item to addedAt }
-        }
-        .filter { (item, _) -> item.categories.any { it in visibleCategories } }
-        .sortedWith(
-            compareByDescending<Pair<BaseFeature, Long>> { it.second }
-                .thenBy { it.first.name },
-        )
-        .map { (item, _) -> item }
-}
 
 // ---------------------------------------------------------------------------
 //  Root: three-tab pager + floating bottom bar, with category drill-down

@@ -179,11 +179,6 @@ androidComponents {
             generateMethodHashes,
             GenerateMethodHashesTask::outputDir
         )
-
-        kotlinSources.addGeneratedSourceDirectory(
-            generateNewFeatures,
-            GenerateNewFeaturesTask::outputDir
-        )
     }
 }
 
@@ -195,17 +190,6 @@ val generateMethodHashes = tasks.register<GenerateMethodHashesTask>("generateMet
     sourceDir.set(file("src/main/java"))
     outputDir.set(layout.buildDirectory.dir("generated/source/methodhashes"))
     namespace.set(libs.versions.namespace.get())
-}
-
-val generateNewFeatures = tasks.register<GenerateNewFeaturesTask>("generateNewFeatures") {
-    description = "Collect features added within the last 30 days of history"
-    group = "wekit"
-    sourceDir.set(file("src/main/java"))
-    repoDir.set(rootProject.layout.projectDirectory)
-    outputDir.set(layout.buildDirectory.dir("generated/source/newfeatures"))
-    namespace.set(libs.versions.namespace.get())
-    windowDays.set(30)
-    gitHead.set(getGitHash())
 }
 
 // --- end tasks ---

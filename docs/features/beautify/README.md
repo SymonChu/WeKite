@@ -4,8 +4,7 @@
 
 ## 功能列表
 
-- [对话框窗口级背景模糊](apply-dialog-background-blur.md) — 为对话框添加窗口级磨砂模糊效果 [需 SDK >= 31]
-- [美化首页底部导航栏](replace-navigation-bar.md) — 将底部导航栏替换为 Material Design 或 Backdrop 风格
+- [美化首页底部导航栏](replace-navigation-bar.md) — 将底部导航栏替换为 Material Design 或 Backdrop 风格（悬浮底栏支持 Telegram 风格）
 - [隐藏主页下滑「最近」页](hide-home-screen-swipe-down-page.md) — 禁用主页下拉进入「最近」页面
 - [隐藏其他设备横幅](hide-other-devices-banner.md) — 隐藏主页顶部其他设备登录横幅
 - [「我」页面精简](hide-me-tab-page-items.md) — 可隐藏「我」页面中的朋友圈、视频号、卡包、表情等组件

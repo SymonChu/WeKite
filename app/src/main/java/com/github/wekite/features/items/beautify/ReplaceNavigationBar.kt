@@ -380,6 +380,8 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                                             bottom = 12.dp + WindowInsets.navigationBars.asPaddingValues()
                                                 .calculateBottomPadding()
                                         ),
+                                    // Telegram 风格: 横跨大部分屏幕宽度、更矮的悬浮胶囊
+                                    fullWidth = true,
                                     // Spring target: on a tap this is the tapped tab, so the
                                     // pill bulges and slides across. During a swipe the gate
                                     // below hands position control to `progress` instead.
