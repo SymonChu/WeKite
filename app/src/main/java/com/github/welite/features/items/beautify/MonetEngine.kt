@@ -89,7 +89,7 @@ object MonetEngine : ApiFeature() {
         runCatching {
             "com.tencent.mm.ui.widget.MMSwitchBtn".toClass().constructors.forEach {
                 it.hookAfter {
-                    thisObject.reflekt()
+                    thisObject!!.reflekt()
                         .fields {
                             type = Int::class
                             superclass()
