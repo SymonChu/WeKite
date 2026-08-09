@@ -41,7 +41,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.net.toUri
 import androidx.lifecycle.lifecycleScope
 import coil3.compose.AsyncImage
 import com.composables.icons.materialsymbols.MaterialSymbols
@@ -77,10 +76,10 @@ import com.github.wekite.BuildConfig
 import com.github.wekite.R
 import com.github.wekite.activity.TransparentActivity
 import com.github.wekite.constants.Preferences
+import com.github.wekite.dexkit.cache.DexCacheManager
 import com.github.wekite.features.api.core.WeApi
 import com.github.wekite.preferences.WePrefs
 import com.github.wekite.ui.content.MiuixSmallTitle
-import com.github.wekite.ui.utils.GitHubIcon
 import com.github.wekite.ui.utils.theme.AppColorSpec
 import com.github.wekite.ui.utils.theme.AppPaletteStyle
 import com.github.wekite.ui.utils.theme.AppThemeMode
@@ -139,10 +138,12 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
     val context = LocalComponentActivity.current
 
     var showClearConfirm by remember { mutableStateOf(false) }
+    var showResetAdapter by remember { mutableStateOf(false) }
     var updateInfo by remember { mutableStateOf<UpdateResult.UpdateAvailable?>(null) }
     var updateError by remember { mutableStateOf<String?>(null) }
 
     ClearConfigDialog(show = showClearConfirm, onDismiss = { showClearConfirm = false })
+    ResetAdapterDialog(show = showResetAdapter, onDismiss = { showResetAdapter = false })
     UpdateAvailableDialog(info = updateInfo, onDismiss = { updateInfo = null }, context = context)
     UpdateErrorDialog(message = updateError, onDismiss = { updateError = null })
 
@@ -201,7 +202,7 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
                     title = "重置适配信息",
                     summary = "清除 DEX 缓存, 等待下次启动时重新适配",
                     icon = MaterialSymbols.Outlined.Build_circle,
-                    onClick = { /* ResetDexCache removed */ },
+                    onClick = { showResetAdapter = true },
                 )
                 PrefSwitch(
                     key = Preferences.RESET_DEX_ON_HOT_UPDATE,
@@ -267,11 +268,6 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
                     icon = MaterialSymbols.Outlined.License,
                     onClick = onOpenLicense,
                 )
-                PrefArrow(
-                    title = "GitHub",
-                    summary = "SymonChu/WeKite",
-                    icon = GitHubIcon,
-                    onClick = { "https://github.com/SymonChu/WeKite".toUri().openInSystem(context, true) })
             }
         }
 
@@ -715,6 +711,25 @@ private fun ClearConfigDialog(show: Boolean, onDismiss: () -> Unit) {
             CoroutineScope(Dispatchers.IO).launch {
                 showToastSuspend("正在清除...")
                 WePrefs.default.clear()
+                showToastSuspend("清除成功!")
+            }
+        },
+    )
+}
+
+@Composable
+private fun ResetAdapterDialog(show: Boolean, onDismiss: () -> Unit) {
+    MiuixConfirmDialog(
+        show = show,
+        title = "重置适配信息",
+        message = "这将删除所有的 DEX 适配信息, 宿主重启后需要重新适配。\n确定清除吗?",
+        confirmText = "清除",
+        onDismiss = onDismiss,
+        onConfirm = {
+            onDismiss()
+            CoroutineScope(Dispatchers.IO).launch {
+                showToastSuspend("正在清除...")
+                DexCacheManager.clearAllCache()
                 showToastSuspend("清除成功!")
             }
         },

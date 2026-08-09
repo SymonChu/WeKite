@@ -167,33 +167,6 @@ cd WeKite
 | Xposed APK | `app/build/outputs/apk/standard/release/` |
 | Zygisk 模块 | `wekit-zygisk/release/WeKite-*.zip` |
 
-### CI 自动构建
-
-GitHub Actions 在每次推送后自动构建，产物：
-
-| Artifact | 说明 |
-|----------|------|
-| `wekite-apk` | Xposed 版 APK（R8 压缩） |
-| `wekite-zygisk` | Zygisk 模块 zip |
-
-## 📂 项目结构
-
-```
-app/                          Android 模块主工程
-├── src/main/java/            主代码
-│   ├── features/             功能实现（按类别分目录）
-│   │   └── items/            具体功能项
-│   ├── loader/               Xposed/Zygisk 入口
-│   ├── activity/             模块自身 UI（设置界面）
-│   └── utils/                工具类
-├── src/standard/             standard flavor（libxposed 入口）
-wekit-zygisk/                 Zygisk 模块工程
-├── template/                 模块模板（安装脚本）
-└── native/                   Zygisk 原生库
-libs/                         子模块（reflekt / bsh / stubs）
-xtask/                        Rust 构建编排
-```
-
 ## ❓ 常见问题
 
 **Q: 安装后找不到设置入口？**

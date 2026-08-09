@@ -7,48 +7,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
-val GitHubIcon by lazy {
-    ImageVector.Builder(
-        name = "GitHubIcon",
-        defaultWidth = 24.0.dp,
-        defaultHeight = 24.0.dp,
-        viewportWidth = 24.0f,
-        viewportHeight = 24.0f
-    ).apply {
-        path(
-            fill = SolidColor(Color.White),
-            pathFillType = PathFillType.NonZero
-        ) {
-            moveTo(12.0f, 2.0f)
-            arcTo(10.126f, 10.126f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 2.0f, 12.248f)
-            arcTo(10.257f, 10.257f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 8.84f, 21.984f)
-            curveToRelative(0.5f, 0.082f, 0.66f, -0.236f, 0.66f, -0.512f)
-            verticalLineTo(19.74f)
-            curveToRelative(-2.77f, 0.615f, -3.36f, -1.373f, -3.36f, -1.373f)
-            arcTo(2.741f, 2.741f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 5.03f, 16.86f)
-            curveToRelative(-0.91f, -0.635f, 0.07f, -0.615f, 0.07f, -0.615f)
-            arcTo(2.109f, 2.109f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 6.63f, 17.3f)
-            arcTo(2.118f, 2.118f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 9.54f, 18.151f)
-            arcTo(2.235f, 2.235f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 10.17f, 16.778f)
-            curveToRelative(-2.22f, -0.256f, -4.55f, -1.138f, -4.55f, -5.042f)
-            arcTo(4.025f, 4.025f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 6.65f, 8.959f)
-            arcTo(3.75f, 3.75f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 6.75f, 6.253f)
-            reflectiveCurveTo(7.59f, 5.976f, 9.5f, 7.3f)
-            arcTo(9.409f, 9.409f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 14.5f, 7.3f)
-            curveToRelative(1.91f, -1.322f, 2.75f, -1.045f, 2.75f, -1.045f)
-            arcTo(3.75f, 3.75f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 17.35f, 8.964f)
-            arcTo(4.025f, 4.025f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 18.38f, 11.741f)
-            curveToRelative(0.0f, 3.915f, -2.34f, 4.776f, -4.57f, 5.032f)
-            arcTo(2.477f, 2.477f, 0.0f, isMoreThanHalf = false, isPositiveArc = true, 14.5f, 18.673f)
-            verticalLineTo(21.481f)
-            curveToRelative(0.0f, 0.277f, 0.16f, 0.6f, 0.67f, 0.512f)
-            arcTo(10.259f, 10.259f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 22.0f, 12.248f)
-            arcTo(10.126f, 10.126f, 0.0f, isMoreThanHalf = false, isPositiveArc = false, 12.0f, 2.0f)
-            close()
-        }
-    }.build()
-}
-
 val TelegramIcon by lazy {
     ImageVector.Builder(
         name = "TelegramIcon",

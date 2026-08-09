@@ -42,10 +42,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
-import androidx.core.net.toUri
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Open_in_new
 import com.composables.icons.materialsymbols.outlined.Settings
@@ -60,7 +58,6 @@ import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.IconButton
 import com.github.wekite.ui.content.TextButton
-import com.github.wekite.ui.utils.GitHubIcon
 import com.github.wekite.ui.utils.theme.ModuleAppTheme
 import com.github.wekite.utils.android.androidUserId
 import com.github.wekite.utils.android.getEnabled
@@ -68,7 +65,6 @@ import com.github.wekite.utils.android.setEnabled
 import com.github.wekite.utils.android.showToast
 import com.github.wekite.utils.formatEpoch
 import com.github.wekite.utils.hook_status.HookStatus
-import com.github.wekite.utils.openInSystem
 import com.github.wekite.utils.registerBshSnapshotDecompileLaunchers
 
 class MainActivity : ComponentActivity() {
@@ -98,12 +94,7 @@ class MainActivity : ComponentActivity() {
         Shell.getShell()
         setContent {
             ModuleAppTheme {
-                AppContent(
-                    selectFileLauncher,
-                    onUrlClick = { url ->
-                        url.toUri().openInSystem(this, true)
-                    }
-                )
+                AppContent(selectFileLauncher)
             }
         }
     }
@@ -116,7 +107,7 @@ class MainActivity : ComponentActivity() {
     )
 
     @Composable
-    private fun AppContent(resultLauncher: ActivityResultLauncher<String>, onUrlClick: (String) -> Unit) {
+    private fun AppContent(resultLauncher: ActivityResultLauncher<String>) {
         val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
 
         var showMenu by remember { mutableStateOf(false) }
@@ -570,13 +561,6 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.onSurface
                 )
 
-                LinkCard(
-                    icon = GitHubIcon,
-                    title = "GitHub",
-                    subtitle = "SymonChu/WeKite",
-                    onClick = { onUrlClick("https://github.com/SymonChu/WeKite") }
-                )
-
             }
 
             if (showAboutDialog) {
@@ -589,7 +573,6 @@ class MainActivity : ComponentActivity() {
                             Spacer(modifier = Modifier.height(8.dp))
                             Text("版本: ${BuildConfig.VERSION_NAME}")
                             Text("版本号: ${BuildConfig.VERSION_CODE}")
-                            Text("作者：SymonChu@github")
                         }
                     },
                     confirmButton = {
@@ -615,39 +598,6 @@ class MainActivity : ComponentActivity() {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-        }
-    }
-
-    @Composable
-    private fun LinkCard(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
-        ElevatedCard(
-            onClick = onClick,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.width(16.dp))
-                Column {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
         }
     }
 }

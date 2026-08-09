@@ -21,7 +21,6 @@ import java.util.Locale
  * 崩溃信息收集工具类
  * 负责收集设备信息、应用信息、线程信息、堆栈信息等
  *
- * @author cwuom
  * @since 1.0.0
  */
 object CrashInfoCollector {

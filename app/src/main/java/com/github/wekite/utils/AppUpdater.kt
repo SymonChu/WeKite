@@ -47,7 +47,7 @@ sealed interface UpdateResult {
 // ─── ABI → APK mapping ───────────────────────────────────────────────────────
 
 private const val BASE_URL =
-    "https://github.com/Ujhhgtg/WeKit/releases/download/CI"
+    "https://github.com/SymonChu/WeKite/releases/download/CI"
 
 // APKs are published per entry-point flavor: app-<flavor>-<abi>-release.apk.
 // Stay on the same flavor the installed build was compiled for.
