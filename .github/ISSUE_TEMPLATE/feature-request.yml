@@ -7,10 +7,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        感谢您给 WeKit 提出建议！  
+        感谢您给 WeKite 提出建议！  
         为了使我们更好地帮助您，请提供以下信息。
         
-        Thank you for providing suggestions for WeKit!  
+        Thank you for providing suggestions for WeKite!  
         To help us assist you better, please provide the following information.  
 
   - type: textarea

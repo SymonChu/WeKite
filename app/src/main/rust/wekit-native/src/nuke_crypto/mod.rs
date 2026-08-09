@@ -1,5 +1,5 @@
 //! Standalone mirror of the Nuke config-AEAD reimplementation (kept in sync with
-//! WeKit/app/src/main/rust/wekit-native/src/nuke_crypto/). Host-testable.
+//! WeKite/app/src/main/rust/wekit-native/src/nuke_crypto/). Host-testable.
 
 pub mod ops;
 pub mod perm;

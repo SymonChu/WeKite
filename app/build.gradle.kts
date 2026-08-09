@@ -186,7 +186,7 @@ androidComponents {
 
 val generateMethodHashes = tasks.register<GenerateMethodHashesTask>("generateMethodHashes") {
     description = "Generate resolveDex() method hashes"
-    group = "wekit"
+    group = "wekite"
     sourceDir.set(file("src/main/java"))
     outputDir.set(layout.buildDirectory.dir("generated/source/methodhashes"))
     namespace.set(libs.versions.namespace.get())

@@ -25,7 +25,6 @@ WeKite 是一套针对微信的模块化增强方案：核心功能全部围绕�
 | 自动缓存图片 | 收到图片自动从 CDN 缓存原图到本地 |
 | 自动缓存文件 | 收到文件自动触发下载缓存到本地 |
 | 半屏相册选择器 | 聊天相册选择器/预览/搜索改为半屏卡片显示 |
-| 屏蔽铃声 | 屏蔽音视频通话的呼出/呼入铃声 |
 
 ### 🎨 界面美化
 | 功能 | 说明 |
@@ -78,7 +77,6 @@ WeKite 是一套针对微信的模块化增强方案：核心功能全部围绕�
 | Xposed 检测规避 | 阻止微信检测 Xposed 环境 |
 | 热更新禁用 | 禁用微信热更新机制 |
 | 扫码限制移除 | 移除二维码扫描限制 |
-| 媒体数量限制移除 | 突破发送媒体数量限制 |
 | 模块数据保护 | 阻止微信清理模块数据 |
 | 模块隐藏 | 隐藏模块应用图标 |
 | 扫码记录 | 记录扫码历史 |
@@ -126,7 +124,7 @@ WeKite 是一套针对微信的模块化增强方案：核心功能全部围绕�
 
 **适用**：已 Root 且启用 Zygisk 的设备（Magisk 或 KernelSU）
 
-1. 从 [Releases](https://github.com/SymonChu/WeKite/releases) 下载 `wekit-zygisk-*.zip`
+1. 从 [Releases](https://github.com/SymonChu/WeKite/releases) 下载 `WeKite-*-release.zip`（Zygisk 模块包）
 2. 在 Magisk / KernelSU 中刷入模块
 3. 重启设备
 4. 打开 Root 管理器中的 WeKite 模块 WebUI，为微信打开注入开关
@@ -164,7 +162,7 @@ cd WeKite
 | 产物 | 路径 |
 |------|------|
 | Xposed APK | `app/build/outputs/apk/standard/release/` |
-| Zygisk 模块 | `wekit-zygisk/release/*.zip` |
+| Zygisk 模块 | `wekit-zygisk/release/WeKite-*.zip` |
 
 ### CI 自动构建
 

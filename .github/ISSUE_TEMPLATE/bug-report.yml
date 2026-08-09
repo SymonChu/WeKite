@@ -7,10 +7,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        感谢给 WeKit 汇报问题！
+        感谢给 WeKite 汇报问题！
         为了使我们更好地帮助你，请完整、准确地提供以下信息。
         
-        Thank you for reporting an issue to WeKit!
+        Thank you for reporting an issue to WeKite!
         To help us assist you better, please provide the following information completely and accurately.
   - type: textarea
     attributes:
@@ -59,7 +59,7 @@ body:
   - type: input
     attributes:
       label: 模块版本 / Module Version
-      description: 不要使用“最新版”一类描述。给出详细版本号，否则 Issue 将被关闭。在 https://t.me/+7j5dJ6g16B43OWVl 获取最新 CI 版本。 / Do not use "latest". Specify the exact version number, otherwise your issue will be closed. Get the latest CI version from https://t.me/wekit_ci.
+      description: 不要使用“最新版”一类描述。给出详细版本号，否则 Issue 将被关闭。在 [Releases](https://github.com/SymonChu/WeKite/releases) 获取最新 CI 版本。 / Do not use "latest". Specify the exact version number, otherwise your issue will be closed. Get the latest CI version from [Releases](https://github.com/SymonChu/WeKite/releases).
     validations:
       required: true
   - type: checkboxes
@@ -67,9 +67,9 @@ body:
     attributes:
       label: 版本和其他要求 / Version and Other Requirements
       options:
-        - label: 我正在使用最新 CI 版本且启用日志记录 / I am using the latest CI version of WeKit and have enabled logging
+        - label: 我正在使用最新 CI 版本且启用日志记录 / I am using the latest CI version of WeKite and have enabled logging
         - label: 我使用的微信是官方发布的正式版本，而非修改版或测试版 / The WeChat I am using is an official release version, not a modified or beta version
-        - label: 我已经在 [Issue Tracker](https://github.com/cwuom/wekit/issues) 中找过我要提出的问题，没有找到相同问题。重复问题会被关闭。 / I have searched the [Issue Tracker](https://github.com/cwuom/wekit/issues) and confirmed no duplicate issues exist. Duplicate issues will be closed.
+        - label: 我已经在 [Issue Tracker](https://github.com/SymonChu/WeKite/issues) 中找过我要提出的问题，没有找到相同问题。重复问题会被关闭。 / I have searched the [Issue Tracker](https://github.com/SymonChu/WeKite/issues) and confirmed no duplicate issues exist. Duplicate issues will be closed.
           required: true
         - label: 我已知晓并同意，此处仅用于汇报本模块中存在的问题。若这个 Issue 是关于其他非程序本身问题，则我的 Issue 可能会被无条件自动关闭或/并锁定。 / I understand and agree that this section is only for reporting issues with the main program. If this issue is about other non-program-related problems, it may be closed and/or locked unconditionally.
           required: true

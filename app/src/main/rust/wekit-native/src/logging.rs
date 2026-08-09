@@ -22,7 +22,7 @@ pub const ANDROID_LOG_WARN: c_int = 5;
 pub const ANDROID_LOG_ERROR: c_int = 6;
 
 #[cfg(target_os = "android")]
-static LOG_TAG: &std::ffi::CStr = c"WeKit";
+static LOG_TAG: &std::ffi::CStr = c"WeKite";
 
 #[cfg(target_os = "android")]
 pub fn android_log(prio: c_int, msg: &str) {

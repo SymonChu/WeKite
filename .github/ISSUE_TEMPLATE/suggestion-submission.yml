@@ -1,5 +1,5 @@
 name: 建议反馈 / Feature Request
-description: 提交对 WeKit 的优化建议，助力模块体验提升 / Submit suggestions to improve WeKit
+description: 提交对 WeKite 的优化建议，助力模块体验提升 / Submit suggestions to improve WeKite
 title: "[Suggestion] "
 labels: ["Suggestion"]
 
@@ -7,10 +7,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        非常感谢您为 WeKit 提出优化建议！您的想法对产品改进至关重要。
+        非常感谢您为 WeKite 提出优化建议！您的想法对产品改进至关重要。
         为了让开发者更清晰地理解您的建议，请按以下模板填写信息。
         
-        Thank you for helping us improve WeKit! Please use the template below to describe your ideas clearly.
+        Thank you for helping us improve WeKite! Please use the template below to describe your ideas clearly.
 
   - type: textarea
     attributes:

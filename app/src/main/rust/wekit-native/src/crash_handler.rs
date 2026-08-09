@@ -484,7 +484,7 @@ unsafe fn write_crash_log(sig: c_int, info: *mut siginfo_t, ctx: *mut c_void) {
 
         // ── Header ───────────────────────────────────────────────────────────────
         w.s("========================================\n");
-        w.s("WeKit Native Crash Report\n");
+        w.s("WeKite Native Crash Report\n");
         w.s("========================================\n\n");
         w.s("Crash Time: ");
         // YYYY-MM-DD HH:MM:SS
