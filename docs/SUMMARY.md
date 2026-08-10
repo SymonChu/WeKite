@@ -52,7 +52,6 @@
 * [贴纸包同步](features/chat/stickers-sync.md)
 * [左划引用消息](features/chat/swipe-to-quote.md)
 * [显隐全部对话](features/chat/toggle-all-conversations-visibility.md)
-* [虚拟视频通话](features/chat/virtual-voip-video.md)
 
 ## 联系人与群组
 

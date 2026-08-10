@@ -6,11 +6,7 @@
 
 **唯一的反馈渠道是 [GitHub Issues](https://github.com/SymonChu/WeKite/issues)。**
 
-请勿通过以下渠道反馈问题, 此类反馈不会被处理:
-
-- Telegram 讨论组
-- 开发者的 Telegram 私聊
-- 其他任何非 GitHub Issues 的渠道
+请勿通过其他任何非 GitHub Issues 的渠道反馈问题, 此类反馈不会被处理。
 
 ## 提交 Issue 前的准备
 
@@ -75,4 +71,4 @@
 2. 若缺少必需内容, Issue 将被标记并等待补充, 超时未补充将关闭
 3. 修复完成后 Issue 将被关闭
 4. **请勿在已关闭的 Issue 下继续讨论**——新问题请开新 Issue
-5. **请勿在 Telegram 等渠道催促进度**——维护者会在有空时处理
+5. **请勿在多个渠道反复催促进度**——维护者会在有空时处理

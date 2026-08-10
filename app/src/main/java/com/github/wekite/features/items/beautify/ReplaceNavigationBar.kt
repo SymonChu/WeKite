@@ -145,6 +145,21 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
             val viewParent = viewPager.parent as ViewGroup
             val bottomTabViewGroup = viewParent.getChildAt(1) as ViewGroup
 
+            // 强制隐藏微信原底栏 (LauncherUIBottomTabView)。微信在切换主 tab 时会
+            // 重新 setVisibility(VISIBLE) 并重绘自绘内容, 导致通讯录/发现/我页面
+            // 残留原底栏; 这里在每次 tab 切换时再清一次, 并 hook setVisibility
+            // 防止微信把它恢复显示。
+            val forceHideBottomTab = {
+                bottomTabViewGroup.removeAllViews()
+                bottomTabViewGroup.visibility = View.GONE
+            }
+            View::class.java.getDeclaredMethod("setVisibility", Int::class.javaPrimitiveType)
+                .hookBefore {
+                    if (useFloating && thisObject === bottomTabViewGroup) {
+                        args[0] = View.GONE
+                    }
+                }
+
             // WeChat's original bottom tab (LauncherUIBottomTabView) is kept alive — we only
             // clear its children below — so its own OnClickListener (an `f8`/`r8` instance)
             // survives with its double-tap state machine and the LiveData event it fires.
@@ -215,6 +230,8 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                 .firstMethod { name = "onPageSelected" }
                 .hookBefore {
                     targetPageIndexState.intValue = args[0] as Int
+                    // 微信切换主 tab 时会恢复原底栏显示, 这里再次强制隐藏
+                    if (useFloating) forceHideBottomTab()
                 }
 
             tabsAdapter.reflekt()
@@ -509,8 +526,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                 // FrostedContentView reads its height as 0 and doesn't draw a frosted grey
                 // overlay behind it. Instead, attach the ComposeView directly to the parent
                 // FrameLayout as an overlay on top of the content.
-                bottomTabViewGroup.removeAllViews()
-                bottomTabViewGroup.visibility = View.GONE
+                forceHideBottomTab()
 
                 // The pill scales up (press bulge ~1.39x plus velocity overshoot) via a
                 // graphicsLayer, so it draws beyond the ComposeView's WRAP_CONTENT bounds.

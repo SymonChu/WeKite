@@ -20,6 +20,9 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -44,40 +47,29 @@ sealed interface UpdateResult {
     data class Error(val cause: Throwable) : UpdateResult
 }
 
-// ─── ABI → APK mapping ───────────────────────────────────────────────────────
+// ─── GitHub release lookup ───────────────────────────────────────────────────
 
-private const val BASE_URL =
-    "https://github.com/SymonChu/WeKite/releases/download/CI"
-
-// APKs are published per entry-point flavor: app-<flavor>-<abi>-release.apk.
-// Stay on the same flavor the installed build was compiled for.
-private val FLAVOR = BuildConfig.FLAVOR_SLUG
-
-private val ABI_APK_MAP = mapOf(
-    "arm64-v8a" to "$BASE_URL/app-$FLAVOR-arm64-v8a-release.apk",
-    "armeabi-v7a" to "$BASE_URL/app-$FLAVOR-armeabi-v7a-release.apk",
-)
-private const val UPDATE_JSON_URL = "$BASE_URL/update.json"
+private const val REPO = "SymonChu/WeKite"
+private const val LATEST_RELEASE_API = "https://api.github.com/repos/$REPO/releases/latest"
 private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
 private const val ZIP_MIME_TYPE = "application/zip"
 
-/** Returns the best APK URL for this device. */
-private fun apkUrlForDevice(): String {
-    val supportedAbis = Build.SUPPORTED_ABIS  // ordered by preference
-    for (abi in supportedAbis) {
-        ABI_APK_MAP[abi]?.let { return it }
-    }
-    error("Unsupported Android ABI: ${supportedAbis.joinToString()}")
-}
+// 发布到 GitHub Release 的 APK 资产名 (universal, 含双 ABI)。
+private const val RELEASE_APK_NAME = "app-standard-release.apk"
 
-/** Matches the release name emitted by the Zygisk packager. */
-private fun zygiskModuleFileName(info: UpdateInfo): String =
-    "WeKite-${info.versionCode}-${info.versionName}-release.zip"
+// 发布时附带的版本元数据资产 (手动发布流程会随 Release 一起上传)。
+// 内容: {"versionCode": 925, "versionName": "1.0"}
+private const val UPDATE_JSON_NAME = "update.json"
 
 // ─── AppUpdater ───────────────────────────────────────────────────────────────
 
 /**
  * Self-contained in-app updater for WeKite.
+ *
+ * Fetches the latest GitHub Release via the public API (no token needed for a
+ * public repo, unauthenticated rate limit applies) and downloads the matching
+ * artifact: the universal APK for LSPosed/Xposed modes, or the Zygisk module
+ * ZIP when running under the Zygisk loader.
  *
  * Usage:
  * ```
@@ -101,20 +93,30 @@ object AppUpdater {
             .build()
     }
 
+    /** versionCode / versionName / download URLs of the latest GitHub release. */
+    private class LatestRelease(
+        val versionCode: Int,
+        val versionName: String,
+        val apkUrl: String,
+        val zygiskZipUrl: String?,
+        val zygiskZipName: String?,
+    )
+
     // ── Public API ────────────────────────────────────────────────────────────
 
     /**
-     * Fetches [UPDATE_JSON_URL] and compares [UpdateInfo.versionCode] with
-     * the currently installed version.
+     * Queries the latest GitHub release and compares its versionCode with the
+     * currently installed version.
      *
      * Must be called from a coroutine; network I/O runs on [Dispatchers.IO].
      */
     suspend fun checkForUpdate(): UpdateResult = withContext(Dispatchers.IO) {
         runCatching {
-            val remoteInfo = fetchUpdateInfo()
-            val installedCode = BuildConfig.VERSION_CODE
-            if (remoteInfo.versionCode > installedCode) {
-                UpdateResult.UpdateAvailable(remoteInfo)
+            val release = fetchLatestRelease()
+            if (release.versionCode > BuildConfig.VERSION_CODE) {
+                UpdateResult.UpdateAvailable(
+                    UpdateInfo(release.versionCode, release.versionName)
+                )
             } else {
                 UpdateResult.UpToDate
             }
@@ -136,16 +138,21 @@ object AppUpdater {
      */
     suspend fun downloadAndInstall(context: Context, info: UpdateInfo) {
         val isZygisk = StartupInfo.loaderService is ZygiskLoaderService
+        val release = fetchLatestRelease()
         val fileName: String
         val downloadUrl: String
         val mimeType: String
         if (isZygisk) {
-            fileName = zygiskModuleFileName(info)
-            downloadUrl = "$BASE_URL/$fileName"
+            // 直接用 GitHub Release 上的实际资产名 (WeKite-<N>-git+<hash>-release.zip),
+            // 避免本地拼接与打包器命名规则不一致。
+            val zygiskName = release.zygiskZipName
+                ?: error("最新发行版缺少 Zygisk 模块包")
+            fileName = zygiskName
+            downloadUrl = release.zygiskZipUrl ?: error("最新发行版缺少 Zygisk 下载地址")
             mimeType = ZIP_MIME_TYPE
         } else {
             fileName = "wekit-${info.versionName}.apk"
-            downloadUrl = apkUrlForDevice()
+            downloadUrl = release.apkUrl
             mimeType = APK_MIME_TYPE
         }
 
@@ -168,18 +175,89 @@ object AppUpdater {
         context.startActivity(intent)
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
+    // ── GitHub API ───────────────────────────────────────────────────────────
 
-    private fun fetchUpdateInfo(): UpdateInfo {
-        val request = Request.Builder().url(UPDATE_JSON_URL).build()
+    /**
+     * Fetches the latest published (non-prerelease) release and resolves the
+     * artifact URLs plus the version identifiers.
+     *
+     * versionCode/versionName 解析优先级:
+     * 1. Release 的 `update.json` 资产 (发布流程附带, 内容最精确);
+     * 2. Zygisk ZIP 资产名 `WeKite-<N>-git+<hash>-release.zip` 里的 N;
+     * 3. Release tag `v<N>` (仅当 tag 是纯数字前缀时可用)。
+     */
+    private fun fetchLatestRelease(): LatestRelease {
+        val request = Request.Builder().url(LATEST_RELEASE_API).build()
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
-                error("HTTP ${response.code} fetching update info")
+                error("HTTP ${response.code} 获取最新发行版信息失败")
             }
-            val body = response.body.string()
-            return json.decodeFromString(body)
+            val root = json.parseToJsonElement(response.body.string()).jsonObject
+
+            var apkUrl: String? = null
+            var zygiskZipUrl: String? = null
+            var zygiskZipName: String? = null
+            var updateJsonUrl: String? = null
+
+            root["assets"]?.jsonArray?.forEach { assetEl ->
+                val asset = assetEl.jsonObject
+                val name = asset["name"]?.jsonPrimitive?.content ?: return@forEach
+                val url = asset["browser_download_url"]?.jsonPrimitive?.content ?: return@forEach
+                when {
+                    name == RELEASE_APK_NAME -> apkUrl = url
+                    name == UPDATE_JSON_NAME -> updateJsonUrl = url
+                    name.startsWith("WeKite-") && name.endsWith("-release.zip") -> {
+                        zygiskZipName = name
+                        zygiskZipUrl = url
+                    }
+                }
+            }
+
+            val apkUrlValue = apkUrl ?: error("最新发行版缺少 APK 资产 ($RELEASE_APK_NAME)")
+            val tag = root["tag_name"]?.jsonPrimitive?.content ?: ""
+
+            // 1) update.json 资产优先
+            val fromUpdateJson = updateJsonUrl?.let { fetchUpdateJson(it) }
+            var versionCode = fromUpdateJson?.versionCode
+            var versionName = fromUpdateJson?.versionName
+
+            // 2) 回退: Zygisk zip 资产名解析
+            if (versionCode == null) {
+                versionCode = zygiskZipName
+                    ?.let { Regex("WeKite-(\\d+)-").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+            }
+            if (versionName == null) {
+                versionName = zygiskZipName
+                    ?.let { Regex("WeKite-\\d+-(.+)-release\\.zip").find(it)?.groupValues?.get(1) }
+            }
+
+            // 3) 最后回退: tag 解析
+            if (versionCode == null) {
+                versionCode = Regex("v(\\d+)").find(tag)?.groupValues?.get(1)?.toIntOrNull()
+            }
+            if (versionName == null) {
+                versionName = tag.removePrefix("v").ifEmpty { null }
+            }
+
+            return LatestRelease(
+                versionCode = versionCode ?: error("无法从发行版解析 versionCode"),
+                versionName = versionName ?: "unknown",
+                apkUrl = apkUrlValue,
+                zygiskZipUrl = zygiskZipUrl,
+                zygiskZipName = zygiskZipName,
+            )
         }
     }
+
+    private fun fetchUpdateJson(url: String): UpdateInfo? = runCatching {
+        val request = Request.Builder().url(url).build()
+        httpClient.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) return@runCatching null
+            json.decodeFromString<UpdateInfo>(resp.body.string())
+        }
+    }.getOrNull()
+
+    // ── Private helpers ───────────────────────────────────────────────────────
 
     private fun enqueueDownload(
         context: Context,

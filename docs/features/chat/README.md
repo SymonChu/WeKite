@@ -39,7 +39,6 @@
 - [表情游戏控制](emoji-game-control.md) — 自定义猜拳和骰子的结果
 - [伪装语音时长](fake-voice-duration.md) — 发送语音时预设显示的时长
 - [贴纸包同步](stickers-sync.md) — 从本地目录导入贴纸包, 支持 Telegram StickersSync
-- [虚拟视频通话](virtual-voip-video.md) — 视频通话时播放本地视频代替摄像头画面
 - [伪造聊天记录消息](fabricate-chat-history-message.md) — 创建伪造的聊天记录分享卡片
 - [重定向文件下载路径](redirect-download-path.md) — 将接收的文件保存到自定义目录
 - [拦截异常大小贴纸表情](block-abnormal-size-stickers.md) — 防止异常大小表情导致闪退

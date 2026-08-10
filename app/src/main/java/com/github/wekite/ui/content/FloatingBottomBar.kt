@@ -337,7 +337,9 @@ fun FloatingBottomBar(
     Box(
         modifier = modifier.then(
             if (fullWidth) {
-                Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+                // Telegram 风格: 横跨大部分屏幕宽度。左右留 16dp, 与主页会话列表
+                // 头像的左右边距平齐 (微信会话列表 item 内边距约 16dp)。
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp)
             } else {
                 Modifier.width(IntrinsicSize.Min)
             }

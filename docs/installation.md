@@ -2,12 +2,10 @@
 
 ## 下载
 
-本项目不会发布稳定版本, 请从以下渠道下载最新 CI 构建产物 (每夜版)。Xposed 模式请下载 APK, Zygisk 模式请下载 `wekit-zygisk` ZIP:
+从 [GitHub Releases](https://github.com/SymonChu/WeKite/releases) 下载最新发行版。Xposed (LSPosed) 模式请下载 `app-standard-release.apk`, Zygisk 模式请下载 `WeKite-*-release.zip` 模块包。
 
-- [GitHub Actions](https://github.com/SymonChu/WeKite/actions/workflows/ci.yml)
-- [Telegram 超级群组](https://t.me/+7j5dJ6g16B43OWVl)
-
-[GitHub Releases](https://github.com/SymonChu/WeKite/releases) 中会发布"稳定的 CI", 但不保证真的稳定, 且可能无法享受最新功能与修复, 故建议使用每夜版。
+- [GitHub Releases](https://github.com/SymonChu/WeKite/releases)
+- [GitHub Actions](https://github.com/SymonChu/WeKite/actions/workflows/ci.yml) — 每夜构建产物, 不保证稳定
 
 ## 安装
 

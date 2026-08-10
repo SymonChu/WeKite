@@ -233,13 +233,13 @@ Zygisk 模块使用 standard APK payload, 支持 `arm64-v8a` 和 `armeabi-v7a`�
 模块 ZIP 输出到:
 
 ```none
-wekit-zygisk/release/WeKit-<versionCode>-git+<commit>-<debug|release>.zip
+wekit-zygisk/release/WeKite-<versionCode>-<versionName>-release.zip
 ```
 
 使用 `--save-symbols` 时, 符号包输出到:
 
 ```none
-wekit-zygisk/symbols/WeKit-<versionCode>-git+<commit>-<debug|release>-symbols.zip
+wekit-zygisk/symbols/WeKite-<versionCode>-<versionName>-release-symbols.zip
 ```
 
 ### Native 构建与清理
