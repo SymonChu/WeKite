@@ -85,12 +85,15 @@ import com.github.wekite.ui.utils.setLifecycleOwner
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.ui.utils.theme.SeedResolver
 import com.github.wekite.ui.utils.theme.ThemeSettings
+import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.reflection.bool
 import com.github.wekite.utils.reflection.int
 import kotlin.math.roundToInt
 
 @Feature(name = "美化首页底部导航栏", categories = ["界面美化"], description = "将首页底部导航栏替换为 Material Design 或 Backdrop 风格")
 object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
+
+    private const val TAG = "ReplaceNavigationBar"
 
     private data class NavItem(
         val outlined: ImageVector,
@@ -581,29 +584,57 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
           // Hooking a() and forcing its first arg (frostedEnabled) to false is the
           // only reliable fix regardless of call timing.
           //
-          // Scope guard: FrostedContentView is also used by other pages (e.g. the
-          // frosted card backgrounds on the "我" page). Disabling the frost on
-          // every instance made those card backgrounds render broken/misaligned,
-          // so only suppress the instance owned by the home tab activity. We match
-          // by Activity instance (and by membership in the home container's view
-          // tree), NOT by class name — Play 版类名可能不含 LauncherUI/MainUI,
-          // 类名判断失败会让首页毛玻璃条残留, 看起来就像"有两个底栏"。
+          // v1.31 scope guard — 两条防线, 零误伤:
+          //   FrostedContentView 也被其他页面使用 (我页卡片背景、主页下拉小程序
+          //   面板背景)。v1.3 用 ctx === activity 兜底命中首页毛玻璃条, 但下拉
+          //   面板与主页共享同一 activity 实例, 其毛玻璃背景被一并禁用 → 面板
+          //   黑屏 (禁用后先显示缓存帧、渲染停更后露出黑底, 即"过段时间变黑")。
+          //   v1.4 改用高度参数过滤, 但 Play 版首页毛玻璃条真实高度参数不在预期
+          //   区间 → 首页毛玻璃条残留 (双底栏) 且面板动画中间态仍可能被误伤。
+          //   弃用 activity/高度参数判断, 改为:
+          //   防线1 视图树归属: 只抑制挂在主页内容容器 (viewParent) 树内的实例;
+          //         下拉面板是覆盖层, 绝不在 MainTabUI 内容容器树内 → 永不误伤。
+          //   防线2 实例名单: doOnCreate 后遍历主页视图树收集 FrostedContentView
+          //         实例 (此刻面板尚未创建, 名单只含首页毛玻璃条), a() 调用时实例
+          //         在名单内即抑制; 覆盖毛玻璃条挂在内容容器树外的布局差异。
+          val homeFrostedInstances = java.util.Collections.newSetFromMap(
+              java.util.WeakHashMap<View, Boolean>()
+          )
+          activity.window.decorView.post {
+              fun collectFrosted(v: View) {
+                  if (v.javaClass.name.contains("FrostedContentView")) {
+                      homeFrostedInstances.add(v)
+                  }
+                  if (v is ViewGroup) {
+                      for (i in 0 until v.childCount) collectFrosted(v.getChildAt(i))
+                  }
+              }
+              collectFrosted(activity.window.decorView)
+              WeLogger.i(TAG, "home frosted instances collected: ${homeFrostedInstances.size}")
+          }
+
           "com.tencent.mm.ui.FrostedContentView".toClass().firstMethod {
               parameters { it[0] == bool && it[1] == int }
           }.hookBefore {
-              if (useFloating) {
+              // 实时读开关 (不捕获 doOnCreate 时刻的旧值)
+              if (ReplaceNavigationBar.useFloating) {
                   val view = thisObject as? View
                   if (view != null) {
-                      var ctx = view.context
-                      while (ctx is android.content.ContextWrapper) {
-                          ctx = ctx.baseContext
-                      }
                       var parent: android.view.ViewParent? = view.parent
-                      while (parent is View) {
-                          if (parent === viewParent) break
+                      var inHomeContainerTree = false
+                      while (parent != null) {
+                          if (parent === viewParent) {
+                              inHomeContainerTree = true
+                              break
+                          }
                           parent = parent.parent
                       }
-                      if (ctx === activity || parent === viewParent) {
+                      if (inHomeContainerTree || view in homeFrostedInstances) {
+                          WeLogger.d(
+                              TAG,
+                              "frost suppress: view=${view.javaClass.name} " +
+                                  "inTree=$inHomeContainerTree collected=${view in homeFrostedInstances}"
+                          )
                           args[0] = false
                       }
                   }
