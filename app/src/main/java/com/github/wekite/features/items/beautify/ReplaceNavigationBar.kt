@@ -143,20 +143,66 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
             val navigateToTab = { index: Int -> methodOnTabClick.invoke(tabsAdapter, index) }
 
             val viewParent = viewPager.parent as ViewGroup
-            val bottomTabViewGroup = viewParent.getChildAt(1) as ViewGroup
 
-            // 强制隐藏微信原底栏 (LauncherUIBottomTabView)。微信在切换主 tab 时会
-            // 重新 setVisibility(VISIBLE) 并重绘自绘内容, 导致通讯录/发现/我页面
-            // 残留原底栏; 这里在每次 tab 切换时再清一次, 并 hook setVisibility
-            // 防止微信把它恢复显示。
-            val forceHideBottomTab = {
-                bottomTabViewGroup.removeAllViews()
-                bottomTabViewGroup.visibility = View.GONE
+            // 查找微信原底栏 (LauncherUIBottomTabView)。不用 getChildAt(1) 硬编码:
+            // 微信在切换主 tab 时会重建底栏实例 (removeView 旧实例 + addView 新实例),
+            // 固定引用会失效, 导致 removeAllViews/GONE 操作的是已脱离视图树的旧实例,
+            // 新实例依旧显示 → 通讯录/发现/我页面残留原底栏。
+            fun findBottomTabView(): ViewGroup? {
+                for (i in 0 until viewParent.childCount) {
+                    val child = viewParent.getChildAt(i)
+                    if (child != null && child.javaClass.name.contains("LauncherUIBottomTabView")) {
+                        return child as? ViewGroup
+                    }
+                }
+                return null
             }
+
+            val isBottomTabView: (Any?) -> Boolean = { obj ->
+                obj != null && obj.javaClass.name.contains("LauncherUIBottomTabView")
+            }
+
+            // 强制隐藏微信原底栏。微信在切换主 tab 时会重新 setVisibility(VISIBLE)
+            // 并重绘自绘内容, 导致通讯录/发现/我页面残留原底栏; 这里在每次 tab
+            // 切换时再清一次 (类名查找, 覆盖重建实例), 并多层 hook 防止微信恢复显示。
+            val forceHideBottomTab = {
+                val bottomTab = findBottomTabView()
+                if (bottomTab != null) {
+                    bottomTab.removeAllViews()
+                    bottomTab.visibility = View.GONE
+                }
+            }
+
+            // 防线 1: hook View.setVisibility, 用类名而非实例引用匹配, 覆盖微信
+            // 重建底栏实例的情况 (v1.0 用 thisObject === 固定实例, 重建后失效)。
             View::class.java.getDeclaredMethod("setVisibility", Int::class.javaPrimitiveType)
                 .hookBefore {
-                    if (useFloating && thisObject === bottomTabViewGroup) {
+                    if (useFloating && isBottomTabView(thisObject)) {
                         args[0] = View.GONE
+                    }
+                }
+
+            // 防线 2: LauncherUIBottomTabView 若重写了 setVisibility 且不调 super,
+            // 防线 1 拦不到, 这里直接 hook 子类方法兜底 (未重写则 getDeclaredMethod
+            // 抛 NoSuchMethodException, runCatching 静默跳过)。
+            runCatching {
+                "com.tencent.mm.ui.LauncherUIBottomTabView".toClass()
+                    .getDeclaredMethod("setVisibility", Int::class.javaPrimitiveType)
+            }.onSuccess { method ->
+                method.hookBefore {
+                    if (useFloating) args[0] = View.GONE
+                }
+            }
+
+            // 防线 3: 微信重建底栏时走 addView(新实例), 新实例默认 VISIBLE 且不触发
+            // setVisibility, 这里在 addView 后立即隐藏。
+            ViewGroup::class.java.getDeclaredMethod("addView", View::class.java, ViewGroup.LayoutParams::class.java)
+                .hookAfter {
+                    if (useFloating && isBottomTabView(args[0])) {
+                        (args[0] as? ViewGroup)?.let {
+                            it.removeAllViews()
+                            it.visibility = View.GONE
+                        }
                     }
                 }
 
@@ -168,9 +214,9 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
             // listener and replay two rapid clicks to reproduce that behaviour, so we don't
             // have to resolve the fully-obfuscated event class ourselves.
             val bottomTabClickListener = runCatching {
-                bottomTabViewGroup.reflekt()
-                    .firstField { type = View.OnClickListener::class }
-                    .get() as? View.OnClickListener
+                findBottomTabView()?.reflekt()
+                    ?.firstField { type = View.OnClickListener::class }
+                    ?.get() as? View.OnClickListener
             }.getOrNull()
             val doubleTapProbeView = View(activity).apply { tag = 0 }
 
@@ -192,7 +238,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
             }
 
             val lifecycleOwner = LifecycleOwnerProvider.lifecycleOwner
-            bottomTabViewGroup.setLifecycleOwner(lifecycleOwner)
+            findBottomTabView()?.setLifecycleOwner(lifecycleOwner)
 
             val selectedPageIndexState = mutableIntStateOf(0)
             val scrollOffsetState = mutableFloatStateOf(0f)
@@ -547,8 +593,20 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                     )
                 )
             } else {
-                bottomTabViewGroup.removeAllViews()
-                bottomTabViewGroup.addView(composeView)
+                val bottomTab = findBottomTabView()
+                if (bottomTab != null) {
+                    bottomTab.removeAllViews()
+                    bottomTab.addView(composeView)
+                } else {
+                    viewParent.addView(
+                        composeView,
+                        FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.MATCH_PARENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.BOTTOM
+                        )
+                    )
+                }
             }
         }
 
