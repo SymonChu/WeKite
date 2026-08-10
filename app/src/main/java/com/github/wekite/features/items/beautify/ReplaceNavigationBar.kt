@@ -2,6 +2,8 @@ package com.github.wekite.features.items.beautify
 
 import android.app.Activity
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -85,12 +87,15 @@ import com.github.wekite.ui.utils.setLifecycleOwner
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.ui.utils.theme.SeedResolver
 import com.github.wekite.ui.utils.theme.ThemeSettings
+import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.reflection.bool
 import com.github.wekite.utils.reflection.int
 import kotlin.math.roundToInt
 
 @Feature(name = "美化首页底部导航栏", categories = ["界面美化"], description = "将首页底部导航栏替换为 Material Design 或 Backdrop 风格")
 object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
+
+    private const val TAG = "ReplaceNavigationBar"
 
     private data class NavItem(
         val outlined: ImageVector,
@@ -195,16 +200,67 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
             }
 
             // 防线 3: 微信重建底栏时走 addView(新实例), 新实例默认 VISIBLE 且不触发
-            // setVisibility, 这里在 addView 后立即隐藏。
-            ViewGroup::class.java.getDeclaredMethod("addView", View::class.java, ViewGroup.LayoutParams::class.java)
-                .hookAfter {
-                    if (useFloating && isBottomTabView(args[0])) {
-                        (args[0] as? ViewGroup)?.let {
+            // setVisibility, 在 addView 后立即隐藏。
+            //
+            // v1.1 只 hook 了 addView(View, LayoutParams) 双参重载——这是致命的:
+            // Android 的公开重载中, 单参 addView(View) 转调 addView(View, int),
+            // 索引版 addView(View, int) 转调 addView(View, int, LayoutParams),
+            // 双参 addView(View, LayoutParams) 也转调三参版, 全部汇聚到
+            // addView(View, int, LayoutParams) 与私有的 addViewInner。微信切换主
+            // tab 重建底栏若走单参/索引版重载, 双参 hook 根本不会被触发。
+            // 因此改为 hook 三参汇聚点 + 更底层的 addViewInner, 双保险。
+            val hideRebuiltBottomTab = { view: Any? ->
+                if (useFloating && isBottomTabView(view)) {
+                    WeLogger.i(TAG, "bottom tab re-added (addView/addViewInner), hiding")
+                    (view as? ViewGroup)?.let {
+                        it.removeAllViews()
+                        it.visibility = View.GONE
+                    }
+                }
+            }
+            // 三参 addView — 单参/索引参/双参重载的公共汇聚点 (API 1+)
+            runCatching {
+                ViewGroup::class.java.getMethod(
+                    "addView", View::class.java, Int::class.javaPrimitiveType,
+                    ViewGroup.LayoutParams::class.java
+                )
+            }.onSuccess { method ->
+                method.hookAfter { hideRebuiltBottomTab(args[0]) }
+            }
+            // addViewInner — 所有 addView 的最终入口 (API 28+ 私有方法)
+            runCatching {
+                ViewGroup::class.java.getDeclaredMethod(
+                    "addViewInner", View::class.java, Int::class.javaPrimitiveType,
+                    ViewGroup.LayoutParams::class.java, Boolean::class.javaPrimitiveType
+                )
+            }.onSuccess { method ->
+                method.hookAfter { hideRebuiltBottomTab(args[0]) }
+            }
+            // 保留双参 hook: 极少数 ROM 重写双参版时单走它
+            runCatching {
+                ViewGroup::class.java.getMethod(
+                    "addView", View::class.java, ViewGroup.LayoutParams::class.java
+                )
+            }.onSuccess { method ->
+                method.hookAfter { hideRebuiltBottomTab(args[0]) }
+            }
+
+            // 防线 4: 微信若把底栏 bringToFront 到悬浮条上层 (z-order 恢复),
+            // 拦截并重新隐藏。底栏 GONE 后 bringToFront 不影响显示, 此处防御
+            // 微信「先恢复可见性再提层」的组合操作。
+            runCatching {
+                View::class.java.getMethod("bringToFront")
+            }.onSuccess { method ->
+                method.hookAfter {
+                    if (useFloating && isBottomTabView(thisObject)) {
+                        WeLogger.i(TAG, "bottom tab brought to front, hiding again")
+                        (thisObject as? ViewGroup)?.let {
                             it.removeAllViews()
                             it.visibility = View.GONE
                         }
                     }
                 }
+            }
 
             // WeChat's original bottom tab (LauncherUIBottomTabView) is kept alive — we only
             // clear its children below — so its own OnClickListener (an `f8`/`r8` instance)
@@ -592,6 +648,50 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         Gravity.BOTTOM
                     )
                 )
+
+                // 防线 5: 轮询兜底。以上防线都依赖「类名含 LauncherUIBottomTabView」,
+                // 若微信改版 / Play 版混淆导致类名变化, 防线 1/3/4 全部静默失效
+                // (防线 2 的 toClass 抛异常被 runCatching 吞掉)。这里每 200ms 扫描
+                // viewParent 的子视图, 用形态特征 (底部对齐 + 宽度接近父宽 + 高度在
+                // 微信底栏量级) 识别底栏, 不依赖任何类名, 持续强制隐藏。遍历对象只
+                // 有一个 FrameLayout 的 4~6 个子视图, 开销可忽略; activity 销毁后
+                // viewParent detached, 轮询自动停止。
+                val metrics = activity.resources.displayMetrics
+                val minBarHeightPx = (30f * metrics.density).toInt()
+                val maxBarHeightPx = (110f * metrics.density).toInt()
+                val isBottomBarLike: (View) -> Boolean = { v ->
+                    val name = v.javaClass.name
+                    if (name.contains("LauncherUIBottomTabView") || name.contains("BottomTab")) {
+                        true
+                    } else {
+                        val bottomAligned = (v.layoutParams as? FrameLayout.LayoutParams)
+                            ?.let { lp -> (lp.gravity and Gravity.BOTTOM) != 0 } ?: false
+                        // height 上限排除占满高度的 mViewPager, 宽度下限排除小挂件
+                        bottomAligned &&
+                            v.height in minBarHeightPx..maxBarHeightPx &&
+                            v.width >= viewParent.width / 2
+                    }
+                }
+                val handler = Handler(Looper.getMainLooper())
+                val hideRunnable = object : Runnable {
+                    override fun run() {
+                        if (!viewParent.isAttachedToWindow) return
+                        var hiddenAny = false
+                        for (i in 0 until viewParent.childCount) {
+                            val child = viewParent.getChildAt(i) ?: continue
+                            if (child === composeView) continue
+                            if (isBottomBarLike(child)) {
+                                hiddenAny = true
+                                if (child.visibility != View.GONE) child.visibility = View.GONE
+                                if (child is ViewGroup) child.removeAllViews()
+                            }
+                        }
+                        if (hiddenAny) WeLogger.v(TAG, "polling: kept bottom tab hidden")
+                        handler.postDelayed(this, 200L)
+                    }
+                }
+                handler.post(hideRunnable)
+                WeLogger.i(TAG, "floating bottom bar defenses armed (5 lines)")
             } else {
                 val bottomTab = findBottomTabView()
                 if (bottomTab != null) {
