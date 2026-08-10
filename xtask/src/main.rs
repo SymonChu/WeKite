@@ -702,8 +702,8 @@ impl ZygiskApkProfileArgs {
     }
 }
 
-fn zygisk_version_name(commit_hash: &str, profile: ZygiskBuildProfile) -> String {
-    format!("git+{commit_hash}-{}", profile.name())
+fn zygisk_version_name(version_name: &str, profile: ZygiskBuildProfile) -> String {
+    format!("{version_name}-{}", profile.name())
 }
 
 #[derive(Deserialize)]
@@ -714,6 +714,8 @@ struct GradleVersionCatalog {
 #[derive(Deserialize)]
 struct GradleVersions {
     ndk: String,
+    #[serde(rename = "versionName")]
+    version_name: String,
 }
 
 fn task_zygisk(args: ZygiskArgs) -> Result<()> {
@@ -743,6 +745,26 @@ fn pinned_ndk_version(root: &Path) -> Result<String> {
     let text =
         fs::read_to_string(&path).with_context(|| format!("could not read {}", path.display()))?;
     parse_pinned_ndk_version(&text, &path)
+}
+
+/// Semantic version (`[versions].versionName` in `gradle/libs.versions.toml`), the
+/// single source of truth shared with `app/build.gradle.kts` (`versionName`) and the
+/// ZIP filename / module.prop version.
+fn pinned_version_name_from_text(text: &str) -> Result<String> {
+    let catalog: GradleVersionCatalog =
+        toml::from_str(text).context("could not parse gradle/libs.versions.toml")?;
+    let version_name = catalog.versions.version_name.trim();
+    if version_name.is_empty() {
+        bail!("[versions].versionName in gradle/libs.versions.toml must not be empty");
+    }
+    Ok(version_name.to_owned())
+}
+
+fn pinned_version_name(root: &Path) -> Result<String> {
+    let path = root.join("gradle/libs.versions.toml");
+    let text =
+        fs::read_to_string(&path).with_context(|| format!("could not read {}", path.display()))?;
+    pinned_version_name_from_text(&text)
 }
 
 /// Resolve an NDK install dir, defaulting to the version pinned in `gradle/libs.versions.toml`.
@@ -1286,16 +1308,16 @@ fn package_zygisk_module(
     normalize_crlf(&module_dir)?;
 
     let version_code = git_output(root, &["rev-list", "--count", "HEAD"])?;
-    // Fixed width: bare `--short` widens as history grows and varies across git versions, and the
-    // hash ends up in versionName, module.prop and the ZIP filename.
-    let commit_hash = git_output(root, &["rev-parse", "--short=8", "HEAD"])?;
-    let version_name = zygisk_version_name(&commit_hash, profile);
+    // Semantic version from libs.versions.toml (single source of truth with app/build.gradle.kts),
+    // ends up in versionName, module.prop and the ZIP filename.
+    let version_name = pinned_version_name(root)?;
+    let zygisk_version = zygisk_version_name(&version_name, profile);
     expand_template(
         &module_dir.join("module.prop"),
         &[
             ("moduleId", ZYGISK_MODULE_ID.to_owned()),
             ("moduleName", ZYGISK_MODULE_NAME.to_owned()),
-            ("versionName", version_name.clone()),
+            ("versionName", zygisk_version.clone()),
             ("versionCode", version_code.clone()),
         ],
     )?;
@@ -1334,7 +1356,7 @@ fn package_zygisk_module(
         source.display()
     );
 
-    let build_name = format!("{ZYGISK_MODULE_NAME}-{version_code}-{version_name}");
+    let build_name = format!("{ZYGISK_MODULE_NAME}-{version_code}-{zygisk_version}");
     let release_dir = module_root.join("release");
     fs::create_dir_all(&release_dir)?;
     let zip_path = release_dir.join(format!("{build_name}.zip"));
@@ -1714,19 +1736,19 @@ mod tests {
     #[test]
     fn formats_zygisk_version_names_like_gradle_with_profile_suffix() {
         assert_eq!(
-            zygisk_version_name("8920253", ZygiskBuildProfile::Debug),
-            "git+8920253-debug"
+            zygisk_version_name("1.1", ZygiskBuildProfile::Debug),
+            "1.1-debug"
         );
         assert_eq!(
-            zygisk_version_name("8920253", ZygiskBuildProfile::Release),
-            "git+8920253-release"
+            zygisk_version_name("1.1", ZygiskBuildProfile::Release),
+            "1.1-release"
         );
     }
 
     #[test]
     fn parses_zygisk_ndk_from_gradle_version_catalog() {
         let ndk_version = parse_pinned_ndk_version(
-            "[versions]\nndk = \"30.0.14904198\"\nminSdk = \"28\"\n",
+            "[versions]\nndk = \"30.0.14904198\"\nversionName = \"1.1\"\nminSdk = \"28\"\n",
             Path::new(VERSION_CATALOG_PATH),
         )
         .unwrap();
@@ -1735,15 +1757,25 @@ mod tests {
     }
 
     #[test]
+    fn parses_semantic_version_name_from_gradle_catalog() {
+        let version_name = pinned_version_name_from_text(
+            "[versions]\nndk = \"30.0.14904198\"\nversionName = \"1.1\"\nminSdk = \"28\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(version_name, "1.1");
+    }
+
+    #[test]
     fn rejects_missing_pinned_ndk_version() {
-        let catalog = "[versions]\nminSdk = \"28\"\n";
+        let catalog = "[versions]\nminSdk = \"28\"\nversionName = \"1.1\"\n";
         assert!(parse_pinned_ndk_version(catalog, Path::new(VERSION_CATALOG_PATH)).is_err());
     }
 
     #[test]
     fn rejects_empty_ndk_version() {
         let error = parse_pinned_ndk_version(
-            "[versions]\nndk = \"  \"\nminSdk = \"28\"\n",
+            "[versions]\nndk = \"  \"\nminSdk = \"28\"\nversionName = \"1.1\"\n",
             Path::new(VERSION_CATALOG_PATH),
         )
         .err()

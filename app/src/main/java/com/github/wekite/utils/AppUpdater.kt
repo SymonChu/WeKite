@@ -55,6 +55,8 @@ private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
 private const val ZIP_MIME_TYPE = "application/zip"
 
 // 发布到 GitHub Release 的 APK 资产名 (universal, 含双 ABI)。
+// v1.1+ 输出名带语义化版本: WeKite-1.1-standard-release.apk (见 app/build.gradle.kts onVariants)。
+// 旧名 app-standard-release.apk 仍保留兼容 (v1.0 及更早的 Release 资产)。
 private const val RELEASE_APK_NAME = "app-standard-release.apk"
 
 // 发布时附带的版本元数据资产 (手动发布流程会随 Release 一起上传)。
@@ -143,7 +145,7 @@ object AppUpdater {
         val downloadUrl: String
         val mimeType: String
         if (isZygisk) {
-            // 直接用 GitHub Release 上的实际资产名 (WeKite-<N>-git+<hash>-release.zip),
+            // 直接用 GitHub Release 上的实际资产名 (WeKite-<N>-<version>-release.zip),
             // 避免本地拼接与打包器命名规则不一致。
             val zygiskName = release.zygiskZipName
                 ?: error("最新发行版缺少 Zygisk 模块包")
@@ -183,7 +185,7 @@ object AppUpdater {
      *
      * versionCode/versionName 解析优先级:
      * 1. Release 的 `update.json` 资产 (发布流程附带, 内容最精确);
-     * 2. Zygisk ZIP 资产名 `WeKite-<N>-git+<hash>-release.zip` 里的 N;
+     * 2. Zygisk ZIP 资产名 `WeKite-<N>-<version>-release.zip` 里的 N;
      * 3. Release tag `v<N>` (仅当 tag 是纯数字前缀时可用)。
      */
     private fun fetchLatestRelease(): LatestRelease {
@@ -204,7 +206,8 @@ object AppUpdater {
                 val name = asset["name"]?.jsonPrimitive?.content ?: return@forEach
                 val url = asset["browser_download_url"]?.jsonPrimitive?.content ?: return@forEach
                 when {
-                    name == RELEASE_APK_NAME -> apkUrl = url
+                    name == RELEASE_APK_NAME || (name.startsWith("WeKite-") && name.endsWith("-standard-release.apk")) ->
+                        apkUrl = url
                     name == UPDATE_JSON_NAME -> updateJsonUrl = url
                     name.startsWith("WeKite-") && name.endsWith("-release.zip") -> {
                         zygiskZipName = name

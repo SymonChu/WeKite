@@ -42,7 +42,7 @@ android {
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = commitCount
-        versionName = "1.1"
+        versionName = libs.versions.versionName.get()
 
         ndk {
             // noinspection ChromeOsAbiSupport
@@ -173,6 +173,13 @@ tasks.withType<KotlinCompile> {
 val adbProvider = androidComponents.sdkComponents.adb
 androidComponents {
     onVariants { variant ->
+        // 输出 APK 名带语义化版本号: WeKite-1.1-standard-release.apk
+        variant.outputs.forEach { output ->
+            output.outputFileName.set(
+                "WeKite-${libs.versions.versionName.get()}-${variant.flavorName}-${variant.buildType}.apk"
+            )
+        }
+
         val kotlinSources = variant.sources.kotlin ?: return@onVariants
 
         kotlinSources.addGeneratedSourceDirectory(

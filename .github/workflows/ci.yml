@@ -136,7 +136,7 @@ jobs:
 
       - name: Build Zygisk module
         run: |
-          APK_PATH=$(find artifacts -name "app-standard-release.apk" | head -1)
+          APK_PATH=$(find artifacts -name "WeKite-*standard-release.apk" | head -1)
           echo "APK: $APK_PATH"
           test -n "$APK_PATH"
           ./x zygisk build --apk-release --release --skip-apk-build \

@@ -9,7 +9,7 @@ WeKite 使用语义化版本号 (`major.minor`) 作为对外版本标识, 配合
 | Field         | Source                                                                      | Example |
 |---------------|-----------------------------------------------------------------------------|---------|
 | `versionCode` | `git rev-list --count HEAD` — total number of commits in the current branch | `925`   |
-| `versionName` | 语义化版本号, 手动维护                                                       | `1.0`   |
+| `versionName` | 语义化版本号, 手动维护 (`gradle/libs.versions.toml` 的 `[versions].versionName`) | `1.1`   |
 
 - `versionCode` 随每次 commit 单调递增, 是更新检查 (AppUpdater) 的比较依据。
 - `versionName` 是面向用户的语义化版本 (`1.0`, `1.1`, ...), 手工 bump。
@@ -25,7 +25,7 @@ The APK also embeds these in `BuildConfig`:
 
 - 每次 push 到 `master` 触发 CI, 构建并签名 APK + Zygisk 模块 ZIP。
 - GitHub Release 由人工 (或脚本) 发布: tag `v<versionName>`, 附 3 个资产:
-  - `app-standard-release.apk` — universal APK (含双 ABI native 库)
+  - `WeKite-<versionName>-standard-release.apk` — universal APK (含双 ABI native 库)
   - `WeKite-<versionCode>-<versionName>-release.zip` — Zygisk 模块包
   - `update.json` — `{"versionCode": <N>, "versionName": "<x.y>"}`, 供 AppUpdater 精确比较版本
 

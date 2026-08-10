@@ -2,7 +2,7 @@
 
 ## 下载
 
-从 [GitHub Releases](https://github.com/SymonChu/WeKite/releases) 下载最新发行版。Xposed (LSPosed) 模式请下载 `app-standard-release.apk`, Zygisk 模式请下载 `WeKite-*-release.zip` 模块包。
+从 [GitHub Releases](https://github.com/SymonChu/WeKite/releases) 下载最新发行版。Xposed (LSPosed) 模式请下载 `WeKite-<版本号>-standard-release.apk`, Zygisk 模式请下载 `WeKite-<版本号>-release.zip` 模块包。
 
 - [GitHub Releases](https://github.com/SymonChu/WeKite/releases)
 - [GitHub Actions](https://github.com/SymonChu/WeKite/actions/workflows/ci.yml) — 每夜构建产物, 不保证稳定
