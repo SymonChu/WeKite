@@ -263,35 +263,16 @@ dependencies {
     ksp(project(":libs:common:annotation-scanner"))
 
     implementation(libs.okhttp3.okhttp)
-    implementation(libs.jsoup)
-
-    implementation(libs.rhino)
 
     implementation(libs.fastjson2)
 
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)
 
-    implementation(libs.markwon.core)
-    implementation(libs.markwon.ext.strikethrough)
-    implementation(libs.markwon.ext.tables)
-    implementation(libs.markwon.ext.tasklist)
-    implementation(libs.markwon.html)
-
-    implementation(libs.mcp.server)
-    implementation(libs.mcp.client)
-    implementation(libs.androidx.room.runtime)
-    ksp(libs.androidx.room.compiler)
     implementation(platform(libs.ktor.bom))
-    implementation(libs.ktor.server.cio)
-    implementation(libs.ktor.server.cors)
-    implementation(libs.ktor.server.auth)
-    implementation(libs.ktor.server.sse)
-    implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.cio)
     implementation(libs.ktor.client.websockets)
-    implementation(libs.ktor.serialization.kotlinx.json)
 
     implementation(libs.osmdroid.android)
 

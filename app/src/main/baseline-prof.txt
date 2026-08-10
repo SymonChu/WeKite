@@ -1,23 +1,22 @@
 # ====================================================================
 # XPOSED ENTRY POINTS (Critical Startup)
 # ====================================================================
-Lcom/github/wekite/loader/entry/lsp10x/Lsp10xUnifiedHookEntry;
 Lcom/github/wekite/loader/entry/xp51/Xp51HookEntry;
 
 # ====================================================================
 # CORE APIs & INTERNAL HOOKING INTERFACES
 # ====================================================================
-Lcom/github/wekite/hooks/api/core/WeAppMsgApi;
-Lcom/github/wekite/hooks/api/core/WeConversationApi;
-Lcom/github/wekite/hooks/api/core/WeDatabaseApi;
-Lcom/github/wekite/hooks/api/core/WeDatabaseListenerApi;
-Lcom/github/wekite/hooks/api/core/WeMessageApi;
-Lcom/github/wekite/hooks/api/core/WeServiceApi;
-Lcom/github/wekite/hooks/api/core/WeUnsafeApi;
+Lcom/github/wekite/features/api/core/WeAppMsgApi;
+Lcom/github/wekite/features/api/core/WeConversationApi;
+Lcom/github/wekite/features/api/core/WeDatabaseApi;
+Lcom/github/wekite/features/api/core/WeDatabaseListenerApi;
+Lcom/github/wekite/features/api/core/WeMessageApi;
+Lcom/github/wekite/features/api/core/WeServiceApi;
+Lcom/github/wekite/features/api/core/WeUnsafeApi;
 
 # ====================================================================
 # NETWORK APIs & LISTENERS
 # ====================================================================
-Lcom/github/wekite/hooks/api/net/WeNetSceneApi;
-Lcom/github/wekite/hooks/api/net/WePacketHelper;
-Lcom/github/wekite/hooks/api/net/listener/WePacketDispatcher;
+Lcom/github/wekite/features/api/net/WeNetSceneApi;
+Lcom/github/wekite/features/api/net/WePacketHelper;
+Lcom/github/wekite/features/api/net/listener/WePacketDispatcher;

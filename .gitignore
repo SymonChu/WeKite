@@ -2,12 +2,8 @@
 .gradle
 .gradle-home
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
+/.idea/
+.idea/
 .DS_Store
 /build
 /captures
@@ -18,19 +14,13 @@ local.properties
 /target
 
 # Project exclude paths
-/.spec-workflow/
 /app/release/
-/.idea/inspectionProfiles/Project_Default.xml
 /app/.cxx/
 /app/debug/
 /.kotlin
 /nul
 /app/nul
-/.idea/deploymentTargetSelector.xml
 /app/src/main/jniLibs/*/libwekit_native.so
 /build-logic/convention/build/
 
 /decrypted_wechat.db
-/app/src/main/java/nuke/data/cipher/NativeCrypto.kt
-/app/src/main/java/com/github/wekite/features/items/debug/LoadWeChatXDex.kt
-/app/src/main/java/com/github/wekite/features/items/debug/MTH7851.kt

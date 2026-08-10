@@ -15,7 +15,6 @@ androidx-core-ktx = "1.19.0"
 mmkv = "2.4.0"
 osmdroid = "6.1.20"
 profileinstaller = "1.4.1"
-rhino = "45f29f6"
 serialization = "1.11.0"
 lombok = "1.18.46"
 google-protobuf = "4.35.1"
@@ -33,12 +32,6 @@ biometric = "1.2.0-alpha05"
 browser = "1.10.0"
 miuix = "0.9.3"
 materialkolor = "5.0.0"
-markwon = "4.6.2"
-annotation = "1.10.0"
-mcp-server = "0.14.0"
-mcp-client = "0.14.0"
-jsoup = "1.22.2"
-room = "2.8.4"
 ktor = "3.5.1"
 dexmaker = "2.28.6"
 
@@ -56,6 +49,8 @@ compileSdk = "37"
 compileSdkMinor = "0"
 # noinspection UnusedVersionCatalogEntry
 jdk = "21"
+# noinspection UnusedVersionCatalogEntry
+annotation = "1.10.0"
 # noinspection UnusedVersionCatalogEntry
 ndk = "30.0.14904198"
 
@@ -92,11 +87,6 @@ coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junitJupiter" }
 junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
 
-markwon-core = { module = "io.noties.markwon:core", version.ref = "markwon" }
-markwon-ext-strikethrough = { module = "io.noties.markwon:ext-strikethrough", version.ref = "markwon" }
-markwon-ext-tables = { module = "io.noties.markwon:ext-tables", version.ref = "markwon" }
-markwon-ext-tasklist = { module = "io.noties.markwon:ext-tasklist", version.ref = "markwon" }
-markwon-html = { module = "io.noties.markwon:html", version.ref = "markwon" }
 osmdroid-android = { module = "org.osmdroid:osmdroid-android", version.ref = "osmdroid" }
 
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
@@ -104,7 +94,6 @@ kotlinx-serialization-protobuf = { module = "org.jetbrains.kotlinx:kotlinx-seria
 mmkv = { module = "com.tencent:mmkv", version.ref = "mmkv" }
 lombok = { module = "org.projectlombok:lombok", version.ref = "lombok" }
 google-protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.ref = "google-protobuf" }
-jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 okhttp3-okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 
 legacyxposed-api = { module = "de.robv.android.xposed:api", version = "82" }
@@ -119,27 +108,16 @@ libsu-core = { module = "com.github.topjohnwu.libsu:core", version.ref = "libsu"
 libxposed-api = { module = "io.github.libxposed:api", version.ref = "libxposed" }
 libxposed-service = { module = "io.github.libxposed:service", version.ref = "libxposed" }
 
-rhino = { module = "com.github.Ujhhgtg.rhino:rhino", version.ref = "rhino" }
 ksp = { module = "com.google.devtools.ksp:symbol-processing-api", version.ref = "ksp" }
 kotlinpoet-ksp = { module = "com.squareup:kotlinpoet-ksp", version.ref = "kotlinpoet" }
 
 aboutlibraries-core = { module = "com.mikepenz:aboutlibraries-core", version.ref = "aboutlibraries" }
 aboutlibraries-compose-m3 = { module = "com.mikepenz:aboutlibraries-compose-m3", version.ref = "aboutlibraries" }
 
-mcp-server = { module = "io.modelcontextprotocol:kotlin-sdk-server", version.ref = "mcp-server" }
-mcp-client = { module = "io.modelcontextprotocol:kotlin-sdk-client", version.ref = "mcp-client" }
-androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
-androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 ktor-bom = { module = "io.ktor:ktor-bom", version.ref = "ktor" }
-ktor-server-cio = { module = "io.ktor:ktor-server-cio" }
-ktor-server-cors = { module = "io.ktor:ktor-server-cors" }
-ktor-server-auth = { module = "io.ktor:ktor-server-auth" }
-ktor-server-sse = { module = "io.ktor:ktor-server-sse" }
-ktor-server-content-negotiation = { module = "io.ktor:ktor-server-content-negotiation" }
 ktor-client-core = { module = "io.ktor:ktor-client-core" }
 ktor-client-cio = { module = "io.ktor:ktor-client-cio" }
 ktor-client-websockets = { module = "io.ktor:ktor-client-websockets" }
-ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json" }
 
 androidx-profileinstaller = { module = "androidx.profileinstaller:profileinstaller", version.ref = "profileinstaller" }
 

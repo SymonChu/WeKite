@@ -34,7 +34,7 @@
 
 ## Entry Points & Architecture
 
-- Xposed entry: `com.github.wekite.loader.entry.lsp10x.Lsp10xUnifiedHookEntry` (libxposed 101 & 100) and legacy Xposed API (51+) entry: `com.github.wekite.loader.entry.xp51.Xp51HookEntry`
+- Xposed entry: `com.github.wekite.loader.entry.xp51.Xp51HookEntry` (legacy Xposed API 51+) and Zygisk native entry via `ZygiskEntry` / `LxpHookEntry` (standard build)
 - Unified flow: `UnifiedEntryPoint.entry()` → `StartupAgent.startup()` → `WeLauncher.init()`
 - Hook items annotated with `@Feature(path, description)`, auto-discovered by KSP annotation scanner at compile time
 - Base classes: `SwitchFeature` (toggle on/off), `ClickableFeature` (toggle on/off with onClick event), `ApiFeature` (always-on), `BaseFeature` (abstract base, do not use directly)
@@ -74,5 +74,5 @@
 
 ## CI
 
-- GitHub Actions: builds on push/PR to `master`/`dev` (skips non-code changes)
-- Artifacts automatically published to a release named "CI" + Telegram channel
+- GitHub Actions: builds on push to `master`
+- Artifacts published as GitHub Release (APK + Zygisk ZIP + update.json), see `VERSIONING.md`
