@@ -35,6 +35,8 @@ WeKite 是一个微信增强模块, 支持通过 Xposed 框架或 Zygisk 模块�
 
 [上游项目](https://github.com/Ujhhgtg/WeKit)
 
+[WeKit 原始上游](https://github.com/cwuom/WeKit)
+
 [WAuxiliary](https://github.com/HdShare/WAuxiliary_Public)
 
 [NewMiko](https://github.com/Ujhhgtg/NewMiko/)

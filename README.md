@@ -2,7 +2,7 @@
 
 让微✉️更好用的轻量级增强模块 — 支持 LSPosed 与 Zygisk 双模式
 
-> 🙏 **致谢 [WeKit](https://github.com/Ujhhgtg/WeKit)**：本项目基于上游 WeKit 二次开发，感谢原作者的开源贡献。
+> 🙏 **致谢 [WeKit](https://github.com/Ujhhgtg/WeKit)（原始上游 [WeKit](https://github.com/cwuom/WeKit)）**：本项目基于上游 WeKit 二次开发，感谢原作者的开源贡献。
 >
 > 🤖 **本项目由 AI 编写**。
 >
@@ -183,5 +183,6 @@ A: 核心功能（Xposed 模式）支持 8.0.65~8.0.76 全部版本。
 ## 🙏 致谢
 
 - [WeKit](https://github.com/Ujhhgtg/WeKit) — 上游项目
+- [WeKit](https://github.com/cwuom/WeKit) — WeKit 原始上游
 - [WechatMonet](https://github.com/SaiOogcn/WechatMonet) — Overlay 主题参考
 - [WAuxiliary](https://github.com/HdShare/WAuxiliary_Public) · [QAuxiliary](https://github.com/cinit/QAuxiliary) · [FingerprintPay](https://github.com/eritpchy/FingerprintPay)
