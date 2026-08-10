@@ -2,8 +2,6 @@ package com.github.wekite.features.items.beautify
 
 import android.app.Activity
 import android.content.Intent
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -87,15 +85,12 @@ import com.github.wekite.ui.utils.setLifecycleOwner
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.ui.utils.theme.SeedResolver
 import com.github.wekite.ui.utils.theme.ThemeSettings
-import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.reflection.bool
 import com.github.wekite.utils.reflection.int
 import kotlin.math.roundToInt
 
 @Feature(name = "美化首页底部导航栏", categories = ["界面美化"], description = "将首页底部导航栏替换为 Material Design 或 Backdrop 风格")
 object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
-
-    private const val TAG = "ReplaceNavigationBar"
 
     private data class NavItem(
         val outlined: ImageVector,
@@ -149,11 +144,12 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
 
             val viewParent = viewPager.parent as ViewGroup
 
-            // 查找微信原底栏 (LauncherUIBottomTabView)。不用 getChildAt(1) 硬编码:
-            // 微信在切换主 tab 时会重建底栏实例 (removeView 旧实例 + addView 新实例),
-            // 固定引用会失效, 导致 removeAllViews/GONE 操作的是已脱离视图树的旧实例,
-            // 新实例依旧显示 → 通讯录/发现/我页面残留原底栏。
+            // 查找微信原底栏: 与上游 wekit 一致, 底栏是 viewParent 的第 1 个子视图
+            // (LauncherUIBottomTabView), 直接取该索引; 若布局改版导致索引取错
+            // (非 ViewGroup / 越界), 回退按类名遍历查找。
             fun findBottomTabView(): ViewGroup? {
+                val first = viewParent.getChildAt(1)
+                if (first is ViewGroup) return first
                 for (i in 0 until viewParent.childCount) {
                     val child = viewParent.getChildAt(i)
                     if (child != null && child.javaClass.name.contains("LauncherUIBottomTabView")) {
@@ -163,102 +159,12 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                 return null
             }
 
-            val isBottomTabView: (Any?) -> Boolean = { obj ->
-                obj != null && obj.javaClass.name.contains("LauncherUIBottomTabView")
-            }
-
-            // 强制隐藏微信原底栏。微信在切换主 tab 时会重新 setVisibility(VISIBLE)
-            // 并重绘自绘内容, 导致通讯录/发现/我页面残留原底栏; 这里在每次 tab
-            // 切换时再清一次 (类名查找, 覆盖重建实例), 并多层 hook 防止微信恢复显示。
+            // 强制隐藏微信原底栏 (上游 wekit 实现): removeAllViews + GONE。
             val forceHideBottomTab = {
                 val bottomTab = findBottomTabView()
                 if (bottomTab != null) {
                     bottomTab.removeAllViews()
                     bottomTab.visibility = View.GONE
-                }
-            }
-
-            // 防线 1: hook View.setVisibility, 用类名而非实例引用匹配, 覆盖微信
-            // 重建底栏实例的情况 (v1.0 用 thisObject === 固定实例, 重建后失效)。
-            View::class.java.getDeclaredMethod("setVisibility", Int::class.javaPrimitiveType)
-                .hookBefore {
-                    if (useFloating && isBottomTabView(thisObject)) {
-                        args[0] = View.GONE
-                    }
-                }
-
-            // 防线 2: LauncherUIBottomTabView 若重写了 setVisibility 且不调 super,
-            // 防线 1 拦不到, 这里直接 hook 子类方法兜底 (未重写则 getDeclaredMethod
-            // 抛 NoSuchMethodException, runCatching 静默跳过)。
-            runCatching {
-                "com.tencent.mm.ui.LauncherUIBottomTabView".toClass()
-                    .getDeclaredMethod("setVisibility", Int::class.javaPrimitiveType)
-            }.onSuccess { method ->
-                method.hookBefore {
-                    if (useFloating) args[0] = View.GONE
-                }
-            }
-
-            // 防线 3: 微信重建底栏时走 addView(新实例), 新实例默认 VISIBLE 且不触发
-            // setVisibility, 在 addView 后立即隐藏。
-            //
-            // v1.1 只 hook 了 addView(View, LayoutParams) 双参重载——这是致命的:
-            // Android 的公开重载中, 单参 addView(View) 转调 addView(View, int),
-            // 索引版 addView(View, int) 转调 addView(View, int, LayoutParams),
-            // 双参 addView(View, LayoutParams) 也转调三参版, 全部汇聚到
-            // addView(View, int, LayoutParams) 与私有的 addViewInner。微信切换主
-            // tab 重建底栏若走单参/索引版重载, 双参 hook 根本不会被触发。
-            // 因此改为 hook 三参汇聚点 + 更底层的 addViewInner, 双保险。
-            val hideRebuiltBottomTab = { view: Any? ->
-                if (useFloating && isBottomTabView(view)) {
-                    WeLogger.i(TAG, "bottom tab re-added (addView/addViewInner), hiding")
-                    (view as? ViewGroup)?.let {
-                        it.removeAllViews()
-                        it.visibility = View.GONE
-                    }
-                }
-            }
-            // 三参 addView — 单参/索引参/双参重载的公共汇聚点 (API 1+)
-            runCatching {
-                ViewGroup::class.java.getMethod(
-                    "addView", View::class.java, Int::class.javaPrimitiveType,
-                    ViewGroup.LayoutParams::class.java
-                )
-            }.onSuccess { method ->
-                method.hookAfter { hideRebuiltBottomTab(args[0]) }
-            }
-            // addViewInner — 所有 addView 的最终入口 (API 28+ 私有方法)
-            runCatching {
-                ViewGroup::class.java.getDeclaredMethod(
-                    "addViewInner", View::class.java, Int::class.javaPrimitiveType,
-                    ViewGroup.LayoutParams::class.java, Boolean::class.javaPrimitiveType
-                )
-            }.onSuccess { method ->
-                method.hookAfter { hideRebuiltBottomTab(args[0]) }
-            }
-            // 保留双参 hook: 极少数 ROM 重写双参版时单走它
-            runCatching {
-                ViewGroup::class.java.getMethod(
-                    "addView", View::class.java, ViewGroup.LayoutParams::class.java
-                )
-            }.onSuccess { method ->
-                method.hookAfter { hideRebuiltBottomTab(args[0]) }
-            }
-
-            // 防线 4: 微信若把底栏 bringToFront 到悬浮条上层 (z-order 恢复),
-            // 拦截并重新隐藏。底栏 GONE 后 bringToFront 不影响显示, 此处防御
-            // 微信「先恢复可见性再提层」的组合操作。
-            runCatching {
-                View::class.java.getMethod("bringToFront")
-            }.onSuccess { method ->
-                method.hookAfter {
-                    if (useFloating && isBottomTabView(thisObject)) {
-                        WeLogger.i(TAG, "bottom tab brought to front, hiding again")
-                        (thisObject as? ViewGroup)?.let {
-                            it.removeAllViews()
-                            it.visibility = View.GONE
-                        }
-                    }
                 }
             }
 
@@ -332,8 +238,6 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                 .firstMethod { name = "onPageSelected" }
                 .hookBefore {
                     targetPageIndexState.intValue = args[0] as Int
-                    // 微信切换主 tab 时会恢复原底栏显示, 这里再次强制隐藏
-                    if (useFloating) forceHideBottomTab()
                 }
 
             tabsAdapter.reflekt()
@@ -648,50 +552,6 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         Gravity.BOTTOM
                     )
                 )
-
-                // 防线 5: 轮询兜底。以上防线都依赖「类名含 LauncherUIBottomTabView」,
-                // 若微信改版 / Play 版混淆导致类名变化, 防线 1/3/4 全部静默失效
-                // (防线 2 的 toClass 抛异常被 runCatching 吞掉)。这里每 200ms 扫描
-                // viewParent 的子视图, 用形态特征 (底部对齐 + 宽度接近父宽 + 高度在
-                // 微信底栏量级) 识别底栏, 不依赖任何类名, 持续强制隐藏。遍历对象只
-                // 有一个 FrameLayout 的 4~6 个子视图, 开销可忽略; activity 销毁后
-                // viewParent detached, 轮询自动停止。
-                val metrics = activity.resources.displayMetrics
-                val minBarHeightPx = (30f * metrics.density).toInt()
-                val maxBarHeightPx = (110f * metrics.density).toInt()
-                val isBottomBarLike: (View) -> Boolean = { v ->
-                    val name = v.javaClass.name
-                    if (name.contains("LauncherUIBottomTabView") || name.contains("BottomTab")) {
-                        true
-                    } else {
-                        val bottomAligned = (v.layoutParams as? FrameLayout.LayoutParams)
-                            ?.let { lp -> (lp.gravity and Gravity.BOTTOM) != 0 } ?: false
-                        // height 上限排除占满高度的 mViewPager, 宽度下限排除小挂件
-                        bottomAligned &&
-                            v.height in minBarHeightPx..maxBarHeightPx &&
-                            v.width >= viewParent.width / 2
-                    }
-                }
-                val handler = Handler(Looper.getMainLooper())
-                val hideRunnable = object : Runnable {
-                    override fun run() {
-                        if (!viewParent.isAttachedToWindow) return
-                        var hiddenAny = false
-                        for (i in 0 until viewParent.childCount) {
-                            val child = viewParent.getChildAt(i) ?: continue
-                            if (child === composeView) continue
-                            if (isBottomBarLike(child)) {
-                                hiddenAny = true
-                                if (child.visibility != View.GONE) child.visibility = View.GONE
-                                if (child is ViewGroup) child.removeAllViews()
-                            }
-                        }
-                        if (hiddenAny) WeLogger.v(TAG, "polling: kept bottom tab hidden")
-                        handler.postDelayed(this, 200L)
-                    }
-                }
-                handler.post(hideRunnable)
-                WeLogger.i(TAG, "floating bottom bar defenses armed (5 lines)")
             } else {
                 val bottomTab = findBottomTabView()
                 if (bottomTab != null) {
@@ -708,6 +568,47 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                     )
                 }
             }
+
+          // Suppress FrostedContentView's bottom blur overlay in floating mode.
+          //
+          // In WeChat 8.0.69, MainUI.q0() (onResume) calls:
+          //   frostedContentView.a(true, tabBar.getHeight())
+          // synchronously during doOnCreate — before our hookAfter fires and
+          // sets the tab bar to GONE. By that point bottomBlurAreaHeight is
+          // already set to the real measured height. Worse, a() has a <= 0
+          // fallback: if height is 0 it computes dimen.b2*density + nav_bar_height,
+          // producing the short frosted-glass strip you see below our bar.
+          // Hooking a() and forcing its first arg (frostedEnabled) to false is the
+          // only reliable fix regardless of call timing.
+          //
+          // Scope guard: FrostedContentView is also used by other pages (e.g. the
+          // frosted card backgrounds on the "我" page). Disabling the frost on
+          // every instance made those card backgrounds render broken/misaligned,
+          // so only suppress the instance owned by the home tab activity. We match
+          // by Activity instance (and by membership in the home container's view
+          // tree), NOT by class name — Play 版类名可能不含 LauncherUI/MainUI,
+          // 类名判断失败会让首页毛玻璃条残留, 看起来就像"有两个底栏"。
+          "com.tencent.mm.ui.FrostedContentView".toClass().firstMethod {
+              parameters { it[0] == bool && it[1] == int }
+          }.hookBefore {
+              if (useFloating) {
+                  val view = thisObject as? View
+                  if (view != null) {
+                      var ctx = view.context
+                      while (ctx is android.content.ContextWrapper) {
+                          ctx = ctx.baseContext
+                      }
+                      var parent: android.view.ViewParent? = view.parent
+                      while (parent is View) {
+                          if (parent === viewParent) break
+                          parent = parent.parent
+                      }
+                      if (ctx === activity || parent === viewParent) {
+                          args[0] = false
+                      }
+                  }
+              }
+          }
         }
 
         methodUpdateTabUnread.hookBefore {
@@ -734,41 +635,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
             result = null
         }
 
-        // Suppress FrostedContentView's bottom blur overlay in floating mode.
-        //
-        // In WeChat 8.0.69, MainUI.q0() (onResume) calls:
-        //   frostedContentView.a(true, tabBar.getHeight())
-        // synchronously during doOnCreate — before our hookAfter fires and
-        // sets the tab bar to GONE. By that point bottomBlurAreaHeight is
-        // already set to the real measured height. Worse, a() has a <= 0
-        // fallback: if height is 0 it computes dimen.b2*density + nav_bar_height,
-        // producing the short frosted-glass strip you see below our bar.
-        // Hooking a() and forcing its first arg (frostedEnabled) to false is the
-        // only reliable fix regardless of call timing.
-        //
-        // Scope guard: FrostedContentView is also used by other pages (e.g. the
-        // frosted card backgrounds on the "我" page). Disabling the frost on
-        // every instance made those card backgrounds render broken/misaligned,
-        // so only suppress the instance owned by the home tab activity.
-        "com.tencent.mm.ui.FrostedContentView".toClass().firstMethod {
-            parameters { it[0] == bool && it[1] == int }
-        }.hookBefore {
-            if (useFloating) {
-                val view = thisObject as? View
-                if (view != null) {
-                    var ctx = view.context
-                    while (ctx is android.content.ContextWrapper) {
-                        ctx = ctx.baseContext
-                    }
-                    val className = ctx.javaClass.name
-                    if (className.contains("LauncherUI") || className.contains("MainUI")) {
-                        args[0] = false
-                    }
-                }
-            }
-        }
     }
-
     private val unreadCountState = mutableIntStateOf(0)
     private val finderUnreadCountState = mutableIntStateOf(0)
     private val showFinderDotState = mutableStateOf(false)
