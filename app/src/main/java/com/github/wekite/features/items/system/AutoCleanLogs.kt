@@ -37,44 +37,32 @@ import kotlin.io.path.div
 import kotlin.io.path.exists
 import kotlin.time.Duration.Companion.milliseconds
 
-@Feature(name = "清理缓存垃圾", categories = ["系统与隐私"], description = "自动或手动清理微信的缓存, 清理间隔可调节")
-object AutoCleanCache : ClickableFeature() {
+@Feature(name = "自动清理日志", categories = ["系统与隐私"], description = "定期自动清理微信日志文件 (xlog/onelog/tbslog), 清理周期可调节")
+object AutoCleanLogs : ClickableFeature() {
 
-    private const val TAG = "AutoCleanCache"
+    private const val TAG = "AutoCleanLogs"
 
-    /** 清理间隔选项: 30分钟 / 1小时 / 2小时 / 4小时 / 8小时 / 12小时 / 1天 */
+    /** 日志清理周期选项: 1天 / 2天 / 3天 / 7天 */
     private val INTERVAL_OPTIONS = listOf(
-        30 * 60 * 1000L to "30 分钟",
-        60 * 60 * 1000L to "1 小时",
-        2 * 60 * 60 * 1000L to "2 小时",
-        4 * 60 * 60 * 1000L to "4 小时",
-        8 * 60 * 60 * 1000L to "8 小时",
-        12 * 60 * 60 * 1000L to "12 小时",
-        24 * 60 * 60 * 1000L to "1 天"
+        24 * 60 * 60 * 1000L to "1 天",
+        2 * 24 * 60 * 60 * 1000L to "2 天",
+        3 * 24 * 60 * 60 * 1000L to "3 天",
+        7 * 24 * 60 * 60 * 1000L to "7 天"
     )
 
-    private var intervalMs by prefOption("clean_cache_interval_ms", 30 * 60 * 1000L)
+    private var intervalMs by prefOption("clean_logs_interval_ms", 24 * 60 * 60 * 1000L)
 
     private var cleanJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val cleanPaths = run {
+    private val logPaths = run {
         val paths = mutableListOf<Path>()
-
-        val dataDir = HostInfo.application.filesDir.parentFile!!.toPath()
         val storageDataDir = HostInfo.application.externalCacheDir!!.toPath().parent!!
-
-        // 注意: 不清理小程序运行目录 (dataDir/appbrand、cache/appbrand、
-        // MicroMsg/appbrand、cache/liteapp、files/liteapp) —— 删除它们会导致
-        // 主页下拉小程序面板黑屏 (微信运行中渲染资源被清, 2026-08 v1.36 修复)
-        // 日志目录 (xlog/onelog/tbslog 等) 由「自动清理日志」功能负责, 避免重复
-        paths.add(dataDir / "cache")
-        paths.add(dataDir / "MicroMsg" / "crash")
-        paths.add(dataDir / "tinker")
-        paths.add(dataDir / "tinker_server")
-        paths.add(dataDir / "tinker_temp")
-        paths.add(storageDataDir / "cache")
-
+        paths.add(storageDataDir / "files" / "xlog")
+        paths.add(storageDataDir / "files" / "onelog")
+        paths.add(storageDataDir / "files" / "tbslog")
+        paths.add(storageDataDir / "files" / "Tencent" / "tbs_common_log")
+        paths.add(storageDataDir / "files" / "Tencent" / "tbs_live_log")
         return@run paths
     }
 
@@ -95,41 +83,18 @@ object AutoCleanCache : ClickableFeature() {
     @OptIn(ExperimentalPathApi::class)
     private fun performClean(): Long {
         var totalDeletedBytes = 0L
-        cleanPaths.forEach { path ->
+        logPaths.forEach { path ->
             try {
                 WeLogger.d(TAG, "deleting $path")
                 if (path.exists()) {
-                    totalDeletedBytes += deletePathProtected(path)
+                    totalDeletedBytes += calculateSize(path)
+                    path.deleteRecursively()
                 }
             } catch (e: Exception) {
                 WeLogger.w(TAG, "exception during cleaning: ${path.fileName}, ${e.message}")
             }
         }
         return totalDeletedBytes
-    }
-
-    /**
-     * 删除路径，但保护小程序运行目录（appbrand/liteapp）。
-     * 主缓存目录 dataDir/cache 递归删除时会跳过这些子目录，
-     * 避免清理时微信正在渲染的小程序资源被清导致下拉面板黑屏。
-     */
-    @OptIn(ExperimentalPathApi::class)
-    private fun deletePathProtected(path: Path): Long {
-        val protected = setOf("appbrand", "liteapp")
-        val cacheRoot = HostInfo.application.filesDir.parentFile!!.toPath() / "cache"
-        if (path == cacheRoot && path.exists()) {
-            var deleted = 0L
-            path.toFile().listFiles()?.forEach { child ->
-                if (child.name !in protected) {
-                    deleted += calculateSize(child.toPath())
-                    child.deleteRecursively()
-                }
-            }
-            return deleted
-        }
-        val size = calculateSize(path)
-        path.deleteRecursively()
-        return size
     }
 
     private fun calculateSize(path: Path): Long {
@@ -149,7 +114,7 @@ object AutoCleanCache : ClickableFeature() {
             var selectedInterval by remember { mutableStateOf(intervalMs) }
 
             AlertDialogContent(
-                title = { Text("清理缓存垃圾") },
+                title = { Text("自动清理日志") },
                 text = {
                     DefaultColumn {
                         Text(
@@ -168,7 +133,7 @@ object AutoCleanCache : ClickableFeature() {
                         TextButton(onClick = {
                             scope.launch {
                                 val deletedSize = performClean()
-                                showToastSuspend(context, "缓存清理完成, 共释放 ${formatBytesSize(deletedSize)}")
+                                showToastSuspend(context, "日志清理完成, 共释放 ${formatBytesSize(deletedSize)}")
                             }
                         }) { Text("立即清理") }
                     }
