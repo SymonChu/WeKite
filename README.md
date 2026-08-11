@@ -166,7 +166,7 @@ cd WeKite
 | 产物 | 路径 |
 |------|------|
 | Xposed APK | `app/build/outputs/apk/standard/release/` |
-| Zygisk 模块 | `wekit-zygisk/release/WeKite-*.zip` |
+| Zygisk 模块 | `wekite-zygisk/release/WeKite-*.zip` |
 
 ## ❓ 常见问题
 

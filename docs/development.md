@@ -233,13 +233,13 @@ Zygisk 模块使用 standard APK payload, 支持 `arm64-v8a` 和 `armeabi-v7a`�
 模块 ZIP 输出到:
 
 ```none
-wekit-zygisk/release/WeKite-<versionCode>-<versionName>-release.zip
+wekite-zygisk/release/WeKite-<versionCode>-<versionName>-release.zip
 ```
 
 使用 `--save-symbols` 时, 符号包输出到:
 
 ```none
-wekit-zygisk/symbols/WeKite-<versionCode>-<versionName>-release-symbols.zip
+wekite-zygisk/symbols/WeKite-<versionCode>-<versionName>-release-symbols.zip
 ```
 
 ### Native 构建与清理
@@ -278,4 +278,4 @@ wekit-zygisk/symbols/WeKite-<versionCode>-<versionName>-release-symbols.zip
 重启设备。
 
 `--skip-build` 按 Zygisk profile 选择 release 或 debug ZIP, 再使用
-`wekit-zygisk/release/` 中修改时间最新的对应 ZIP。
+`wekite-zygisk/release/` 中修改时间最新的对应 ZIP。

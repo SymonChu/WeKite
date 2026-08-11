@@ -27,7 +27,7 @@
 
 ### Root + Zygisk
 
-1. 下载 `wekit-zygisk` ZIP
+1. 下载 `wekite-zygisk` ZIP
 2. 确保你的 Root 管理器中已启用任意 Zygisk 实现
 
     对于非 Magisk 用户, 请确保安装了任意 Zygisk 模块

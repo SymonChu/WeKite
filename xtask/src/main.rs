@@ -67,7 +67,7 @@ static ABI_TABLE: &[AbiSpec] = &[
 /// ABIs included in the universal APK (the default build targets).
 static RELEASE_ABIS: &[&str] = &["arm64-v8a", "armeabi-v7a"];
 
-const ZYGISK_CARGO_PACKAGE: &str = "wekit-zygisk";
+const ZYGISK_CARGO_PACKAGE: &str = "wekite-zygisk";
 const ZYGISK_MODULE_ID: &str = "wekite_zygisk";
 const ZYGISK_MODULE_NAME: &str = "WeKite";
 
@@ -264,7 +264,7 @@ struct ZygiskBuildArgs {
     #[arg(long)]
     skip_apk_build: bool,
 
-    /// Also write an unstripped native-symbol ZIP under wekit-zygisk/symbols/.
+    /// Also write an unstripped native-symbol ZIP under wekite-zygisk/symbols/.
     #[arg(long)]
     save_symbols: bool,
 }
@@ -384,7 +384,7 @@ fn jni_libs_dir(root: &Path) -> PathBuf {
 }
 
 fn zygisk_dir(root: &Path) -> PathBuf {
-    root.join("wekit-zygisk")
+    root.join("wekite-zygisk")
 }
 
 // ── ABI resolution ─────────────────────────────────────────────────────────────
@@ -573,7 +573,7 @@ fn task_configure() -> Result<()> {
         .with_context(|| format!("failed to write {}", config_path.display()))?;
     println!("configure: wrote {}", config_path.display());
 
-    // Write for wekit-zygisk (same linker config + extra linker flags for symbol visibility)
+    // Write for wekite-zygisk (same linker config + extra linker flags for symbol visibility)
     let zygisk_config_path = zygisk_dir(&root).join("native/.cargo/config.toml");
     fs::create_dir_all(zygisk_config_path.parent().unwrap())?;
     fs::write(&zygisk_config_path, &out)

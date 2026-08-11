@@ -11,7 +11,7 @@ WeKite 支持通过 Zygisk 注入微信, 无须安装 Xposed 框架。
 
 ## 安装
 
-1. 从 [下载渠道](installation.md#下载) 获取最新的 `wekit-zygisk` ZIP。
+1. 从 [下载渠道](installation.md#下载) 获取最新的 `wekite-zygisk` ZIP。
 2. 在 Root 管理器中安装模块 ZIP。
 3. 按照 Root 管理器的提示重启设备。
 4. 打开 Root 管理器中的 WeKite 模块 WebUI。

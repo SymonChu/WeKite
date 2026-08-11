@@ -146,5 +146,5 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: wekite-zygisk
-          path: wekit-zygisk/release/*.zip
+          path: wekite-zygisk/release/*.zip
           if-no-files-found: error

@@ -1426,7 +1426,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "wekit-zygisk"
+name = "wekite-zygisk"
 version = "0.1.0"
 dependencies = [
  "jni",
