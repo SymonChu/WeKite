@@ -2,6 +2,7 @@ package com.github.wekite.utils
 
 import android.util.Log
 import com.github.wekite.BuildConfig
+import com.github.wekite.preferences.WePrefs
 import com.github.wekite.utils.fs.KnownPaths
 import com.github.wekite.utils.fs.createDirsSafe
 import java.io.FileWriter
@@ -83,7 +84,10 @@ object WeLogger {
 
     private fun deleteOldLogs(logsDir: java.nio.file.Path) {
         runCatching {
-            val thresholdDate = LocalDate.now().minusDays(3)
+            // 保留天数可由「自动清理日志」功能调节 (clean_logs_interval_ms, 默认 3 天)
+            val retentionMs = WePrefs.getLongOrDef("clean_logs_interval_ms", 3 * 24 * 60 * 60 * 1000L)
+            val retentionDays = (retentionMs / (24 * 60 * 60 * 1000L)).coerceAtLeast(1)
+            val thresholdDate = LocalDate.now().minusDays(retentionDays)
             val logFileRegex = Regex("""wekit-(\d{4}-\d{2}-\d{2})\.log""")
 
             logsDir.toFile().listFiles()?.forEach { file ->
@@ -92,7 +96,7 @@ object WeLogger {
                     val dateStr = match.groupValues[1]
                     val fileDate = runCatching { LocalDate.parse(dateStr, dateFmt) }.getOrNull()
 
-                    // If the log file date is older than 3 days ago, delete it
+                    // If the log file date is older than the retention days, delete it
                     if (fileDate != null && fileDate.isBefore(thresholdDate)) {
                         file.delete()
                     }

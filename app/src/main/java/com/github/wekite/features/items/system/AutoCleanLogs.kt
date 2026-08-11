@@ -18,11 +18,11 @@ import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.utils.showComposeDialog
-import com.github.wekite.utils.HostInfo
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.showToastSuspend
 import com.github.wekite.utils.formatBytesSize
 import com.github.wekite.utils.formatEpoch
+import com.github.wekite.utils.fs.KnownPaths
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,41 +30,36 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.nio.file.Path
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 import kotlin.io.path.ExperimentalPathApi
-import kotlin.io.path.deleteRecursively
 import kotlin.io.path.div
 import kotlin.io.path.exists
 import kotlin.time.Duration.Companion.milliseconds
 
-@Feature(name = "自动清理日志", categories = ["系统与隐私"], description = "定期自动清理微信日志文件 (xlog/onelog/tbslog), 清理周期可调节")
+@Feature(name = "自动清理日志", categories = ["系统与隐私"], description = "定期清理 WeKite 模块日志 (moduleData/logs), 保留天数可调节")
 object AutoCleanLogs : ClickableFeature() {
 
     private const val TAG = "AutoCleanLogs"
+    private const val DAY_MS = 24 * 60 * 60 * 1000L
 
-    /** 日志清理周期选项: 1天 / 2天 / 3天 / 7天 */
+    /** 日志保留天数选项: 1天 / 2天 / 3天 / 7天 (每 N 天自动清理一次) */
     private val INTERVAL_OPTIONS = listOf(
-        24 * 60 * 60 * 1000L to "1 天",
-        2 * 24 * 60 * 60 * 1000L to "2 天",
-        3 * 24 * 60 * 60 * 1000L to "3 天",
-        7 * 24 * 60 * 60 * 1000L to "7 天"
+        DAY_MS to "1 天",
+        2 * DAY_MS to "2 天",
+        3 * DAY_MS to "3 天",
+        7 * DAY_MS to "7 天"
     )
 
-    private var intervalMs by prefOption("clean_logs_interval_ms", 24 * 60 * 60 * 1000L)
+    // 与 WeLogger.deleteOldLogs 共用同一个 key: 保留天数全局生效
+    private var intervalMs by prefOption("clean_logs_interval_ms", 3 * DAY_MS)
 
     private var cleanJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    private val logPaths = run {
-        val paths = mutableListOf<Path>()
-        val storageDataDir = HostInfo.application.externalCacheDir!!.toPath().parent!!
-        paths.add(storageDataDir / "files" / "xlog")
-        paths.add(storageDataDir / "files" / "onelog")
-        paths.add(storageDataDir / "files" / "tbslog")
-        paths.add(storageDataDir / "files" / "Tencent" / "tbs_common_log")
-        paths.add(storageDataDir / "files" / "Tencent" / "tbs_live_log")
-        return@run paths
-    }
+    private val logsDir = KnownPaths.moduleData / "logs"
+    private val logFileRegex = Regex("""wekit-(\d{4}-\d{2}-\d{2})\.log""")
+    private val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
     override fun onEnable() {
         startCleaningJob()
@@ -80,33 +75,27 @@ object AutoCleanLogs : ClickableFeature() {
         }
     }
 
+    /** 删除超过保留天数的模块日志文件 (保留今天与保留天数内的, 不删正在写的文件) */
     @OptIn(ExperimentalPathApi::class)
     private fun performClean(): Long {
-        var totalDeletedBytes = 0L
-        logPaths.forEach { path ->
-            try {
-                WeLogger.d(TAG, "deleting $path")
-                if (path.exists()) {
-                    totalDeletedBytes += calculateSize(path)
-                    path.deleteRecursively()
+        if (!logsDir.exists()) return 0L
+        val retentionDays = (intervalMs / DAY_MS).coerceAtLeast(1)
+        val thresholdDate = LocalDate.now().minusDays(retentionDays)
+        var deletedBytes = 0L
+
+        logsDir.toFile().listFiles()?.forEach { file ->
+            val match = logFileRegex.matchEntire(file.name)
+            if (match != null) {
+                val fileDate = runCatching { LocalDate.parse(match.groupValues[1], dateFmt) }.getOrNull()
+                if (fileDate != null && fileDate.isBefore(thresholdDate)) {
+                    deletedBytes += file.length()
+                    if (file.delete()) {
+                        WeLogger.d(TAG, "deleted ${file.name}")
+                    }
                 }
-            } catch (e: Exception) {
-                WeLogger.w(TAG, "exception during cleaning: ${path.fileName}, ${e.message}")
             }
         }
-        return totalDeletedBytes
-    }
-
-    private fun calculateSize(path: Path): Long {
-        val file = path.toFile()
-        if (!file.exists()) return 0L
-        if (file.isFile) return file.length()
-
-        var size = 0L
-        file.listFiles()?.forEach {
-            size += if (it.isDirectory) calculateSize(it.toPath()) else it.length()
-        }
-        return size
+        return deletedBytes
     }
 
     override fun onClick(context: ComponentActivity) {
@@ -121,6 +110,7 @@ object AutoCleanLogs : ClickableFeature() {
                             if (isEnabled) "下次自动清理: ${formatEpoch(System.currentTimeMillis() + selectedInterval)}"
                             else "自动清理未启用, 可手动清理"
                         )
+                        Text("保留天数 (更早的模块日志将被删除)")
                         INTERVAL_OPTIONS.forEach { (ms, label) ->
                             ListItem(
                                 modifier = Modifier.clickable { selectedInterval = ms },
