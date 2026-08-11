@@ -256,7 +256,7 @@ object DetectDeletedFriends : ClickableFeature() {
                                 items(abnormalFriends) { friend ->
                                     ListItem(
                                         colors = dialogListItemColors(),
-                                        modifier = Modifier.height(48.dp).clickable {
+                                        modifier = Modifier.clickable {
                                             WeApi.openContact(context, friend.wxId, WeApi.OpenContactDestination.HOMEPAGE)
                                         },
                                         trailingContent = {
@@ -318,7 +318,7 @@ object DetectDeletedFriends : ClickableFeature() {
                                         item {
                                             ListItem(
                                                 colors = dialogListItemColors(),
-                                                modifier = Modifier.height(48.dp).clickable {
+                                                modifier = Modifier.clickable {
                                                     phase = DialogPhase.Marking(
                                                         friends = selectPhase.friends,
                                                         labelName = selectPhase.suggestedLabelName,

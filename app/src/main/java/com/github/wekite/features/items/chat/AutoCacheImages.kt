@@ -93,14 +93,14 @@ object AutoCacheImages : ClickableFeature(), WeDatabaseListenerApi.IInsertListen
                     DefaultColumn {
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable { useWhitelistState = !useWhitelistState },
+                            modifier = Modifier.clickable { useWhitelistState = !useWhitelistState },
                             trailingContent = { Switch(checked = useWhitelistState, onCheckedChange = null, colors = dialogSwitchColors()) },
                             supportingContent = { Text(if (useWhitelistState) "仅对选中联系人缓存图片" else "对选中联系人跳过缓存图片") },
                             headlineContent = { Text(if (useWhitelistState) "黑名单 [> 白名单 <]" else "[> 黑名单 <] 白名单") },
                         )
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable {
+                            modifier = Modifier.clickable {
                                 val contacts = WeDatabaseApi.getFriends() + WeDatabaseApi.getGroups()
                                 val currentList = if (useWhitelistState) whitelist else blacklist
 

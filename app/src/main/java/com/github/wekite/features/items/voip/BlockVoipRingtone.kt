@@ -65,14 +65,14 @@ object BlockVoipRingtone : ClickableFeature(), IResolveDex {
                     DefaultColumn {
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable { outCall = !outCall },
+                            modifier = Modifier.clickable { outCall = !outCall },
                             trailingContent = { Switch(checked = outCall, onCheckedChange = { outCall = it }, colors = dialogSwitchColors()) },
                             supportingContent = { Text("屏蔽拨出音视频通话时的铃声") },
                             headlineContent = { Text("屏蔽呼出铃声") },
                         )
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable { inCall = !inCall },
+                            modifier = Modifier.clickable { inCall = !inCall },
                             trailingContent = { Switch(checked = inCall, onCheckedChange = { inCall = it }, colors = dialogSwitchColors()) },
                             supportingContent = { Text("屏蔽收到音视频通话请求时的铃声") },
                             headlineContent = { Text("屏蔽呼入铃声") },

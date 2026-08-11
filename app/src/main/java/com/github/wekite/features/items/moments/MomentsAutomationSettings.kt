@@ -228,13 +228,13 @@ internal class MomentsAutomationSettings private constructor(
                     DefaultColumn {
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable { showGlobalDialog(context, onSettingsChanged) },
+                            modifier = Modifier.clickable { showGlobalDialog(context, onSettingsChanged) },
                             headlineContent = { Text("全局设置") },
                             supportingContent = { Text("配置默认处理条件与执行方式") }
                         )
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable { showContactSelector(context, onSettingsChanged) },
+                            modifier = Modifier.clickable { showContactSelector(context, onSettingsChanged) },
                             headlineContent = { Text("分联系人设置") },
                             supportingContent = { Text("为单个好友覆盖全局设置") }
                         )
@@ -641,7 +641,7 @@ internal class MomentsAutomationSettings private constructor(
     ) {
         ListItem(
             colors = dialogListItemColors(),
-            modifier = Modifier.height(48.dp).clickable(enabled = enabled, onClick = onClick),
+            modifier = Modifier.clickable(enabled = enabled, onClick = onClick),
             leadingContent = {
                 RadioButton(selected = selected, enabled = enabled, onClick = null, colors = dialogRadioButtonColors())
             },

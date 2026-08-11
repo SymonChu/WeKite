@@ -180,13 +180,13 @@ internal object TransferSettings {
                     DefaultColumn {
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable { showGlobalDialog(context) },
+                            modifier = Modifier.clickable { showGlobalDialog(context) },
                             headlineContent = { Text("全局设置") },
                             supportingContent = { Text("配置默认接收条件与接收后的操作") }
                         )
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable { showContactSelector(context) },
+                            modifier = Modifier.clickable { showContactSelector(context) },
                             headlineContent = { Text("分联系人设置") },
                             supportingContent = { Text("为联系人、群聊或群成员覆盖全局设置") }
                         )
@@ -289,7 +289,7 @@ internal object TransferSettings {
                     DefaultColumn {
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable {
+                            modifier = Modifier.clickable {
                                 showOverrideDialog(
                                     context = context,
                                     title = "群聊全局设置",
@@ -310,7 +310,7 @@ internal object TransferSettings {
                         )
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable {
+                            modifier = Modifier.clickable {
                                 showGroupMemberSelector(context, groupId) {
                                     revision++
                                     onUpdated()

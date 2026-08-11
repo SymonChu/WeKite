@@ -231,7 +231,7 @@ internal fun HideContacts.showSchedulesDialog(context: Context) {
                             items(schedules, key = { it.id }) { schedule ->
                                 ListItem(
                                     colors = dialogListItemColors(),
-                                    modifier = Modifier.height(48.dp).clickable {
+                                    modifier = Modifier.clickable {
                                         showScheduleEditor(
                                             context = context,
                                             title = "编辑定时",

@@ -716,7 +716,6 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         )
                         ListItem(
                             colors = dialogListItemColors(),
-                        modifier = Modifier.height(48.dp),
                         trailingContent = {
                                 Switch(
                                     useBackdropInput,
@@ -744,7 +743,6 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         }
                         ListItem(
                             colors = dialogListItemColors(),
-                        modifier = Modifier.height(48.dp),
                         trailingContent = {
                                 Switch(
                                     hideLabelsInput,
@@ -755,7 +753,6 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         )
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp),
                             leadingContent = null,
                             trailingContent = {
                                 Switch(

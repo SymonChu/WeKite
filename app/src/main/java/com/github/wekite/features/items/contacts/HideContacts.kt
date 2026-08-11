@@ -591,7 +591,7 @@ object HideContacts : ClickableFeature(), IResolveDex, WeChatInputBarApi.IInputB
 
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable {
+                            modifier = Modifier.clickable {
                                 showComposeDialog(context) {
                                     ContactsSelector(
                                         title = "选择要隐藏的联系人",
@@ -611,7 +611,7 @@ object HideContacts : ClickableFeature(), IResolveDex, WeChatInputBarApi.IInputB
 
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable {
+                            modifier = Modifier.clickable {
                                 autoRejectVoipInput = !autoRejectVoipInput
                                 autoRejectVoip = autoRejectVoipInput
                             },
@@ -624,14 +624,14 @@ object HideContacts : ClickableFeature(), IResolveDex, WeChatInputBarApi.IInputB
 
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable { showSchedulesDialog(context) },
+                            modifier = Modifier.clickable { showSchedulesDialog(context) },
                             supportingContent = { Text("到点自动临时显示或恢复隐藏, 不会改动隐藏列表") },
                             headlineContent = { Text("定时显示/隐藏") },
                         )
 
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable {
+                            modifier = Modifier.clickable {
                                 tripleClickTitleInput = !tripleClickTitleInput
                                 tripleClickTitle = tripleClickTitleInput
                             },

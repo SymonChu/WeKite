@@ -97,7 +97,7 @@ object AutoApproveDeviceLogin : ClickableFeature() {
                         var autoLoginDeviceInput by remember { mutableStateOf(autoLoginDevice) }
 
                         ListItem(
-                            modifier = Modifier.height(48.dp).clickable {
+                            modifier = Modifier.clickable {
                                 syncMessagesInput = !syncMessagesInput
                                 syncMessages = syncMessagesInput
                             },
@@ -110,7 +110,7 @@ object AutoApproveDeviceLogin : ClickableFeature() {
                         )
 
                         ListItem(
-                            modifier = Modifier.height(48.dp).clickable {
+                            modifier = Modifier.clickable {
                                 autoLoginDeviceInput = !autoLoginDeviceInput
                                 autoLoginDevice = autoLoginDeviceInput
                             },

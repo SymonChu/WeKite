@@ -118,7 +118,7 @@ object AntiMessageRecall : ClickableFeature(), WeXmlParserApi.IAfterParseListene
                     DefaultColumn {
                         ListItem(
                             colors = dialogListItemColors(),
-                            modifier = Modifier.height(48.dp).clickable { recallOutgoingInput = !recallOutgoingInput },
+                            modifier = Modifier.clickable { recallOutgoingInput = !recallOutgoingInput },
                             trailingContent = {
                                 Switch(checked = recallOutgoingInput, onCheckedChange = null, colors = dialogSwitchColors())
                             },
