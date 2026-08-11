@@ -7,6 +7,7 @@ import android.widget.CheckBox
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -14,6 +15,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import com.tencent.mm.plugin.webwx.ui.ExtDeviceWXLoginUI
 import dev.ujhhgtg.reflekt.reflekt
 import com.github.wekite.features.core.ClickableFeature
@@ -96,6 +98,7 @@ object AutoApproveDeviceLogin : ClickableFeature() {
                                 syncMessagesInput = !syncMessagesInput
                                 syncMessages = syncMessagesInput
                             },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             trailingContent = {
                                 Switch(checked = syncMessagesInput, onCheckedChange = null)
                             },
@@ -108,6 +111,7 @@ object AutoApproveDeviceLogin : ClickableFeature() {
                                 autoLoginDeviceInput = !autoLoginDeviceInput
                                 autoLoginDevice = autoLoginDeviceInput
                             },
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             trailingContent = {
                                 Switch(checked = autoLoginDeviceInput, onCheckedChange = null)
                             },
