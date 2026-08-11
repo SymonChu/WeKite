@@ -1,5 +1,6 @@
 package com.github.wekite.ui.content
 
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -15,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -32,13 +34,14 @@ fun AlertDialogContent(
     Surface(
         shape = MaterialTheme.shapes.extraLarge,
         tonalElevation = 6.dp,
+        color = if (isSystemInDarkTheme()) MaterialTheme.colorScheme.surface else Color.White,
         modifier = modifier
 //            .padding(12.dp)
             .fillMaxWidth()
             .wrapContentHeight()
     ) {
         DefaultColumn(
-            modifier = Modifier.padding(20.dp)
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),

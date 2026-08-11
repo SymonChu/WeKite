@@ -37,7 +37,7 @@ import kotlin.io.path.div
 import kotlin.io.path.exists
 import kotlin.time.Duration.Companion.milliseconds
 
-@Feature(name = "自动清理日志", categories = ["系统与隐私"], description = "定期清理 WeKite 模块日志 (moduleData/logs), 保留天数可调节")
+@Feature(name = "自动清理日志", categories = ["系统与隐私"], description = "定期自动清理模块日志, 保留天数可调节")
 object AutoCleanLogs : ClickableFeature() {
 
     private const val TAG = "AutoCleanLogs"
@@ -110,7 +110,6 @@ object AutoCleanLogs : ClickableFeature() {
                             if (isEnabled) "下次自动清理: ${formatEpoch(System.currentTimeMillis() + selectedInterval)}"
                             else "自动清理未启用, 可手动清理"
                         )
-                        Text("保留天数 (更早的模块日志将被删除)")
                         INTERVAL_OPTIONS.forEach { (ms, label) ->
                             ListItem(
                                 modifier = Modifier.clickable { selectedInterval = ms },
