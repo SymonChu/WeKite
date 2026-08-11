@@ -14,6 +14,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -21,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
 import com.tencent.mm.ui.LauncherUI
@@ -587,6 +589,7 @@ object HideContacts : ClickableFeature(), IResolveDex, WeChatInputBarApi.IInputB
                         var tripleClickTitleInput by remember { mutableStateOf(tripleClickTitle) }
 
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             modifier = Modifier.height(48.dp).clickable {
                                 showComposeDialog(context) {
                                     ContactsSelector(
@@ -606,6 +609,7 @@ object HideContacts : ClickableFeature(), IResolveDex, WeChatInputBarApi.IInputB
                         )
 
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             modifier = Modifier.height(48.dp).clickable {
                                 autoRejectVoipInput = !autoRejectVoipInput
                                 autoRejectVoip = autoRejectVoipInput
@@ -618,12 +622,14 @@ object HideContacts : ClickableFeature(), IResolveDex, WeChatInputBarApi.IInputB
                         )
 
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             modifier = Modifier.height(48.dp).clickable { showSchedulesDialog(context) },
                             supportingContent = { Text("到点自动临时显示或恢复隐藏, 不会改动隐藏列表") },
                             headlineContent = { Text("定时显示/隐藏") },
                         )
 
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             modifier = Modifier.height(48.dp).clickable {
                                 tripleClickTitleInput = !tripleClickTitleInput
                                 tripleClickTitle = tripleClickTitleInput

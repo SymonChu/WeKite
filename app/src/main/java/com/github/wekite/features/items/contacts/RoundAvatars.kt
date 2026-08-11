@@ -2,6 +2,7 @@ package com.github.wekite.features.items.contacts
 
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -9,6 +10,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.height
 import com.github.wekite.dexkit.abc.IResolveDex
@@ -98,6 +100,7 @@ object RoundAvatars : ClickableFeature(), IResolveDex {
                 title = { Text("圆角头像") },
                 text = {
                     ListItem(
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                     modifier = Modifier.height(48.dp),
                     supportingContent = {
                             Slider(

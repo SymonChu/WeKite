@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -12,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.github.wekite.features.api.core.WeDatabaseApi
 import com.github.wekite.features.api.core.WeDatabaseListenerApi
@@ -89,12 +91,14 @@ object AutoCacheImages : ClickableFeature(), WeDatabaseListenerApi.IInsertListen
                 text = {
                     DefaultColumn {
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             modifier = Modifier.height(48.dp).clickable { useWhitelistState = !useWhitelistState },
                             trailingContent = { Switch(checked = useWhitelistState, onCheckedChange = null) },
                             supportingContent = { Text(if (useWhitelistState) "仅对选中联系人缓存图片" else "对选中联系人跳过缓存图片") },
                             headlineContent = { Text(if (useWhitelistState) "黑名单 [> 白名单 <]" else "[> 黑名单 <] 白名单") },
                         )
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             modifier = Modifier.height(48.dp).clickable {
                                 val contacts = WeDatabaseApi.getFriends() + WeDatabaseApi.getGroups()
                                 val currentList = if (useWhitelistState) whitelist else blacklist

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -27,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.MaterialSymbols
@@ -227,6 +229,7 @@ internal fun HideContacts.showSchedulesDialog(context: Context) {
                         ) {
                             items(schedules, key = { it.id }) { schedule ->
                                 ListItem(
+                                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                                     modifier = Modifier.height(48.dp).clickable {
                                         showScheduleEditor(
                                             context = context,

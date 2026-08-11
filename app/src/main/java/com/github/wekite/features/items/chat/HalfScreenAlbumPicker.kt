@@ -11,6 +11,7 @@ import android.view.ViewOutlineProvider
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -18,6 +19,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.height
 import dev.ujhhgtg.reflekt.reflekt
@@ -551,6 +553,7 @@ object HalfScreenAlbumPicker : ClickableFeature() {
                 text = {
                     DefaultColumn {
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         modifier = Modifier.height(48.dp),
                         headlineContent = { Text("高度占比: ${heightInput.roundToInt()}%") },
                             supportingContent = {

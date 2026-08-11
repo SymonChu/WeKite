@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -23,6 +24,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.github.wekite.features.api.core.models.IWeContact
@@ -223,6 +225,7 @@ internal fun AutomationRuleHeader(
     val editable = isOverridden != false
     val effectiveSummary = if (isOverridden == false) "跟随$parentLabel: $summary" else summary
     ListItem(
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier.clickable {
             if (editable) onEnabledChange(!enabled) else onActivate()
         },
@@ -325,6 +328,7 @@ internal fun AutomationKeywordControls(
         }
         rule.strings.forEach { keyword ->
             ListItem(
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                 headlineContent = { Text(keyword) },
                 trailingContent = {
                     TextButton(

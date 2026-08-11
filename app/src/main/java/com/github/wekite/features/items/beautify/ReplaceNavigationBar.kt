@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Badge
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -702,6 +703,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                 text = {
                     DefaultColumn {
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         modifier = Modifier.height(48.dp),
                         trailingContent = {
                                 Switch(
@@ -711,6 +713,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                             headlineContent = { Text("使用悬浮底栏") },
                         )
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         modifier = Modifier.height(48.dp),
                         trailingContent = {
                                 Switch(
@@ -722,6 +725,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         )
                         if (useBackdropInput) {
                             ListItem(
+                                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             modifier = Modifier.height(48.dp),
                             supportingContent = {
                                     Slider(
@@ -738,6 +742,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                             )
                         }
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         modifier = Modifier.height(48.dp),
                         trailingContent = {
                                 Switch(
@@ -748,6 +753,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                             headlineContent = { Text("隐藏标签文本") },
                         )
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             modifier = Modifier.height(48.dp),
                             leadingContent = null,
                             trailingContent = {

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -17,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.github.wekite.features.api.core.WeDatabaseApi
@@ -177,11 +179,13 @@ internal object TransferSettings {
                 text = {
                     DefaultColumn {
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             modifier = Modifier.height(48.dp).clickable { showGlobalDialog(context) },
                             headlineContent = { Text("全局设置") },
                             supportingContent = { Text("配置默认接收条件与接收后的操作") }
                         )
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             modifier = Modifier.height(48.dp).clickable { showContactSelector(context) },
                             headlineContent = { Text("分联系人设置") },
                             supportingContent = { Text("为联系人、群聊或群成员覆盖全局设置") }
@@ -284,6 +288,7 @@ internal object TransferSettings {
                 text = {
                     DefaultColumn {
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             modifier = Modifier.height(48.dp).clickable {
                                 showOverrideDialog(
                                     context = context,
@@ -304,6 +309,7 @@ internal object TransferSettings {
                             }
                         )
                         ListItem(
+                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             modifier = Modifier.height(48.dp).clickable {
                                 showGroupMemberSelector(context, groupId) {
                                     revision++
