@@ -43,10 +43,9 @@ object AutoCleanLogs : ClickableFeature() {
     private const val TAG = "AutoCleanLogs"
     private const val DAY_MS = 24 * 60 * 60 * 1000L
 
-    /** 日志保留天数选项: 1天 / 2天 / 3天 / 7天 (每 N 天自动清理一次) */
+    /** 日志保留天数选项: 1天 / 3天 / 7天 (每 N 天自动清理一次) */
     private val INTERVAL_OPTIONS = listOf(
         DAY_MS to "1 天",
-        2 * DAY_MS to "2 天",
         3 * DAY_MS to "3 天",
         7 * DAY_MS to "7 天"
     )

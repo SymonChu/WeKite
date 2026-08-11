@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 // drop-in replacement for AlertDialog that should be used in showComposeDialog()
@@ -32,7 +33,7 @@ fun AlertDialogContent(
     dismissButton: (@Composable () -> Unit)? = null
 ) {
     Surface(
-        shape = MaterialTheme.shapes.extraLarge,
+        shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
         color = if (isSystemInDarkTheme()) MaterialTheme.colorScheme.surface else Color.White,
         modifier = modifier
@@ -43,29 +44,24 @@ fun AlertDialogContent(
         DefaultColumn(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (icon != null) {
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.primary) {
-                            icon()
-                        }
+            if (icon != null) {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.primary) {
+                        icon()
                     }
                 }
-                title?.let {
-                    val customStyle = MaterialTheme.typography.headlineSmall.copy(
-                        fontWeight = FontWeight.Bold
-                    )
-                    CompositionLocalProvider(LocalTextStyle provides customStyle) {
+            }
+            title?.let {
+                val customStyle = MaterialTheme.typography.headlineSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                CompositionLocalProvider(LocalTextStyle provides customStyle) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                         it()
                     }
                 }
             }
-
-            HorizontalDivider()
 
             text?.let {
                 val bodyStyle = MaterialTheme.typography.bodyMedium

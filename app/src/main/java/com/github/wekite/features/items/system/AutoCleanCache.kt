@@ -42,14 +42,10 @@ object AutoCleanCache : ClickableFeature() {
 
     private const val TAG = "AutoCleanCache"
 
-    /** 清理间隔选项: 30分钟 / 1小时 / 2小时 / 4小时 / 8小时 / 12小时 / 1天 */
+    /** 清理间隔选项: 1小时 / 4小时 / 1天 */
     private val INTERVAL_OPTIONS = listOf(
-        30 * 60 * 1000L to "30 分钟",
         60 * 60 * 1000L to "1 小时",
-        2 * 60 * 60 * 1000L to "2 小时",
         4 * 60 * 60 * 1000L to "4 小时",
-        8 * 60 * 60 * 1000L to "8 小时",
-        12 * 60 * 60 * 1000L to "12 小时",
         24 * 60 * 60 * 1000L to "1 天"
     )
 
@@ -102,12 +98,15 @@ object AutoCleanCache : ClickableFeature() {
         var totalDeletedBytes = 0L
         cleanPaths.forEach { path ->
             try {
-                WeLogger.d(TAG, "deleting $path")
                 if (path.exists()) {
                     totalDeletedBytes += deletePathProtected(path)
                 }
             } catch (e: Exception) {
-                WeLogger.w(TAG, "exception during cleaning: ${path.fileName}, ${e.message}")
+                // tinker 目录是微信热更新在用, 删不掉属预期, 不刷警告日志
+                val name = path.fileName.toString()
+                if (name !in setOf("tinker", "tinker_server", "tinker_temp")) {
+                    WeLogger.w(TAG, "exception during cleaning: $name, ${e.message}")
+                }
             }
         }
         return totalDeletedBytes

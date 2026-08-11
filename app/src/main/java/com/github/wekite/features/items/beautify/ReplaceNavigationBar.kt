@@ -630,11 +630,6 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                           parent = parent.parent
                       }
                       if (inHomeContainerTree || view in homeFrostedInstances) {
-                          WeLogger.d(
-                              TAG,
-                              "frost suppress: view=${view.javaClass.name} " +
-                                  "inTree=$inHomeContainerTree collected=${view in homeFrostedInstances}"
-                          )
                           args[0] = false
                       }
                   }
