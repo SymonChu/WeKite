@@ -726,7 +726,6 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         if (useBackdropInput) {
                             ListItem(
                                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                            modifier = Modifier.height(48.dp),
                             supportingContent = {
                                     Slider(
                                         value = blurRadiusInput,

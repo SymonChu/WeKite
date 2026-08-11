@@ -9,10 +9,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.layout.height
 import com.github.wekite.dexkit.abc.IResolveDex
 import com.github.wekite.dexkit.dsl.dexConstructor
 import com.github.wekite.dexkit.dsl.dexMethod
@@ -101,7 +99,6 @@ object RoundAvatars : ClickableFeature(), IResolveDex {
                 text = {
                     ListItem(
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    modifier = Modifier.height(48.dp),
                     supportingContent = {
                             Slider(
                                 value = value,
