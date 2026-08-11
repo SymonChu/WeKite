@@ -37,13 +37,11 @@ object AutoCleanCache : ClickableFeature() {
         val dataDir = HostInfo.application.filesDir.parentFile!!.toPath()
         val storageDataDir = HostInfo.application.externalCacheDir!!.toPath().parent!!
 
+        // 注意: 不清理小程序运行目录 (dataDir/appbrand、cache/appbrand、
+        // MicroMsg/appbrand、cache/liteapp、files/liteapp) —— 删除它们会导致
+        // 主页下拉小程序面板黑屏 (微信运行中渲染资源被清, 2026-08 v1.36 修复)
         paths.add(dataDir / "cache")
         paths.add(dataDir / "MicroMsg" / "crash")
-        paths.add(dataDir / "appbrand")
-        paths.add(dataDir / "cache" / "appbrand")
-        paths.add(dataDir / "MicroMsg" / "appbrand")
-        paths.add(dataDir / "cache" / "liteapp")
-        paths.add(dataDir / "files" / "liteapp")
         paths.add(dataDir / "tinker")
         paths.add(dataDir / "tinker_server")
         paths.add(dataDir / "tinker_temp")
@@ -78,14 +76,37 @@ object AutoCleanCache : ClickableFeature() {
             try {
                 WeLogger.d(TAG, "deleting $path")
                 if (path.exists()) {
-                    totalDeletedBytes += calculateSize(path)
-                    path.deleteRecursively()
+                    totalDeletedBytes += deletePathProtected(path)
                 }
             } catch (e: Exception) {
                 WeLogger.w(TAG, "exception during cleaning: ${path.fileName}, ${e.message}")
             }
         }
         return totalDeletedBytes
+    }
+
+    /**
+     * 删除路径，但保护小程序运行目录（appbrand/liteapp）。
+     * 主缓存目录 dataDir/cache 递归删除时会跳过这些子目录，
+     * 避免清理时微信正在渲染的小程序资源被清导致下拉面板黑屏。
+     */
+    @OptIn(ExperimentalPathApi::class)
+    private fun deletePathProtected(path: Path): Long {
+        val protected = setOf("appbrand", "liteapp")
+        val cacheRoot = HostInfo.application.filesDir.parentFile!!.toPath() / "cache"
+        if (path == cacheRoot && path.exists()) {
+            var deleted = 0L
+            path.toFile().listFiles()?.forEach { child ->
+                if (child.name !in protected) {
+                    deleted += calculateSize(child.toPath())
+                    child.deleteRecursively()
+                }
+            }
+            return deleted
+        }
+        val size = calculateSize(path)
+        path.deleteRecursively()
+        return size
     }
 
     private fun calculateSize(path: Path): Long {

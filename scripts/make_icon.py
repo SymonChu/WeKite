@@ -32,16 +32,35 @@ def draw_plane(d, size, cx, cy, s, lw, fill=(255,255,255,255), line=(170,205,240
     d.line([(int(cx-108*s), int(cy-18*s)), (int(cx-73*s), int(cy-53*s))], fill=line, width=lw)
 
 def full_icon(size, bg=True):
-    """完整图标：渐变圆角底 + 白纸飞机 + WeKite 文字"""
+    """完整图标：渐变圆角底 + 白纸飞机 + WeKite 文字。
+    bg=True → 低版本 round 用全幅渐变圆角方;
+    bg=False → adaptive foreground: 透明底 + 圆形渐变底(直径=安全区66%) + 缩小居中图形
+    """
+    s = size / 432.0
     if bg:
         base = grad_bg(size, (11, 147, 246), (0, 168, 224))
         base = rounded_corners(base, int(size * 0.222))
+        scale = 1.18 * s
+        plane_cy = size * 0.444
+        text_size = int(76 * s)
+        text_y = size * 0.694
     else:
         base = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+        # 圆形渐变底：直径 = 安全区 66% (留 3px 余量防抗锯齿边缘超出)
+        r = int(size * 0.33) - 3
+        circ = grad_bg(int(r * 2), (11, 147, 246), (0, 168, 224))
+        cmask = Image.new('L', circ.size, 0)
+        ImageDraw.Draw(cmask).ellipse([0, 0, circ.size[0]-1, circ.size[1]-1], fill=255)
+        circ.putalpha(cmask)
+        base.alpha_composite(circ, (size//2 - r, size//2 - r))
+        # 图形缩小到安全区内居中 (飞机+文字整体都要落在 66% 圆内, 否则 launcher 裁边)
+        scale = 1.18 * s * 0.55
+        plane_cy = size * 0.40
+        text_size = max(8, int(38 * s))
+        text_y = size * 0.62
     d = ImageDraw.Draw(base)
-    s = size / 432.0
-    cx, cy = size * 0.5, size * 0.444
-    ps = 1.18 * s
+    cx, cy = size * 0.5, plane_cy
+    ps = scale
     plane = [(int(cx + dx*ps), int(cy + dy*ps)) for dx, dy in [(-90,58),(106,-38),(-26,6),(116,-88),(-73,-53),(-108,-18)]]
     # 投影
     sh = Image.new('RGBA', (size, size), (0,0,0,0))
@@ -51,11 +70,11 @@ def full_icon(size, bg=True):
     base.alpha_composite(sh)
     draw_plane(d, size, cx, cy, ps, max(3, int(5*ps)))
     # 文字
-    font = ImageFont.truetype(FONT, int(76 * s))
+    font = ImageFont.truetype(FONT, text_size)
     txt = 'WeKite'
     w = d.textlength(txt, font=font)
     x = (size - w) / 2
-    y = size * 0.694
+    y = text_y
     sh2 = Image.new('RGBA', (size, size), (0,0,0,0))
     ds2 = ImageDraw.Draw(sh2)
     ds2.text((x+int(3*s), y+int(4*s)), txt, font=font, fill=(0, 40, 90, 170))
@@ -65,12 +84,12 @@ def full_icon(size, bg=True):
     return base
 
 def mono_icon(size):
-    """monochrome：透明底 + 白色纸飞机（无文字）"""
+    """monochrome：透明底 + 白色纸飞机（无文字），安全区内居中"""
     m = Image.new('RGBA', (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(m)
     s = size / 432.0
-    cx, cy = size * 0.5, size * 0.46
-    ps = 1.3 * s
+    cx, cy = size * 0.5, size * 0.5
+    ps = 1.3 * s * 0.62
     base_pts = [(-90, 58), (106, -38), (-26, 6), (116, -88), (-73, -53), (-108, -18)]
     plane = [(int(cx + dx*ps), int(cy + dy*ps)) for dx, dy in base_pts]
     d.polygon(plane, fill=(255, 255, 255, 255))
@@ -86,7 +105,7 @@ RD = {'mdpi': 48, 'hdpi': 72, 'xhdpi': 96, 'xxhdpi': 144, 'xxxhdpi': 192}
 
 for dpi, sz in FG.items():
     d = os.path.join(ROOT, f'mipmap-{dpi}')
-    save_webp(full_icon(sz, bg=True), os.path.join(d, 'ic_launcher_foreground.webp'))
+    save_webp(full_icon(sz, bg=False), os.path.join(d, 'ic_launcher_foreground.webp'))
     save_webp(mono_icon(sz), os.path.join(d, 'ic_launcher_monochrome.webp'))
     print('fg/mono', dpi, sz)
 for dpi, sz in RD.items():
