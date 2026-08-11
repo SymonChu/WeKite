@@ -67,13 +67,18 @@ object AutoCleanCache : ClickableFeature() {
         // 注意: 不清理小程序运行目录 (dataDir/appbrand、cache/appbrand、
         // MicroMsg/appbrand、cache/liteapp、files/liteapp) —— 删除它们会导致
         // 主页下拉小程序面板黑屏 (微信运行中渲染资源被清, 2026-08 v1.36 修复)
-        // 日志目录 (xlog/onelog/tbslog 等) 由「自动清理日志」功能负责, 避免重复
+        // 微信日志目录 (xlog/onelog/tbslog) 也在此清理
         paths.add(dataDir / "cache")
         paths.add(dataDir / "MicroMsg" / "crash")
         paths.add(dataDir / "tinker")
         paths.add(dataDir / "tinker_server")
         paths.add(dataDir / "tinker_temp")
         paths.add(storageDataDir / "cache")
+        paths.add(storageDataDir / "files" / "xlog")
+        paths.add(storageDataDir / "files" / "onelog")
+        paths.add(storageDataDir / "files" / "tbslog")
+        paths.add(storageDataDir / "files" / "Tencent" / "tbs_common_log")
+        paths.add(storageDataDir / "files" / "Tencent" / "tbs_live_log")
 
         return@run paths
     }
