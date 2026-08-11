@@ -49,7 +49,8 @@ fun ModuleTheme(
 
     // ---- Material 3 ----
     val materialScheme = if (!ThemeSettings.customColor) {
-        if (darkTheme) darkScheme else lightScheme
+        // 与 miuix 默认主题色一致 (miuix 默认蓝 0xFF3482FF), 弹窗/设置页颜色统一
+        SeedResolver.materialScheme(0xFF3482FF.toInt(), darkTheme)
     } else {
         SeedResolver.materialScheme(SeedResolver.customSeed(context, darkTheme), darkTheme)
     }
