@@ -43,6 +43,7 @@ fun dialogListItemColors(): ListItemColors {
     val dark = ThemeSettings.themeMode.resolve()
     return ListItemDefaults.colors(
         containerColor = Color.Transparent,
+        headlineColor = if (dark) Color.White else Color.Black,
         supportingColor = if (dark) Color(0xFFAAAAAA) else Color(0xFF666666),
     )
 }
