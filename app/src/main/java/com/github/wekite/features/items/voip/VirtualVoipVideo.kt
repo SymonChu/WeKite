@@ -44,6 +44,7 @@ import com.github.wekite.preferences.WePrefs.Companion.prefOption
 import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
+import com.github.wekite.ui.content.dialogRadioButtonColors
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.HookParam
 import com.github.wekite.utils.WeLogger
@@ -291,7 +292,7 @@ object VirtualVoipVideo : ClickableFeature(), IResolveDex {
                                     // 恢复为保存的全局文件方向配置
                                     orientationText = streamOrientation
                                 }
-                            )
+                            , colors = dialogRadioButtonColors())
                             Text("本地文件", modifier = Modifier.clickable {
                                 currentType = "file"
                                 sourceType = "file"
@@ -311,7 +312,7 @@ object VirtualVoipVideo : ClickableFeature(), IResolveDex {
                                         streamOrientation = "portrait"
                                     }
                                 }
-                            )
+                            , colors = dialogRadioButtonColors())
                             Text("网络流地址", modifier = Modifier.clickable {
                                 currentType = "stream"
                                 sourceType = "stream"
@@ -388,7 +389,7 @@ object VirtualVoipVideo : ClickableFeature(), IResolveDex {
                                 RadioButton(
                                     selected = orientationText == "auto",
                                     onClick = { orientationText = "auto"; streamOrientation = "auto" }
-                                )
+                                , colors = dialogRadioButtonColors())
                                 Text("自动", modifier = Modifier.clickable { orientationText = "auto"; streamOrientation = "auto" })
 
                                 Spacer(modifier = Modifier.width(16.dp))
@@ -397,7 +398,7 @@ object VirtualVoipVideo : ClickableFeature(), IResolveDex {
                             RadioButton(
                                 selected = orientationText == "portrait",
                                 onClick = { orientationText = "portrait"; streamOrientation = "portrait" }
-                            )
+                            , colors = dialogRadioButtonColors())
                             Text("竖屏", modifier = Modifier.clickable { orientationText = "portrait"; streamOrientation = "portrait" })
 
                             Spacer(modifier = Modifier.width(16.dp))
@@ -405,7 +406,7 @@ object VirtualVoipVideo : ClickableFeature(), IResolveDex {
                             RadioButton(
                                 selected = orientationText == "landscape",
                                 onClick = { orientationText = "landscape"; streamOrientation = "landscape" }
-                            )
+                            , colors = dialogRadioButtonColors())
                             Text("横屏", modifier = Modifier.clickable { orientationText = "landscape"; streamOrientation = "landscape" })
                         }
                     }

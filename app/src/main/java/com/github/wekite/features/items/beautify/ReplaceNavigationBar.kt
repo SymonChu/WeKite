@@ -26,7 +26,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Badge
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -80,6 +79,9 @@ import com.github.wekite.ui.content.FloatingBottomBarDefaults
 import com.github.wekite.ui.content.FloatingBottomBarItem
 import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.content.rememberViewBackdrop
+import com.github.wekite.ui.content.dialogSliderColors
+import com.github.wekite.ui.content.dialogSwitchColors
+import com.github.wekite.ui.content.dialogListItemColors
 import com.github.wekite.ui.utils.InjectedUiTheme
 import com.github.wekite.ui.utils.LifecycleOwnerProvider
 import com.github.wekite.ui.utils.setLifecycleOwner
@@ -703,36 +705,36 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                 text = {
                     DefaultColumn {
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                         modifier = Modifier.height(48.dp),
                         trailingContent = {
                                 Switch(
                                     useFloatingInput,
-                                    { useFloatingInput = it })
+                                    { useFloatingInput = it }, colors = dialogSwitchColors())
                             },
                             headlineContent = { Text("使用悬浮底栏") },
                         )
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                         modifier = Modifier.height(48.dp),
                         trailingContent = {
                                 Switch(
                                     useBackdropInput,
-                                    { useBackdropInput = it })
+                                    { useBackdropInput = it }, colors = dialogSwitchColors())
                             },
                             supportingContent = { Text("需启用「使用悬浮底栏」") },
                             headlineContent = { Text("启用液态玻璃效果") },
                         )
                         if (useBackdropInput) {
                             ListItem(
-                                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                colors = dialogListItemColors(),
                             supportingContent = {
                                     Slider(
                                         value = blurRadiusInput,
                                         onValueChange = { blurRadiusInput = it },
                                         valueRange = MIN_BLUR_RADIUS.toFloat()..MAX_BLUR_RADIUS.toFloat(),
                                         steps = MAX_BLUR_RADIUS - MIN_BLUR_RADIUS - 1
-                                    )
+                                    , colors = dialogSliderColors())
                                 },
                                 headlineContent = {
                                     val r = blurRadiusInput.roundToInt()
@@ -741,24 +743,24 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                             )
                         }
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                         modifier = Modifier.height(48.dp),
                         trailingContent = {
                                 Switch(
                                     hideLabelsInput,
-                                    { hideLabelsInput = it })
+                                    { hideLabelsInput = it }, colors = dialogSwitchColors())
                             },
                             supportingContent = { Text("需启用「使用悬浮底栏」") },
                             headlineContent = { Text("隐藏标签文本") },
                         )
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             modifier = Modifier.height(48.dp),
                             leadingContent = null,
                             trailingContent = {
                                 Switch(
                                     showFinderBadgeInput,
-                                    { showFinderBadgeInput = it })
+                                    { showFinderBadgeInput = it }, colors = dialogSwitchColors())
                             },
                             supportingContent = { Text("包含朋友圈新通知数量等") },
                             headlineContent = { Text("显示「发现」标签角标") },

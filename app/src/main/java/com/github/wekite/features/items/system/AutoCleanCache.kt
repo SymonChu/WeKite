@@ -4,7 +4,6 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -21,6 +20,8 @@ import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
+import com.github.wekite.ui.content.dialogListItemColors
+import com.github.wekite.ui.content.dialogRadioButtonColors
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.HostInfo
 import com.github.wekite.utils.WeLogger
@@ -167,9 +168,9 @@ object AutoCleanCache : ClickableFeature() {
                         INTERVAL_OPTIONS.forEach { (ms, label) ->
                             ListItem(
                                 modifier = Modifier.height(48.dp).clickable { selectedInterval = ms },
-                                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                colors = dialogListItemColors(),
                                 leadingContent = {
-                                    RadioButton(selected = selectedInterval == ms, onClick = { selectedInterval = ms })
+                                    RadioButton(selected = selectedInterval == ms, onClick = { selectedInterval = ms }, colors = dialogRadioButtonColors())
                                 },
                                 headlineContent = { Text(label) },
                             )

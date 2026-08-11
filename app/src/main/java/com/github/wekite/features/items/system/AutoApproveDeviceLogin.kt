@@ -8,7 +8,6 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -25,6 +24,8 @@ import com.github.wekite.features.core.Feature
 import com.github.wekite.preferences.WePrefs.Companion.prefOption
 import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.DefaultColumn
+import com.github.wekite.ui.content.dialogSwitchColors
+import com.github.wekite.ui.content.dialogListItemColors
 import com.github.wekite.ui.utils.showComposeDialog
 
 @Feature(name = "自动批准设备登录", categories = ["系统与隐私"], description = "其他设备请求登录时自动勾选选项并点击按钮")
@@ -100,9 +101,9 @@ object AutoApproveDeviceLogin : ClickableFeature() {
                                 syncMessagesInput = !syncMessagesInput
                                 syncMessages = syncMessagesInput
                             },
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             trailingContent = {
-                                Switch(checked = syncMessagesInput, onCheckedChange = null)
+                                Switch(checked = syncMessagesInput, onCheckedChange = null, colors = dialogSwitchColors())
                             },
                             supportingContent = { Text("批准登录时勾选 \"同步最近的消息\", 把手机上的近期聊天记录同步到该设备") },
                             headlineContent = { Text("同步最近的消息") },
@@ -113,9 +114,9 @@ object AutoApproveDeviceLogin : ClickableFeature() {
                                 autoLoginDeviceInput = !autoLoginDeviceInput
                                 autoLoginDevice = autoLoginDeviceInput
                             },
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             trailingContent = {
-                                Switch(checked = autoLoginDeviceInput, onCheckedChange = null)
+                                Switch(checked = autoLoginDeviceInput, onCheckedChange = null, colors = dialogSwitchColors())
                             },
                             supportingContent = { Text("批准登录时勾选 \"自动登录该设备\", 该设备以后无需再次确认即可登录") },
                             headlineContent = { Text("自动登录该设备") },

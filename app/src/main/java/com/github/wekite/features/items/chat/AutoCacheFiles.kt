@@ -5,7 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -28,6 +27,8 @@ import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.ContactsSelector
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
+import com.github.wekite.ui.content.dialogSwitchColors
+import com.github.wekite.ui.content.dialogListItemColors
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.showToast
@@ -156,14 +157,14 @@ object AutoCacheFiles : ClickableFeature(),
                 text = {
                     DefaultColumn {
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             modifier = Modifier.height(48.dp).clickable { useWhitelistState = !useWhitelistState },
-                            trailingContent = { Switch(checked = useWhitelistState, onCheckedChange = null) },
+                            trailingContent = { Switch(checked = useWhitelistState, onCheckedChange = null, colors = dialogSwitchColors()) },
                             supportingContent = { Text(if (useWhitelistState) "仅对选中联系人缓存文件" else "对选中联系人跳过缓存文件") },
                             headlineContent = { Text(if (useWhitelistState) "黑名单 [> 白名单 <]" else "[> 黑名单 <] 白名单") },
                         )
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             modifier = Modifier.height(48.dp).clickable {
                                 val contacts = WeDatabaseApi.getFriends() + WeDatabaseApi.getGroups()
                                 val currentList = if (useWhitelistState) whitelist else blacklist

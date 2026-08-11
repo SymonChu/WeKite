@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -34,6 +33,7 @@ import com.github.wekite.ui.content.MINUTES_PER_DAY
 import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.content.WeTimeOfDayField
 import com.github.wekite.ui.content.formatMinuteOfDay
+import com.github.wekite.ui.content.dialogListItemColors
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.serialization.DefaultJson
 import kotlinx.serialization.KSerializer
@@ -225,7 +225,7 @@ internal fun AutomationRuleHeader(
     val editable = isOverridden != false
     val effectiveSummary = if (isOverridden == false) "跟随$parentLabel: $summary" else summary
     ListItem(
-        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        colors = dialogListItemColors(),
         modifier = Modifier.clickable {
             if (editable) onEnabledChange(!enabled) else onActivate()
         },
@@ -328,7 +328,7 @@ internal fun AutomationKeywordControls(
         }
         rule.strings.forEach { keyword ->
             ListItem(
-                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                colors = dialogListItemColors(),
                 headlineContent = { Text(keyword) },
                 trailingContent = {
                     TextButton(

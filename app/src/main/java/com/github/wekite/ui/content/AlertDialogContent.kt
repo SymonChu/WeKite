@@ -1,6 +1,5 @@
 package com.github.wekite.ui.content
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -20,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.github.wekite.ui.utils.theme.ThemeSettings
 
 // drop-in replacement for AlertDialog that should be used in showComposeDialog()
 // to avoid creating multiple Windows
@@ -32,10 +32,12 @@ fun AlertDialogContent(
     confirmButton: (@Composable () -> Unit)? = null,
     dismissButton: (@Composable () -> Unit)? = null
 ) {
+    val dark = ThemeSettings.themeMode.resolve()
     Surface(
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
-        color = if (isSystemInDarkTheme()) MaterialTheme.colorScheme.surface else Color.White,
+        color = if (dark) Color(0xFF111111) else Color.White,
+        contentColor = if (dark) Color.White else Color.Black,
         modifier = modifier
 //            .padding(12.dp)
             .fillMaxWidth()
@@ -65,7 +67,7 @@ fun AlertDialogContent(
 
             text?.let {
                 val bodyStyle = MaterialTheme.typography.bodyMedium
-                val bodyColor = MaterialTheme.colorScheme.onSurface
+                val bodyColor = if (dark) Color.White else Color.Black
 
                 Box(modifier = Modifier.weight(1f, fill = false)) {
                     CompositionLocalProvider(

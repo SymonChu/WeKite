@@ -11,7 +11,6 @@ import android.view.ViewOutlineProvider
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -37,6 +36,8 @@ import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
+import com.github.wekite.ui.content.dialogSliderColors
+import com.github.wekite.ui.content.dialogListItemColors
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.HookHandle
 import com.github.wekite.utils.WeLogger
@@ -551,7 +552,7 @@ object HalfScreenAlbumPicker : ClickableFeature() {
                 text = {
                     DefaultColumn {
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                         headlineContent = { Text("高度占比: ${heightInput.roundToInt()}%") },
                             supportingContent = {
                                 Slider(
@@ -559,7 +560,7 @@ object HalfScreenAlbumPicker : ClickableFeature() {
                                     onValueChange = { heightInput = it },
                                     valueRange = MIN_HEIGHT_PERCENT.toFloat()..MAX_HEIGHT_PERCENT.toFloat(),
                                     steps = MAX_HEIGHT_PERCENT - MIN_HEIGHT_PERCENT - 1
-                                )
+                                , colors = dialogSliderColors())
                             }
                         )
                     }

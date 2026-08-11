@@ -14,7 +14,6 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -59,6 +58,8 @@ import com.github.wekite.preferences.WePrefs.Companion.prefOption
 import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.ContactsSelector
 import com.github.wekite.ui.content.DefaultColumn
+import com.github.wekite.ui.content.dialogSwitchColors
+import com.github.wekite.ui.content.dialogListItemColors
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.HostInfo
 import com.github.wekite.utils.WeLogger
@@ -589,7 +590,7 @@ object HideContacts : ClickableFeature(), IResolveDex, WeChatInputBarApi.IInputB
                         var tripleClickTitleInput by remember { mutableStateOf(tripleClickTitle) }
 
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             modifier = Modifier.height(48.dp).clickable {
                                 showComposeDialog(context) {
                                     ContactsSelector(
@@ -609,33 +610,33 @@ object HideContacts : ClickableFeature(), IResolveDex, WeChatInputBarApi.IInputB
                         )
 
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             modifier = Modifier.height(48.dp).clickable {
                                 autoRejectVoipInput = !autoRejectVoipInput
                                 autoRejectVoip = autoRejectVoipInput
                             },
                             trailingContent = {
-                                Switch(checked = autoRejectVoipInput, onCheckedChange = null)
+                                Switch(checked = autoRejectVoipInput, onCheckedChange = null, colors = dialogSwitchColors())
                             },
                             supportingContent = { Text("关闭时仅隐藏来电, 对方会一直响到超时; 开启后立即向对方发送拒接") },
                             headlineContent = { Text("自动拒绝音视频通话") },
                         )
 
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             modifier = Modifier.height(48.dp).clickable { showSchedulesDialog(context) },
                             supportingContent = { Text("到点自动临时显示或恢复隐藏, 不会改动隐藏列表") },
                             headlineContent = { Text("定时显示/隐藏") },
                         )
 
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             modifier = Modifier.height(48.dp).clickable {
                                 tripleClickTitleInput = !tripleClickTitleInput
                                 tripleClickTitle = tripleClickTitleInput
                             },
                             trailingContent = {
-                                Switch(checked = tripleClickTitleInput, onCheckedChange = null)
+                                Switch(checked = tripleClickTitleInput, onCheckedChange = null, colors = dialogSwitchColors())
                             },
                             supportingContent = { Text("连续三击主页顶部标题栏, 可临时显示或恢复隐藏联系人") },
                             headlineContent = { Text("三击标题切换显隐") },

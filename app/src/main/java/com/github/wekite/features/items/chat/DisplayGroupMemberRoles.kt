@@ -14,7 +14,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
@@ -39,6 +38,8 @@ import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.content.WeColorField
+import com.github.wekite.ui.content.dialogSwitchColors
+import com.github.wekite.ui.content.dialogListItemColors
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.HookParam
 import com.github.wekite.utils.collections.LruCache
@@ -106,9 +107,9 @@ object DisplayGroupMemberRoles : ClickableFeature(), IResolveDex,
                 text = {
                     DefaultColumn(Modifier.verticalScroll(rememberScrollState())) {
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             modifier = Modifier.height(48.dp).clickable { showMem = !showMem },
-                            trailingContent = { Switch(showMem, null) },
+                            trailingContent = { Switch(showMem, null, colors = dialogSwitchColors()) },
                             headlineContent = { Text("显示「成员」标签") },
                         )
                         WeColorField(

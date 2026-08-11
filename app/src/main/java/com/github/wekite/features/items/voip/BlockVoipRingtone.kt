@@ -5,7 +5,6 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -24,6 +23,8 @@ import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
+import com.github.wekite.ui.content.dialogSwitchColors
+import com.github.wekite.ui.content.dialogListItemColors
 import com.github.wekite.ui.utils.showComposeDialog
 
 @Feature(name = "屏蔽铃声", categories = ["音视频通话"], description = "屏蔽音视频通话铃声")
@@ -63,16 +64,16 @@ object BlockVoipRingtone : ClickableFeature(), IResolveDex {
                 text = {
                     DefaultColumn {
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             modifier = Modifier.height(48.dp).clickable { outCall = !outCall },
-                            trailingContent = { Switch(checked = outCall, onCheckedChange = { outCall = it }) },
+                            trailingContent = { Switch(checked = outCall, onCheckedChange = { outCall = it }, colors = dialogSwitchColors()) },
                             supportingContent = { Text("屏蔽拨出音视频通话时的铃声") },
                             headlineContent = { Text("屏蔽呼出铃声") },
                         )
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             modifier = Modifier.height(48.dp).clickable { inCall = !inCall },
-                            trailingContent = { Switch(checked = inCall, onCheckedChange = { inCall = it }) },
+                            trailingContent = { Switch(checked = inCall, onCheckedChange = { inCall = it }, colors = dialogSwitchColors()) },
                             supportingContent = { Text("屏蔽收到音视频通话请求时的铃声") },
                             headlineContent = { Text("屏蔽呼入铃声") },
                         )

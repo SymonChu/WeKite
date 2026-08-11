@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +46,8 @@ import com.github.wekite.ui.content.currentMinuteOfDay
 import com.github.wekite.ui.content.formatDateTime
 import com.github.wekite.ui.content.formatMinuteOfDay
 import com.github.wekite.ui.content.parseDateTime
+import com.github.wekite.ui.content.dialogSwitchColors
+import com.github.wekite.ui.content.dialogListItemColors
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.showToast
@@ -229,7 +230,7 @@ internal fun HideContacts.showSchedulesDialog(context: Context) {
                         ) {
                             items(schedules, key = { it.id }) { schedule ->
                                 ListItem(
-                                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                    colors = dialogListItemColors(),
                                     modifier = Modifier.height(48.dp).clickable {
                                         showScheduleEditor(
                                             context = context,
@@ -258,6 +259,7 @@ internal fun HideContacts.showSchedulesDialog(context: Context) {
                                                             schedule.copy(enabled = enabled)
                                                     }
                                                 },
+                                                colors = dialogSwitchColors(),
                                             )
                                             IconButton(
                                                 onClick = { schedules.removeAll { it.id == schedule.id } }

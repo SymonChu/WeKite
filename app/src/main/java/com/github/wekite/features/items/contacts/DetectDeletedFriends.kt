@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Icon
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.Text
@@ -40,6 +39,7 @@ import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.IconButton
 import com.github.wekite.ui.content.TextButton
+import com.github.wekite.ui.content.dialogListItemColors
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.copyToClipboard
@@ -255,7 +255,7 @@ object DetectDeletedFriends : ClickableFeature() {
                             LazyColumn {
                                 items(abnormalFriends) { friend ->
                                     ListItem(
-                                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                        colors = dialogListItemColors(),
                                         modifier = Modifier.height(48.dp).clickable {
                                             WeApi.openContact(context, friend.wxId, WeApi.OpenContactDestination.HOMEPAGE)
                                         },
@@ -317,7 +317,7 @@ object DetectDeletedFriends : ClickableFeature() {
                                         // always offer creating a fresh, timestamped label
                                         item {
                                             ListItem(
-                                                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                                colors = dialogListItemColors(),
                                                 modifier = Modifier.height(48.dp).clickable {
                                                     phase = DialogPhase.Marking(
                                                         friends = selectPhase.friends,
@@ -339,7 +339,7 @@ object DetectDeletedFriends : ClickableFeature() {
                                         }
                                         items(labels) { label ->
                                             ListItem(
-                                                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                                                colors = dialogListItemColors(),
                                                 modifier = Modifier.height(48.dp).clickable {
                                                     phase = DialogPhase.Marking(
                                                         friends = selectPhase.friends,

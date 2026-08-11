@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -45,6 +44,8 @@ import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
+import com.github.wekite.ui.content.dialogListItemColors
+import com.github.wekite.ui.content.dialogRadioButtonColors
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.showToast
@@ -226,13 +227,13 @@ internal class MomentsAutomationSettings private constructor(
                 text = {
                     DefaultColumn {
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             modifier = Modifier.height(48.dp).clickable { showGlobalDialog(context, onSettingsChanged) },
                             headlineContent = { Text("全局设置") },
                             supportingContent = { Text("配置默认处理条件与执行方式") }
                         )
                         ListItem(
-                            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                            colors = dialogListItemColors(),
                             modifier = Modifier.height(48.dp).clickable { showContactSelector(context, onSettingsChanged) },
                             headlineContent = { Text("分联系人设置") },
                             supportingContent = { Text("为单个好友覆盖全局设置") }
@@ -567,7 +568,7 @@ internal class MomentsAutomationSettings private constructor(
             if (rules.contentType.enabled) {
                 MomentsContentType.entries.forEach { type ->
                     ListItem(
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        colors = dialogListItemColors(),
                         modifier = Modifier.height(48.dp).clickable(enabled = editable(RuleKey.CONTENT_TYPE)) {
                             val updated = rules.contentType.typeIds.toMutableSet()
                             if (!updated.add(type.typeId)) updated.remove(type.typeId)
@@ -639,10 +640,10 @@ internal class MomentsAutomationSettings private constructor(
         onClick: () -> Unit
     ) {
         ListItem(
-            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            colors = dialogListItemColors(),
             modifier = Modifier.height(48.dp).clickable(enabled = enabled, onClick = onClick),
             leadingContent = {
-                RadioButton(selected = selected, enabled = enabled, onClick = null)
+                RadioButton(selected = selected, enabled = enabled, onClick = null, colors = dialogRadioButtonColors())
             },
             headlineContent = { Text(title) },
             supportingContent = summary?.let { value -> { Text(value) } }

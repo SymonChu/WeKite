@@ -2,7 +2,6 @@ package com.github.wekite.features.items.contacts
 
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -20,6 +19,8 @@ import com.github.wekite.preferences.WePrefs
 import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.TextButton
+import com.github.wekite.ui.content.dialogSliderColors
+import com.github.wekite.ui.content.dialogListItemColors
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.HookParam
 import org.luckypray.dexkit.DexKitBridge
@@ -98,14 +99,14 @@ object RoundAvatars : ClickableFeature(), IResolveDex {
                 title = { Text("圆角头像") },
                 text = {
                     ListItem(
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                        colors = dialogListItemColors(),
                     supportingContent = {
                             Slider(
                                 value = value,
                                 onValueChange = { value = it.coerceIn(0.1f, 0.5f) },
                                 valueRange = 0.1f..0.5f,
                                 steps = 39
-                            )
+                            , colors = dialogSliderColors())
                         },
                         headlineContent = { Text("圆角弧度: %.2f".format(value)) },
                     )
