@@ -40,6 +40,9 @@ object WeLogger {
         ) : WriteTask
 
         class Flush(val completed: CountDownLatch) : WriteTask
+
+        /** Close the active writer and delete every run-log file; reports freed bytes via [result]. */
+        class ClearAll(val completed: CountDownLatch, val result: AtomicLong) : WriteTask
     }
 
     /**
@@ -106,6 +109,64 @@ object WeLogger {
         }
     }
 
+    /** Deletes every run-log file (both `wekit-` and `wekite-` prefixes) under [logsDir]. Returns freed bytes. */
+    private fun deleteAllLogFiles(): Long {
+        val dir = runCatching { (KnownPaths.moduleData / "logs").createDirsSafe() }.getOrNull() ?: return 0L
+        // 兼容旧前缀 wekit-
+        val logFileRegex = Regex("""(?:wekit|wekite)-\d{4}-\d{2}-\d{2}\.log""")
+        var deletedBytes = 0L
+        dir.toFile().listFiles()?.forEach { file ->
+            if (file.isFile && logFileRegex.matches(file.name)) {
+                deletedBytes += file.length()
+                if (file.delete()) {
+                    Log.d(TAG, "cleared log file: ${file.name}")
+                }
+            }
+        }
+        return deletedBytes
+    }
+
+    /**
+     * Permanently clears all run-log files: flushes and closes the active writer (so no fd keeps
+     * writing into an unlinked inode), then deletes every log file. The next log record will
+     * re-create today's file. Returns the number of bytes freed. Blocking, like [flush].
+     */
+    fun clearAllLogs(): Long {
+        if (Thread.currentThread() === writerThread) {
+            writeDroppedNotice(LocalDateTime.now())
+            flushWriter()
+            writer?.runCatching { close() }
+            writer = null
+            currentLogDate = null
+            return deleteAllLogFiles()
+        }
+
+        val completed = CountDownLatch(1)
+        val result = AtomicLong(0L)
+        val barrier = WriteTask.ClearAll(completed, result)
+        val enqueued = try {
+            writeQueue.offer(barrier, FLUSH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!enqueued) {
+            Log.w(TAG, "timed out while enqueueing log clear barrier")
+            return 0L
+        }
+
+        val finished = try {
+            completed.await(FLUSH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!finished) {
+            Log.w(TAG, "timed out while clearing log queue")
+        }
+        return result.get()
+    }
+
     private fun runWriter() {
         val batch = ArrayList<WriteTask>(BATCH_SIZE)
 
@@ -136,6 +197,24 @@ object WeLogger {
                         try {
                             writeDroppedNotice(LocalDateTime.now())
                             flushWriter()
+                        } finally {
+                            task.completed.countDown()
+                        }
+                        hasWrites = false
+                    }
+
+                    is WriteTask.ClearAll -> {
+                        try {
+                            writeDroppedNotice(LocalDateTime.now())
+                            flushWriter()
+                            // Close the writer first: deleting an open file would leave the fd
+                            // pointing at an unlinked inode, so subsequent writes keep going into
+                            // an invisible file and the freed space is never released until the
+                            // process exits. Closing resets the rotation state (writer + date).
+                            writer?.runCatching { close() }
+                            writer = null
+                            currentLogDate = null
+                            task.result.set(deleteAllLogFiles())
                         } finally {
                             task.completed.countDown()
                         }

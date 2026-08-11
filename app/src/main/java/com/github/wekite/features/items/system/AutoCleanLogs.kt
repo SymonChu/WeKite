@@ -127,8 +127,10 @@ object AutoCleanLogs : ClickableFeature() {
                         }
                         TextButton(onClick = {
                             scope.launch {
-                                val deletedSize = performClean()
-                                showToastSuspend(context, "日志清理完成, 共释放 ${formatBytesSize(deletedSize)}")
+                                // 手动「立即清理」= 清空全部日志 (关闭 writer 后删除所有文件),
+                                // 与自动清理(只删超过保留天数的旧日志)语义区分
+                                val deletedSize = WeLogger.clearAllLogs()
+                                showToastSuspend(context, "日志已清空, 共释放 ${formatBytesSize(deletedSize)}")
                             }
                         }) { Text("立即清理") }
                     }

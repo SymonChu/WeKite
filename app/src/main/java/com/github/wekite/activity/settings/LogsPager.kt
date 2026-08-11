@@ -355,9 +355,9 @@ fun LogsPager() {
                                         scope.launch {
                                             withContext(Dispatchers.IO) {
                                                 when (kind) {
-                                                    LogKind.RUN -> WeLogger.allLogFiles
-                                                        .forEach { runCatching { it.toFile().delete() } }
-
+                                                    // 先关闭 writer 再删文件, 否则删除后 fd 仍写入
+                                                    // 已删除的 inode (隐形文件占空间, 日志页又看不到)
+                                                    LogKind.RUN -> WeLogger.clearAllLogs()
                                                     LogKind.CRASH -> CrashLogsManager.deleteAllCrashLogs()
                                                 }
                                             }
