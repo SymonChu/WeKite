@@ -58,7 +58,8 @@ object AutoCleanLogs : ClickableFeature() {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     private val logsDir = KnownPaths.moduleData / "logs"
-    private val logFileRegex = Regex("""wekit-(\d{4}-\d{2}-\d{2})\.log""")
+    // 兼容旧前缀 wekit- (品牌统一前的残留文件), 新文件均为 wekite-
+    private val logFileRegex = Regex("""(?:wekit|wekite)-(\d{4}-\d{2}-\d{2})\.log""")
     private val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
     override fun onEnable() {

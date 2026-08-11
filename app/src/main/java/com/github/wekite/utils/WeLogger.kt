@@ -72,7 +72,7 @@ object WeLogger {
         // Clean up logs older than 3 days during rotation/initialization
         deleteOldLogs(logsDir)
 
-        val logPath = logsDir / "wekit-${dateFmt.format(logDate)}.log"
+        val logPath = logsDir / "wekite-${dateFmt.format(logDate)}.log"
 
         return runCatching {
             FileWriter(logPath.toFile(), true).also {
@@ -88,7 +88,8 @@ object WeLogger {
             val retentionMs = WePrefs.getLongOrDef("clean_logs_interval_ms", 3 * 24 * 60 * 60 * 1000L)
             val retentionDays = (retentionMs / (24 * 60 * 60 * 1000L)).coerceAtLeast(1)
             val thresholdDate = LocalDate.now().minusDays(retentionDays)
-            val logFileRegex = Regex("""wekit-(\d{4}-\d{2}-\d{2})\.log""")
+            // 兼容旧前缀 wekit- (品牌统一前的残留文件), 新文件均为 wekite-
+            val logFileRegex = Regex("""(?:wekit|wekite)-(\d{4}-\d{2}-\d{2})\.log""")
 
             logsDir.toFile().listFiles()?.forEach { file ->
                 val match = logFileRegex.matchEntire(file.name)
@@ -244,14 +245,15 @@ object WeLogger {
         get() = runCatching { (KnownPaths.moduleData / "logs").createDirsSafe() }.getOrNull()
 
     /**
-     * All run-log files (`wekit-yyyy-MM-dd.log`), newest first. Flushes the active writer first so
+     * All run-log files (`wekite-yyyy-MM-dd.log`), newest first. Flushes the active writer first so
      * the current day's file reflects the latest entries before the UI reads it.
      */
     val allLogFiles: List<java.nio.file.Path>
         get() {
             flush()
             val dir = logsDir ?: return emptyList()
-            val regex = Regex("""wekit-\d{4}-\d{2}-\d{2}\.log""")
+            // 兼容旧前缀 wekit-
+            val regex = Regex("""(?:wekit|wekite)-\d{4}-\d{2}-\d{2}\.log""")
             return runCatching {
                 dir.toFile().listFiles()
                     ?.filter { it.isFile && regex.matches(it.name) }
