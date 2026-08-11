@@ -3,6 +3,7 @@ package com.github.wekite.features.items.contacts
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -252,7 +253,7 @@ object DetectDeletedFriends : ClickableFeature() {
                             LazyColumn {
                                 items(abnormalFriends) { friend ->
                                     ListItem(
-                                        modifier = Modifier.clickable {
+                                        modifier = Modifier.height(48.dp).clickable {
                                             WeApi.openContact(context, friend.wxId, WeApi.OpenContactDestination.HOMEPAGE)
                                         },
                                         trailingContent = {
@@ -313,7 +314,7 @@ object DetectDeletedFriends : ClickableFeature() {
                                         // always offer creating a fresh, timestamped label
                                         item {
                                             ListItem(
-                                                modifier = Modifier.clickable {
+                                                modifier = Modifier.height(48.dp).clickable {
                                                     phase = DialogPhase.Marking(
                                                         friends = selectPhase.friends,
                                                         labelName = selectPhase.suggestedLabelName,
@@ -334,7 +335,7 @@ object DetectDeletedFriends : ClickableFeature() {
                                         }
                                         items(labels) { label ->
                                             ListItem(
-                                                modifier = Modifier.clickable {
+                                                modifier = Modifier.height(48.dp).clickable {
                                                     phase = DialogPhase.Marking(
                                                         friends = selectPhase.friends,
                                                         labelName = label.labelName,

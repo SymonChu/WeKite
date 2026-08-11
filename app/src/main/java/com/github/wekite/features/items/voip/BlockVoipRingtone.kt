@@ -2,6 +2,7 @@ package com.github.wekite.features.items.voip
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.Switch
@@ -11,6 +12,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.github.wekite.dexkit.abc.IResolveDex
 import com.github.wekite.dexkit.dsl.dexMethod
 import com.github.wekite.features.core.ClickableFeature
@@ -59,13 +61,13 @@ object BlockVoipRingtone : ClickableFeature(), IResolveDex {
                 text = {
                     DefaultColumn {
                         ListItem(
-                            modifier = Modifier.clickable { outCall = !outCall },
+                            modifier = Modifier.height(48.dp).clickable { outCall = !outCall },
                             trailingContent = { Switch(checked = outCall, onCheckedChange = { outCall = it }) },
                             supportingContent = { Text("屏蔽拨出音视频通话时的铃声") },
                             headlineContent = { Text("屏蔽呼出铃声") },
                         )
                         ListItem(
-                            modifier = Modifier.clickable { inCall = !inCall },
+                            modifier = Modifier.height(48.dp).clickable { inCall = !inCall },
                             trailingContent = { Switch(checked = inCall, onCheckedChange = { inCall = it }) },
                             supportingContent = { Text("屏蔽收到音视频通话请求时的铃声") },
                             headlineContent = { Text("屏蔽呼入铃声") },

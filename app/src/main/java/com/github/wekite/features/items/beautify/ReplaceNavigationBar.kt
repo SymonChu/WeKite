@@ -702,7 +702,8 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                 text = {
                     DefaultColumn {
                         ListItem(
-                            trailingContent = {
+                        modifier = Modifier.height(48.dp),
+                        trailingContent = {
                                 Switch(
                                     useFloatingInput,
                                     { useFloatingInput = it })
@@ -710,7 +711,8 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                             headlineContent = { Text("使用悬浮底栏") },
                         )
                         ListItem(
-                            trailingContent = {
+                        modifier = Modifier.height(48.dp),
+                        trailingContent = {
                                 Switch(
                                     useBackdropInput,
                                     { useBackdropInput = it })
@@ -720,7 +722,8 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         )
                         if (useBackdropInput) {
                             ListItem(
-                                supportingContent = {
+                            modifier = Modifier.height(48.dp),
+                            supportingContent = {
                                     Slider(
                                         value = blurRadiusInput,
                                         onValueChange = { blurRadiusInput = it },
@@ -735,7 +738,8 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                             )
                         }
                         ListItem(
-                            trailingContent = {
+                        modifier = Modifier.height(48.dp),
+                        trailingContent = {
                                 Switch(
                                     hideLabelsInput,
                                     { hideLabelsInput = it })
@@ -744,7 +748,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                             headlineContent = { Text("隐藏标签文本") },
                         )
                         ListItem(
-                            modifier = Modifier,
+                            modifier = Modifier.height(48.dp),
                             leadingContent = null,
                             trailingContent = {
                                 Switch(

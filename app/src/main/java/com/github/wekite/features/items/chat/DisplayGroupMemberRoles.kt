@@ -9,6 +9,7 @@ import android.text.style.ReplacementSpan
 import android.view.View
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -21,6 +22,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.core.graphics.toColorInt
 import dev.ujhhgtg.reflekt.reflekt
 import com.github.wekite.dexkit.abc.IResolveDex
@@ -102,7 +104,7 @@ object DisplayGroupMemberRoles : ClickableFeature(), IResolveDex,
                 text = {
                     DefaultColumn(Modifier.verticalScroll(rememberScrollState())) {
                         ListItem(
-                            modifier = Modifier.clickable { showMem = !showMem },
+                            modifier = Modifier.height(48.dp).clickable { showMem = !showMem },
                             trailingContent = { Switch(showMem, null) },
                             headlineContent = { Text("显示「成员」标签") },
                         )

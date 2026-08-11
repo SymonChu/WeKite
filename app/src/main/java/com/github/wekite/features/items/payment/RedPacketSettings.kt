@@ -3,6 +3,7 @@ package com.github.wekite.features.items.payment
 import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
@@ -169,12 +170,12 @@ internal object RedPacketSettings {
                 text = {
                     DefaultColumn {
                         ListItem(
-                            modifier = Modifier.clickable { showGlobalDialog(context) },
+                            modifier = Modifier.height(48.dp).clickable { showGlobalDialog(context) },
                             headlineContent = { Text("全局设置") },
                             supportingContent = { Text("配置默认抢红包条件与抢到后的操作") }
                         )
                         ListItem(
-                            modifier = Modifier.clickable { showContactSelector(context) },
+                            modifier = Modifier.height(48.dp).clickable { showContactSelector(context) },
                             headlineContent = { Text("分联系人设置") },
                             supportingContent = { Text("为联系人、群聊或群成员覆盖全局设置") }
                         )
@@ -278,7 +279,7 @@ internal object RedPacketSettings {
                 text = {
                     DefaultColumn {
                         ListItem(
-                            modifier = Modifier.clickable {
+                            modifier = Modifier.height(48.dp).clickable {
                                 showOverrideDialog(
                                     context = context,
                                     title = "群聊全局设置",
@@ -298,7 +299,7 @@ internal object RedPacketSettings {
                             }
                         )
                         ListItem(
-                            modifier = Modifier.clickable {
+                            modifier = Modifier.height(48.dp).clickable {
                                 showGroupMemberSelector(context, groupId) {
                                     revision++
                                     onUpdated()

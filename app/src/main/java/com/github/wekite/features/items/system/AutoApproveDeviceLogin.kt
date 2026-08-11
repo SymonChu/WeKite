@@ -5,6 +5,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.CheckBox
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
@@ -15,6 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import com.tencent.mm.plugin.webwx.ui.ExtDeviceWXLoginUI
 import dev.ujhhgtg.reflekt.reflekt
@@ -94,7 +96,7 @@ object AutoApproveDeviceLogin : ClickableFeature() {
                         var autoLoginDeviceInput by remember { mutableStateOf(autoLoginDevice) }
 
                         ListItem(
-                            modifier = Modifier.clickable {
+                            modifier = Modifier.height(48.dp).clickable {
                                 syncMessagesInput = !syncMessagesInput
                                 syncMessages = syncMessagesInput
                             },
@@ -107,7 +109,7 @@ object AutoApproveDeviceLogin : ClickableFeature() {
                         )
 
                         ListItem(
-                            modifier = Modifier.clickable {
+                            modifier = Modifier.height(48.dp).clickable {
                                 autoLoginDeviceInput = !autoLoginDeviceInput
                                 autoLoginDevice = autoLoginDeviceInput
                             },

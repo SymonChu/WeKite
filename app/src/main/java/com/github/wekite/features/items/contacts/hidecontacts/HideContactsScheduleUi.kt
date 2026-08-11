@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -226,7 +227,7 @@ internal fun HideContacts.showSchedulesDialog(context: Context) {
                         ) {
                             items(schedules, key = { it.id }) { schedule ->
                                 ListItem(
-                                    modifier = Modifier.clickable {
+                                    modifier = Modifier.height(48.dp).clickable {
                                         showScheduleEditor(
                                             context = context,
                                             title = "编辑定时",

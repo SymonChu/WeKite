@@ -8,6 +8,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.height
 import com.github.wekite.dexkit.abc.IResolveDex
 import com.github.wekite.dexkit.dsl.dexConstructor
 import com.github.wekite.dexkit.dsl.dexMethod
@@ -95,7 +98,8 @@ object RoundAvatars : ClickableFeature(), IResolveDex {
                 title = { Text("圆角头像") },
                 text = {
                     ListItem(
-                        supportingContent = {
+                    modifier = Modifier.height(48.dp),
+                    supportingContent = {
                             Slider(
                                 value = value,
                                 onValueChange = { value = it.coerceIn(0.1f, 0.5f) },

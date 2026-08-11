@@ -6,6 +6,7 @@ import android.view.View
 import android.widget.PopupWindow
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -382,7 +383,7 @@ object WeChatMessageContextMenuApi : ApiFeature(), IResolveDex {
                     ) {
                         items(items) { item ->
                             ListItem(
-                                modifier = Modifier.clickable {
+                                modifier = Modifier.height(48.dp).clickable {
                                     onDismiss()
                                     try {
                                         item.onClick(view, chattingContext, msgInfo)
@@ -497,7 +498,7 @@ object WeChatMessageContextMenuApi : ApiFeature(), IResolveDex {
     @Composable
     private fun MultiSelectMenuRow(row: MultiSelectRow, onDismiss: () -> Unit) {
         ListItem(
-            modifier = Modifier.clickable {
+            modifier = Modifier.height(48.dp).clickable {
                 onDismiss()
                 try {
                     row.onClick()

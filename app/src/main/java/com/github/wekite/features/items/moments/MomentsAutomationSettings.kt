@@ -3,6 +3,7 @@ package com.github.wekite.features.items.moments
 import android.content.Context
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -223,12 +224,12 @@ internal class MomentsAutomationSettings private constructor(
                 text = {
                     DefaultColumn {
                         ListItem(
-                            modifier = Modifier.clickable { showGlobalDialog(context, onSettingsChanged) },
+                            modifier = Modifier.height(48.dp).clickable { showGlobalDialog(context, onSettingsChanged) },
                             headlineContent = { Text("全局设置") },
                             supportingContent = { Text("配置默认处理条件与执行方式") }
                         )
                         ListItem(
-                            modifier = Modifier.clickable { showContactSelector(context, onSettingsChanged) },
+                            modifier = Modifier.height(48.dp).clickable { showContactSelector(context, onSettingsChanged) },
                             headlineContent = { Text("分联系人设置") },
                             supportingContent = { Text("为单个好友覆盖全局设置") }
                         )
@@ -562,7 +563,7 @@ internal class MomentsAutomationSettings private constructor(
             if (rules.contentType.enabled) {
                 MomentsContentType.entries.forEach { type ->
                     ListItem(
-                        modifier = Modifier.clickable(enabled = editable(RuleKey.CONTENT_TYPE)) {
+                        modifier = Modifier.height(48.dp).clickable(enabled = editable(RuleKey.CONTENT_TYPE)) {
                             val updated = rules.contentType.typeIds.toMutableSet()
                             if (!updated.add(type.typeId)) updated.remove(type.typeId)
                             onChange(
@@ -633,7 +634,7 @@ internal class MomentsAutomationSettings private constructor(
         onClick: () -> Unit
     ) {
         ListItem(
-            modifier = Modifier.clickable(enabled = enabled, onClick = onClick),
+            modifier = Modifier.height(48.dp).clickable(enabled = enabled, onClick = onClick),
             leadingContent = {
                 RadioButton(selected = selected, enabled = enabled, onClick = null)
             },

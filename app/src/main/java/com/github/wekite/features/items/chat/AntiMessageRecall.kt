@@ -3,6 +3,7 @@ package com.github.wekite.features.items.chat
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -12,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.github.wekite.features.api.core.WeDatabaseApi
 import com.github.wekite.features.api.core.WeMessageApi
 import com.github.wekite.features.api.core.WeXmlParserApi
@@ -112,7 +114,7 @@ object AntiMessageRecall : ClickableFeature(), WeXmlParserApi.IAfterParseListene
                 text = {
                     DefaultColumn {
                         ListItem(
-                            modifier = Modifier.clickable { recallOutgoingInput = !recallOutgoingInput },
+                            modifier = Modifier.height(48.dp).clickable { recallOutgoingInput = !recallOutgoingInput },
                             trailingContent = {
                                 Switch(checked = recallOutgoingInput, onCheckedChange = null)
                             },

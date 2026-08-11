@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Icon
@@ -12,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
@@ -112,7 +114,7 @@ object WeChatInputBarMenuApi : ApiFeature(), IResolveDex {
         onDismiss: () -> Unit
     ) {
         ListItem(
-            modifier = Modifier.combinedClickable(
+            modifier = Modifier.height(48.dp).combinedClickable(
                 onClick = {
                     onDismiss()
                     try {
