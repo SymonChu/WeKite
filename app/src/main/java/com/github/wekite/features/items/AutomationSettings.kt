@@ -263,9 +263,13 @@ internal fun AutomationContactSettingsSelector(
         } else null,
         confirmButtonOverride = if (multiSelect) {
             {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Button(
                         enabled = selectedWxIds.isNotEmpty(),
+                        modifier = Modifier.weight(1f),
                         onClick = {
                             onBatchSkip(selectedWxIds)
                             selectedWxIds = emptySet()
@@ -273,11 +277,12 @@ internal fun AutomationContactSettingsSelector(
                     ) { Text("设为跳过") }
                     Button(
                         enabled = selectedWxIds.isNotEmpty(),
+                        modifier = Modifier.weight(1f),
                         onClick = {
                             onBatchReset(selectedWxIds)
                             selectedWxIds = emptySet()
                         }
-                    ) { Text("恢复跟随全局") }
+                    ) { Text("恢复全局") }
                 }
             }
         } else null

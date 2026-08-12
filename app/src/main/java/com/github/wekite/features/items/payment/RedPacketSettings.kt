@@ -234,6 +234,7 @@ internal object RedPacketSettings {
                 title = "分联系人设置",
                 contacts = contacts,
                 selectionKey = revision,
+                enableMultiSelect = true,
                 subtitle = { contact ->
                     val count = contactOverrides(contact.wxId).overriddenCount()
                     when {
@@ -264,6 +265,18 @@ internal object RedPacketSettings {
                             }
                         )
                     }
+                },
+                onBatchSkip = { wxIds ->
+                    batchUpdateContactOverrides(wxIds) { overrides ->
+                        overrides.copy(grab = AutomationToggleRule(enabled = false))
+                    }
+                    revision++
+                    showToast("已设为跳过 ${wxIds.size} 个联系人")
+                },
+                onBatchReset = { wxIds ->
+                    batchRemoveContactOverrides(wxIds)
+                    revision++
+                    showToast("已恢复全局 ${wxIds.size} 个联系人")
                 }
             )
         }
@@ -710,6 +723,30 @@ internal object RedPacketSettings {
         updateConfig { config ->
             val contacts = config.contacts.toMutableMap()
             if (overrides.isEmpty()) contacts.remove(wxId) else contacts[wxId] = overrides
+            config.copy(contacts = contacts)
+        }
+    }
+
+    /** 批量应用联系人覆盖 (多选「设为跳过」), 空覆盖自动移除条目 */
+    private fun batchUpdateContactOverrides(
+        wxIds: Set<String>,
+        transform: (RuleOverrides) -> RuleOverrides
+    ) {
+        updateConfig { config ->
+            val contacts = config.contacts.toMutableMap()
+            wxIds.forEach { wxId ->
+                val updated = transform(contacts[wxId] ?: RuleOverrides())
+                if (updated.isEmpty()) contacts.remove(wxId) else contacts[wxId] = updated
+            }
+            config.copy(contacts = contacts)
+        }
+    }
+
+    /** 批量删除联系人覆盖 (多选「恢复全局」) */
+    private fun batchRemoveContactOverrides(wxIds: Set<String>) {
+        updateConfig { config ->
+            val contacts = config.contacts.toMutableMap()
+            wxIds.forEach(contacts::remove)
             config.copy(contacts = contacts)
         }
     }

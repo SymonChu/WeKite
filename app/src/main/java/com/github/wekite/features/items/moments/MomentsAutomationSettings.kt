@@ -329,7 +329,7 @@ internal class MomentsAutomationSettings private constructor(
                     }
                     revision++
                     onSettingsChanged()
-                    showToast("已恢复跟随全局 ${wxIds.size} 个联系人")
+                    showToast("已恢复全局 ${wxIds.size} 个联系人")
                 }
             )
         }
