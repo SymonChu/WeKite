@@ -51,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.composables.icons.materialsymbols.MaterialSymbols
@@ -125,7 +126,9 @@ fun BaseContactSelector(
     onItemClick: (IWeContact) -> Unit,
     onSelectAll: ((List<IWeContact>) -> Unit)? = null,
     onDeselectAll: ((List<IWeContact>) -> Unit)? = null,
-    onInvertSelection: ((List<IWeContact>) -> Unit)? = null
+    onInvertSelection: ((List<IWeContact>) -> Unit)? = null,
+    extraTitleAction: (@Composable () -> Unit)? = null,
+    confirmButtonOverride: (@Composable () -> Unit)? = null
 ) {
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
@@ -396,7 +399,23 @@ fun BaseContactSelector(
         modifier = modifier
             .fillMaxWidth()
             .fillMaxHeight(),
-        title = { Text(title) },
+        title = {
+            if (extraTitleAction != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        title,
+                        modifier = Modifier.weight(1f),
+                        textAlign = TextAlign.Start
+                    )
+                    extraTitleAction()
+                }
+            } else {
+                Text(title)
+            }
+        },
         text = {
             Column(modifier = Modifier.fillMaxSize()) {
                 Row(
@@ -750,7 +769,7 @@ fun BaseContactSelector(
             TextButton(onDismiss) { Text(dismissButtonText) }
         },
         confirmButton = if (showConfirmButton) {
-            {
+            confirmButtonOverride ?: {
                 Button(
                     onClick = onConfirm,
                     enabled = confirmButtonEnabled

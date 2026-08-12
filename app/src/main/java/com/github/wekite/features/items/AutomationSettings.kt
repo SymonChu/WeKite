@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -77,12 +78,13 @@ internal enum class AutomationKeywordMode {
 internal data class AutomationKeywordRule(
     val enabled: Boolean = false,
     val mode: AutomationKeywordMode = AutomationKeywordMode.STRING_LIST,
+    val exclude: Boolean = false,
     val strings: List<String> = emptyList(),
     val regex: String = ""
 ) {
     fun matches(text: String): Boolean {
         if (!enabled) return true
-        return when (mode) {
+        val matched = when (mode) {
             AutomationKeywordMode.STRING_LIST -> strings
                 .asSequence()
                 .map(String::trim)
@@ -93,6 +95,8 @@ internal data class AutomationKeywordRule(
                 Regex(regex).containsMatchIn(text)
             }.getOrDefault(false)
         }
+        // exclude=true: 命中关键词的内容被跳过; exclude=false: 仅命中关键词的内容被处理
+        return if (exclude) !matched else matched
     }
 
     fun validationError(label: String): String? {
@@ -173,9 +177,14 @@ internal fun AutomationContactSettingsSelector(
     subtitle: (IWeContact) -> String,
     isConfigured: (IWeContact) -> Boolean,
     onDismiss: () -> Unit,
-    onOpen: (IWeContact) -> Unit
+    onOpen: (IWeContact) -> Unit,
+    enableMultiSelect: Boolean = false,
+    onBatchSkip: (Set<String>) -> Unit = {},
+    onBatchReset: (Set<String>) -> Unit = {}
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    var multiSelect by remember { mutableStateOf(false) }
+    var selectedWxIds by remember { mutableStateOf(emptySet<String>()) }
     val chinaCollator = remember { Collator.getInstance(Locale.CHINA) }
     val filteredContacts = remember(searchQuery, contacts, chinaCollator) {
         contacts.filter {
@@ -189,6 +198,11 @@ internal fun AutomationContactSettingsSelector(
         )
     }
 
+    fun toggleMultiSelect() {
+        multiSelect = !multiSelect
+        if (!multiSelect) selectedWxIds = emptySet()
+    }
+
     BaseContactSelector(
         title = title,
         searchQuery = searchQuery,
@@ -197,17 +211,76 @@ internal fun AutomationContactSettingsSelector(
         allContacts = contacts,
         confirmButtonText = "",
         confirmButtonEnabled = false,
-        showConfirmButton = false,
+        showConfirmButton = multiSelect,
         dismissButtonText = "关闭",
         onDismiss = onDismiss,
         onConfirm = {},
-        selectionKey = selectionKey,
-        isSelected = isConfigured,
+        selectionKey = if (multiSelect) selectedWxIds else selectionKey,
+        isSelected = if (multiSelect) {
+            { it.wxId in selectedWxIds }
+        } else {
+            isConfigured
+        },
         subtitleProvider = subtitle,
-        trailingControl = { contact ->
+        trailingControl = if (multiSelect) null else { contact ->
             TextButton(onClick = { onOpen(contact) }) { Text("设置") }
         },
-        onItemClick = onOpen
+        leadingControl = if (multiSelect) { contact ->
+            Checkbox(
+                checked = contact.wxId in selectedWxIds,
+                onCheckedChange = null
+            )
+        } else null,
+        onItemClick = if (multiSelect) { contact ->
+            selectedWxIds = if (contact.wxId in selectedWxIds) {
+                selectedWxIds - contact.wxId
+            } else {
+                selectedWxIds + contact.wxId
+            }
+        } else {
+            onOpen
+        },
+        onSelectAll = if (multiSelect) { displayed ->
+            selectedWxIds = selectedWxIds + displayed.map { it.wxId }
+        } else null,
+        onDeselectAll = if (multiSelect) { displayed ->
+            selectedWxIds = selectedWxIds - displayed.map { it.wxId }.toSet()
+        } else null,
+        onInvertSelection = if (multiSelect) { displayed ->
+            val displayedWxIds = displayed.map { it.wxId }.toSet()
+            val newSelection = selectedWxIds.toMutableSet()
+            for (wxId in displayedWxIds) {
+                if (wxId in newSelection) newSelection.remove(wxId) else newSelection.add(wxId)
+            }
+            selectedWxIds = newSelection
+        } else null,
+        extraTitleAction = if (enableMultiSelect) {
+            {
+                TextButton(onClick = ::toggleMultiSelect) {
+                    Text(if (multiSelect) "完成" else "多选")
+                }
+            }
+        } else null,
+        confirmButtonOverride = if (multiSelect) {
+            {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        enabled = selectedWxIds.isNotEmpty(),
+                        onClick = {
+                            onBatchSkip(selectedWxIds)
+                            selectedWxIds = emptySet()
+                        }
+                    ) { Text("设为跳过") }
+                    Button(
+                        enabled = selectedWxIds.isNotEmpty(),
+                        onClick = {
+                            onBatchReset(selectedWxIds)
+                            selectedWxIds = emptySet()
+                        }
+                    ) { Text("恢复跟随全局") }
+                }
+            }
+        } else null
     )
 }
 
@@ -285,6 +358,22 @@ internal fun AutomationKeywordControls(
     onChange: (AutomationKeywordRule) -> Unit
 ) {
     var pendingKeyword by remember { mutableStateOf("") }
+    SingleChoiceSegmentedButtonRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+    ) {
+        listOf(false to "包含匹配", true to "排除匹配").forEachIndexed { index, (exclude, label) ->
+            SegmentedButton(
+                selected = rule.exclude == exclude,
+                enabled = editable,
+                onClick = { onChange(rule.copy(exclude = exclude)) },
+                shape = SegmentedButtonDefaults.itemShape(index, 2)
+            ) {
+                Text(label)
+            }
+        }
+    }
     SingleChoiceSegmentedButtonRow(
         modifier = Modifier
             .fillMaxWidth()
@@ -383,9 +472,10 @@ internal fun formatAutomationMinute(value: Int): String = formatMinuteOfDay(valu
 
 internal fun automationKeywordSummary(rule: AutomationKeywordRule, unrestrictedText: String): String {
     if (!rule.enabled) return unrestrictedText
+    val scope = if (rule.exclude) "跳过命中" else "仅处理命中"
     return when (rule.mode) {
-        AutomationKeywordMode.STRING_LIST -> "匹配字符串列表中的任意一项 (${rule.strings.size})"
-        AutomationKeywordMode.REGEX -> if (rule.regex.isBlank()) "尚未填写正则表达式" else "匹配单个正则表达式"
+        AutomationKeywordMode.STRING_LIST -> "${scope}字符串列表的内容 (${rule.strings.size})"
+        AutomationKeywordMode.REGEX -> if (rule.regex.isBlank()) "尚未填写正则表达式" else "${scope}正则的内容"
     }
 }
 

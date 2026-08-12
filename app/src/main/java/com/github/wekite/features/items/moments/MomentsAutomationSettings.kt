@@ -290,6 +290,7 @@ internal class MomentsAutomationSettings private constructor(
                 title = "分联系人设置",
                 contacts = contacts,
                 selectionKey = revision,
+                enableMultiSelect = true,
                 subtitle = { contact ->
                     val count = contactOverrides(contact.wxId).overriddenCount(includeAction)
                     if (count == 0) "跟随全局设置" else "已覆盖 $count 项"
@@ -310,6 +311,24 @@ internal class MomentsAutomationSettings private constructor(
                             onSettingsChanged()
                         }
                     )
+                },
+                onBatchSkip = { wxIds ->
+                    batchUpdateOverrides(wxIds) { overrides ->
+                        overrides.copy(process = AutomationToggleRule(enabled = false))
+                    }
+                    revision++
+                    onSettingsChanged()
+                    showToast("已设为跳过 ${wxIds.size} 个联系人")
+                },
+                onBatchReset = { wxIds ->
+                    store.update { config ->
+                        val contacts = config.contacts.toMutableMap()
+                        wxIds.forEach(contacts::remove)
+                        config.copy(version = CONFIG_VERSION, contacts = contacts)
+                    }
+                    revision++
+                    onSettingsChanged()
+                    showToast("已恢复跟随全局 ${wxIds.size} 个联系人")
                 }
             )
         }
@@ -732,6 +751,20 @@ internal class MomentsAutomationSettings private constructor(
         store.update { config ->
             val contacts = config.contacts.toMutableMap()
             if (overrides.isEmpty(includeAction)) contacts.remove(wxId) else contacts[wxId] = overrides
+            config.copy(version = CONFIG_VERSION, contacts = contacts)
+        }
+    }
+
+    private fun batchUpdateOverrides(
+        wxIds: Set<String>,
+        transform: (MomentAutomationOverrides) -> MomentAutomationOverrides
+    ) {
+        store.update { config ->
+            val contacts = config.contacts.toMutableMap()
+            wxIds.forEach { wxId ->
+                val updated = transform(contacts[wxId] ?: MomentAutomationOverrides())
+                if (updated.isEmpty(includeAction)) contacts.remove(wxId) else contacts[wxId] = updated
+            }
             config.copy(version = CONFIG_VERSION, contacts = contacts)
         }
     }
