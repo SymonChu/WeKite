@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.github.wekite.features.api.core.WeApi
 import com.github.wekite.features.api.core.WeDatabaseApi
 import com.github.wekite.features.api.core.models.IWeContact
 import com.github.wekite.features.api.ui.WeMomentsApi
@@ -739,9 +740,19 @@ internal class MomentsAutomationSettings private constructor(
     }
 
     private fun loadContacts(): List<IWeContact> = runCatching {
-        WeDatabaseApi.getFriends().distinctBy(IWeContact::wxId)
+        val selfWxId = WeApi.selfWxId
+        WeDatabaseApi.getContacts()
+            .distinctBy(IWeContact::wxId)
+            .filter { contact ->
+                val wxId = contact.wxId
+                wxId.isNotEmpty() &&
+                    wxId != selfWxId &&
+                    !wxId.endsWith("@chatroom") &&
+                    (contact.type and 8) == 0 && // 公众号
+                    (contact.type and 1) != 0    // 个人联系人(含企业微信联系人 type&32)
+            }
     }.onFailure {
-        WeLogger.e(logTag, "failed to load friends", it)
+        WeLogger.e(logTag, "failed to load contacts", it)
     }.getOrDefault(emptyList())
 
     private fun contactOverrides(wxId: String): MomentAutomationOverrides =
