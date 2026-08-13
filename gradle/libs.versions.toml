@@ -32,7 +32,7 @@ biometric = "1.2.0-alpha05"
 browser = "1.10.0"
 miuix = "0.9.3"
 materialkolor = "5.0.0"
-ktor = "3.5.1"
+ktor = "3.5.2"
 dexmaker = "2.28.6"
 
 # noinspection UnusedVersionCatalogEntry
