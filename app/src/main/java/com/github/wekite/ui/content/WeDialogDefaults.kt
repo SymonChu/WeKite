@@ -55,3 +55,16 @@ fun dialogRadioButtonColors(): RadioButtonColors {
         unselectedColor = if (dark) Color(0xFFAAAAAA) else Color(0xFF757575),
     )
 }
+
+/**
+ * 弹窗内可点击的占位符小标签 (chip) 配色: 中性灰底 + 纯黑/白字。
+ * M3 的 secondaryContainer / onSecondaryContainer 从模块蓝 seed 生成后带蓝调,
+ * 与弹窗"中性灰未选中控件 + 纯黑白文字"的统一标准冲突 (v1.45 起)。
+ */
+@Composable
+fun dialogChipColors(): Pair<Color, Color> {
+    val dark = ThemeSettings.themeMode.resolve()
+    val container = if (dark) Color(0xFF3A3A3A) else Color(0xFFE2E2E2)
+    val content = if (dark) Color.White else Color.Black
+    return container to content
+}

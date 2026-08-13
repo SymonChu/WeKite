@@ -48,6 +48,9 @@ import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.content.WeColorField
+import com.github.wekite.ui.content.dialogChipColors
+import com.github.wekite.ui.content.dialogListItemColors
+import com.github.wekite.ui.content.dialogSwitchColors
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.HookParam
 import com.github.wekite.utils.android.isDarkMode
@@ -280,18 +283,19 @@ object MessageTimeEnhancements : ClickableFeature(),
                                 $$"$msgSvrId",
                                 $$"$mentionedUsers"
                             )
+                            val (chipBg, chipFg) = dialogChipColors()
                             placeholders.forEach { ph ->
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(8.dp))
-                                        .background(MaterialTheme.colorScheme.secondaryContainer)
+                                        .background(chipBg)
                                         .clickable { insertPlaceholder(ph) }
                                         .padding(horizontal = 8.dp, vertical = 4.dp)
                                 ) {
                                     Text(
                                         text = ph,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        color = chipFg
                                     )
                                 }
                             }
@@ -327,26 +331,30 @@ object MessageTimeEnhancements : ClickableFeature(),
                         )
 
                         ListItem(
+                            colors = dialogListItemColors(),
                             modifier = Modifier.clickable {
                                 isAlwaysCenteredInput = !isAlwaysCenteredInput
                             },
                             trailingContent = {
                                 Switch(
                                     checked = isAlwaysCenteredInput,
-                                    onCheckedChange = null
+                                    onCheckedChange = null,
+                                    colors = dialogSwitchColors()
                                 )
                             },
                             supportingContent = { Text("时间是否始终居中, 不根据发送方居左居右") },
                             headlineContent = { Text("时间居中显示") },
                         )
                         ListItem(
+                            colors = dialogListItemColors(),
                             modifier = Modifier.clickable {
                                 isAlwaysVisibleInput = !isAlwaysVisibleInput
                             },
                             trailingContent = {
                                 Switch(
                                     checked = isAlwaysVisibleInput,
-                                    onCheckedChange = null
+                                    onCheckedChange = null,
+                                    colors = dialogSwitchColors()
                                 )
                             },
                             supportingContent = { Text("是否强制显示每条消息的时间") },

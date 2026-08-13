@@ -35,6 +35,9 @@ import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
+import com.github.wekite.ui.content.dialogListItemColors
+import com.github.wekite.ui.content.dialogSliderColors
+import com.github.wekite.ui.content.dialogSwitchColors
 import com.github.wekite.ui.utils.findViewWhich
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
@@ -60,6 +63,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     private const val DEFAULT_SIDE_MARGIN = 12
     private const val DEFAULT_BOTTOM_GAP = 4
     private const val DEFAULT_ELEVATION = 4
+    private const val DEFAULT_BG_ALPHA = 100
 
     private const val MIN_CORNER_RADIUS = 0
     private const val MAX_CORNER_RADIUS = 32
@@ -69,6 +73,8 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     private const val MAX_BOTTOM_GAP = 24
     private const val MIN_ELEVATION = 0
     private const val MAX_ELEVATION = 16
+    private const val MIN_BG_ALPHA = 0
+    private const val MAX_BG_ALPHA = 100
 
     /** 键盘与面板同时展开时, 至少给会话内容留出的高度。 */
     private const val PANEL_TOP_RESERVE_DP = 120
@@ -109,6 +115,13 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     private var sideMarginDp by prefOption("floating_chat_footer_side_margin", DEFAULT_SIDE_MARGIN)
     private var bottomGapDp by prefOption("floating_chat_footer_bottom_gap", DEFAULT_BOTTOM_GAP)
     private var elevationDp by prefOption("floating_chat_footer_elevation", DEFAULT_ELEVATION)
+
+    /**
+     * 悬浮卡片背景透明度 (0~100)。0 = 完全透明: 卡片自身不再绘制底栏背景,
+     * 直接透出会话页背景 —— 与「悬浮底栏」的透明可调一致; 100 = 不透明, 保持微信原底栏底色。
+     * 对 footer 的 background 生效 (不含表情/工具面板自己的背景)。
+     */
+    private var backgroundAlpha by prefOption("floating_chat_footer_bg_alpha", DEFAULT_BG_ALPHA)
 
     /**
      * Locates ChatFooter.refreshBottomHeight() by the unique log string WeChat emits at the
@@ -226,8 +239,13 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
 
         // 微信在这里写入 bottomMargin = -面板高, 我们在它之后覆盖掉;
         // 顺便重算面板高度 —— 这里同样会把容器高度改回微信那套值。
+        // 键盘弹出/收起、面板开合都会走到这里 —— 顺带把悬浮样式整体重贴一遍,
+        // 防止微信的布局写入把边距/圆角/透明度冲掉, 保证弹输入法后仍是悬浮卡片。
         methodRefreshBottomHeight.hookAfter {
             val footer = thisObject as ChatFooter
+            applySideMargins(footer)
+            applyDrawingStyle(footer)
+            footer.invalidateOutline()
             if (!movePanelAbove) {
                 applyBottomGap(footer)
                 return@hookAfter
@@ -502,7 +520,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             return null
         }
 
-    /** 设置 outline / 圆角裁剪 / 阴影 —— 全是不依赖 LayoutParams 的绘制属性, 可重复调用。 */
+    /** 设置 outline / 圆角裁剪 / 阴影 / 背景透明度 —— 全是不依赖 LayoutParams 的绘制属性, 可重复调用。 */
     private fun applyDrawingStyle(footer: ChatFooter) {
         val density = footer.resources.displayMetrics.density
         footer.outlineProvider = object : ViewOutlineProvider() {
@@ -514,8 +532,11 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         }
         footer.clipToOutline = true
         footer.elevation = elevationDp * density
+        // 背景透明: 先 mutate 保证不污染共享 drawable, 再把改动挂回 view
+        footer.background = footer.background?.mutate()
+        footer.background?.alpha = (backgroundAlpha * 255 / 100).coerceIn(0, 255)
         if (!movePanelAbove) trackOutlineWhileScrolling(footer)
-        WeLogger.d(TAG, "applied drawing style: corner=${cornerRadiusDp}dp elev=${elevationDp}dp")
+        WeLogger.d(TAG, "applied drawing style: corner=${cornerRadiusDp}dp elev=${elevationDp}dp alpha=$backgroundAlpha")
     }
 
     /**
@@ -653,6 +674,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             var sideInput by remember { mutableFloatStateOf(sideMarginDp.toFloat()) }
             var gapInput by remember { mutableFloatStateOf(bottomGapDp.toFloat()) }
             var elevInput by remember { mutableFloatStateOf(elevationDp.toFloat()) }
+            var bgAlphaInput by remember { mutableFloatStateOf(backgroundAlpha.toFloat()) }
             var panelAboveInput by remember { mutableStateOf(movePanelAbove) }
 
             AlertDialogContent(
@@ -660,6 +682,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                 text = {
                     DefaultColumn {
                         ListItem(
+                            colors = dialogListItemColors(),
                             headlineContent = { Text("菜单显示在输入框上方") },
                             supportingContent = {
                                 Text("表情与工具菜单从输入框上沿向上展开, 输入框位置不动; 关闭则维持微信原样")
@@ -667,51 +690,73 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                             trailingContent = {
                                 Switch(
                                     checked = panelAboveInput,
-                                    onCheckedChange = { panelAboveInput = it }
+                                    onCheckedChange = { panelAboveInput = it },
+                                    colors = dialogSwitchColors()
                                 )
                             }
                         )
                         ListItem(
+                            colors = dialogListItemColors(),
                             headlineContent = { Text("圆角半径: ${cornerInput.roundToInt()} dp") },
                             supportingContent = {
                                 Slider(
                                     value = cornerInput,
                                     onValueChange = { cornerInput = it },
                                     valueRange = MIN_CORNER_RADIUS.toFloat()..MAX_CORNER_RADIUS.toFloat(),
-                                    steps = MAX_CORNER_RADIUS - MIN_CORNER_RADIUS - 1
+                                    steps = MAX_CORNER_RADIUS - MIN_CORNER_RADIUS - 1,
+                                    colors = dialogSliderColors()
                                 )
                             }
                         )
                         ListItem(
+                            colors = dialogListItemColors(),
                             headlineContent = { Text("侧边距: ${sideInput.roundToInt()} dp") },
                             supportingContent = {
                                 Slider(
                                     value = sideInput,
                                     onValueChange = { sideInput = it },
                                     valueRange = MIN_SIDE_MARGIN.toFloat()..MAX_SIDE_MARGIN.toFloat(),
-                                    steps = MAX_SIDE_MARGIN - MIN_SIDE_MARGIN - 1
+                                    steps = MAX_SIDE_MARGIN - MIN_SIDE_MARGIN - 1,
+                                    colors = dialogSliderColors()
                                 )
                             }
                         )
                         ListItem(
+                            colors = dialogListItemColors(),
                             headlineContent = { Text("底部间距: ${gapInput.roundToInt()} dp") },
                             supportingContent = {
                                 Slider(
                                     value = gapInput,
                                     onValueChange = { gapInput = it },
                                     valueRange = MIN_BOTTOM_GAP.toFloat()..MAX_BOTTOM_GAP.toFloat(),
-                                    steps = MAX_BOTTOM_GAP - MIN_BOTTOM_GAP - 1
+                                    steps = MAX_BOTTOM_GAP - MIN_BOTTOM_GAP - 1,
+                                    colors = dialogSliderColors()
                                 )
                             }
                         )
                         ListItem(
+                            colors = dialogListItemColors(),
                             headlineContent = { Text("阴影强度: ${elevInput.roundToInt()} dp") },
                             supportingContent = {
                                 Slider(
                                     value = elevInput,
                                     onValueChange = { elevInput = it },
                                     valueRange = MIN_ELEVATION.toFloat()..MAX_ELEVATION.toFloat(),
-                                    steps = MAX_ELEVATION - MIN_ELEVATION - 1
+                                    steps = MAX_ELEVATION - MIN_ELEVATION - 1,
+                                    colors = dialogSliderColors()
+                                )
+                            }
+                        )
+                        ListItem(
+                            colors = dialogListItemColors(),
+                            headlineContent = { Text("背景透明度: ${bgAlphaInput.roundToInt()}%") },
+                            supportingContent = {
+                                Slider(
+                                    value = bgAlphaInput,
+                                    onValueChange = { bgAlphaInput = it },
+                                    valueRange = MIN_BG_ALPHA.toFloat()..MAX_BG_ALPHA.toFloat(),
+                                    steps = MAX_BG_ALPHA - MIN_BG_ALPHA - 1,
+                                    colors = dialogSliderColors()
                                 )
                             }
                         )
@@ -725,6 +770,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                         sideMarginDp = sideInput.roundToInt()
                         bottomGapDp = gapInput.roundToInt()
                         elevationDp = elevInput.roundToInt()
+                        backgroundAlpha = bgAlphaInput.roundToInt()
                         onDismiss()
                     }) { Text("确定") }
                 }
