@@ -29,6 +29,8 @@
 * [显示群成员实名尾字](features/chat/display-group-member-real-names-last-char.md)
 * [显示群成员身份](features/chat/display-group-member-roles.md)
 * [显示消息详情](features/chat/display-message-details.md)
+* [消息时间增强](features/chat/message-time-enhancements.md)
+* [悬浮输入框](features/chat/floating-chat-footer.md)
 * [显示消息时间](liao-tian/xian-shi-xiao-xi-shi-jian.md)
 * [表情游戏控制](features/chat/emoji-game-control.md)
 * [爆破群成员实名首字](features/chat/exploit-group-member-real-names-first-char.md)
