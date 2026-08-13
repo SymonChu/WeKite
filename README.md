@@ -2,7 +2,7 @@
 
 让微✉️更好用的轻量级增强模块 — 支持 LSPosed 与 Zygisk 双模式
 
-> 🙏 **致谢 [WeKit](https://github.com/Ujhhgtg/WeKit)（原始上游 [WeKit](https://github.com/cwuom/WeKit)）**：本项目基于上游 WeKit 二次开发，感谢原作者的开源贡献。
+> 🙏 **致谢（原始上游 [WeKit](https://github.com/cwuom/WeKit)）**：本项目基于上游 WeKit 二次开发，感谢原作者的开源贡献。
 >
 > 🤖 **本项目由 AI 编写**。
 >
