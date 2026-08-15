@@ -1,10 +1,10 @@
 package com.github.wekite.features.items.chat
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -20,15 +20,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.composables.icons.materialsymbols.MaterialSymbols
-import com.composables.icons.materialsymbols.outlined.Auto_awesome
-import com.composables.icons.materialsymbols.outlined.Smart_toy
-import com.composables.icons.materialsymbols.outlined.Summarize
 import com.github.wekite.features.api.core.WeDatabaseApi
-import com.github.wekite.features.api.core.models.MessageInfo
-import com.github.wekite.features.api.ui.WeChatMessageContextMenuApi
-import com.github.wekite.features.api.ui.WeChatMessageContextMenuApi.MenuItem
-import com.github.wekite.features.api.ui.WeCurrentConversationApi
+import com.github.wekite.features.api.ui.WeConversationContextMenuApi
+import com.github.wekite.features.api.ui.WeConversationContextMenuApi.ConversationContext
+import com.github.wekite.features.api.ui.WeConversationContextMenuApi.MenuItem
 import com.github.wekite.features.core.ClickableFeature
 import com.github.wekite.features.core.Feature
 import com.github.wekite.preferences.WePrefs.Companion.prefOption
@@ -37,11 +32,8 @@ import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.utils.showComposeDialog
-import com.github.wekite.ui.utils.ShowComposeDialogScope
-import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.showToast
 import com.github.wekite.utils.strings.stripWxId
-import dev.ujhhgtg.reflekt.reflekt
 import kotlin.concurrent.thread
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -52,25 +44,22 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
- * AI 聊天助手：长按消息 AI 分析 / 智能回复 / 群聊批量分析。
+ * AI 聊天助手：群聊批量分析。
  *
  * - 用户自填 OpenAI 兼容 API（DeepSeek/GLM 等），key 只存本地 MMKV
- * - 单条分析：长按文本消息 → 「AI 分析」，对话框展示结果
- * - 智能回复：长按文本消息 → 「AI 智能回复」，生成后填入输入框让用户确认再发
- * - 群聊分析：长按群聊消息 → 「AI 分析群聊」，读取最近 N 条文本消息分块汇总
+ * - 入口：微信主页长按群聊名称 → 菜单末尾「群聊分析」
+ * - 读取最近 N 条文本消息分块汇总成报告
  */
 @SuppressLint("DiscouragedApi")
 @Feature(
     name = "AI 聊天助手",
     categories = ["聊天"],
-    description = "长按消息 AI 分析/智能回复，支持群聊批量分析（需自配 API）"
+    description = "长按群聊名称 AI 分析群聊消息（需自配 API）"
 )
-object AiChatAssistant : ClickableFeature(), WeChatMessageContextMenuApi.IMenuItemsProvider {
+object AiChatAssistant : ClickableFeature(), WeConversationContextMenuApi.IMenuItemsProvider {
 
     private const val TAG = "AiChatAssistant"
 
-    private const val MENU_ANALYZE = 790001
-    private const val MENU_REPLY = 790002
     private const val MENU_GROUP = 790003
 
     // 群聊分析分块大小（条/块）
@@ -89,37 +78,20 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageContextMenuApi.IMenuIt
     }
 
     override fun onEnable() {
-        WeChatMessageContextMenuApi.addProvider(this)
+        WeConversationContextMenuApi.addProvider(this)
     }
 
     override fun onDisable() {
-        WeChatMessageContextMenuApi.removeProvider(this)
+        WeConversationContextMenuApi.removeProvider(this)
     }
 
     override fun getMenuItems(): List<MenuItem> = listOf(
         MenuItem(
-            id = MENU_ANALYZE,
-            text = "AI 分析",
-            drawable = com.github.wekite.ui.utils.EditIcon,
-            imageVector = MaterialSymbols.Outlined.Auto_awesome,
-            isSupported = { it.type?.isText == true },
-            onClick = { view, _, msgInfo -> analyzeMessage(view, msgInfo) }
-        ),
-        MenuItem(
-            id = MENU_REPLY,
-            text = "AI 智能回复",
-            drawable = com.github.wekite.ui.utils.EditIcon,
-            imageVector = MaterialSymbols.Outlined.Smart_toy,
-            isSupported = { it.type?.isText == true },
-            onClick = { view, _, msgInfo -> replyMessage(view, msgInfo) }
-        ),
-        MenuItem(
             id = MENU_GROUP,
-            text = "AI 分析群聊",
+            text = "群聊分析",
             drawable = com.github.wekite.ui.utils.ChatInfoIcon,
-            imageVector = MaterialSymbols.Outlined.Summarize,
-            isSupported = { it.isInGroupChat },
-            onClick = { view, _, msgInfo -> analyzeGroup(view, msgInfo) }
+            shouldShow = { context, _ -> context.talker.endsWith("@chatroom") },
+            onClick = { context -> analyzeGroup(context) }
         )
     )
 
@@ -180,102 +152,15 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageContextMenuApi.IMenuIt
         }
     }
 
-    // ==================== 单条分析 ====================
-
-    private fun analyzeMessage(view: View, msgInfo: MessageInfo) {
-        if (!ensureConfigured(view.context)) return
-        val text = msgInfo.humanReadableRepr.ifBlank { return }
-        runWithProgressDialog(view, "AI 分析中…") { onResult, _ ->
-            val result = runCatching {
-                chatCompletion(
-                    system = "你是微信消息分析助手。请分析用户提供的这条微信消息，从含义、语气、意图三方面简述，最后给出一句建议回复方向。用中文，简洁，不超过 200 字。",
-                    user = "消息内容：\n$text"
-                )
-            }
-            onResult(result)
-        }
-    }
-
-    // ==================== 智能回复 ====================
-
-    private fun replyMessage(view: View, msgInfo: MessageInfo) {
-        if (!ensureConfigured(view.context)) return
-        val text = msgInfo.humanReadableRepr.ifBlank { return }
-
-        runWithProgressDialog(
-            view,
-            "AI 生成回复中…",
-            doneContent = { reply ->
-                AlertDialogContent(
-                    title = { Text("AI 智能回复") },
-                    text = {
-                        Text(
-                            text = reply,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(200.dp)
-                                .verticalScroll(rememberScrollState())
-                        )
-                    },
-                    confirmButton = {
-                        Button({
-                            fillInputBox(reply)
-                            showToast("已填入输入框，确认后发送")
-                            onDismiss()
-                        }) { Text("填入输入框") }
-                    },
-                    dismissButton = {
-                        TextButton({
-                            copyToClipboard(view.context, reply)
-                            showToast("已复制")
-                            onDismiss()
-                        }) { Text("复制") }
-                    }
-                )
-            }
-        ) { onResult, _ ->
-            val result = runCatching {
-                chatCompletion(
-                    system = "你是微信聊天助手。请以用户本人的身份，对下面这条收到的消息生成一条自然、口语化的中文回复。只输出回复内容本身，不要任何解释、前缀或引号。",
-                    user = "收到的消息：\n$text"
-                )
-            }
-            onResult(result)
-        }
-    }
-
-    /** 将文本填入当前聊天输入框（ChatFooter 的 EditText），由用户确认后发送 */
-    private fun fillInputBox(text: String) {
-        val chatFooter = WeCurrentConversationApi.chatFooter ?: run {
-            WeLogger.w(TAG, "no active ChatFooter, cannot fill input box")
-            return
-        }
-        try {
-            // 输入框字段：非空且暴露 addTextChangedListener 的字段（同 WeChatInputBarApi 定位方式）
-            val editField = chatFooter.reflekt().firstFieldOrNull {
-                type { clazz ->
-                    clazz.isInterface && clazz.declaredMethods.any { it.name == "addTextChangedListener" }
-                }
-            }?.get() ?: run {
-                WeLogger.w(TAG, "failed to locate chat input field")
-                return
-            }
-            val editText = editField as? android.widget.EditText ?: return
-            editText.setText(text)
-            editText.setSelection(text.length)
-        } catch (ex: Throwable) {
-            WeLogger.e(TAG, "failed to fill input box", ex)
-        }
-    }
-
     // ==================== 群聊分析 ====================
 
-    private fun analyzeGroup(view: View, msgInfo: MessageInfo) {
-        if (!ensureConfigured(view.context)) return
-        val talker = msgInfo.talker
+    private fun analyzeGroup(context: ConversationContext) {
+        val activity = context.activity
+        if (!ensureConfigured(activity)) return
+        val talker = context.talker
         val count = groupMsgCount
 
-        runWithProgressDialog(view, "读取群消息并分析中…") { onResult, onStageUpdate ->
+        runWithProgressDialog(activity, "读取群消息并分析中…") { onResult, onStageUpdate ->
             val result = runCatching {
                 analyzeGroupMessages(talker, count) { stage -> onStageUpdate(stage) }
             }
@@ -366,18 +251,13 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageContextMenuApi.IMenuIt
 
     // ==================== UI 工具 ====================
 
-    /**
-     * 弹「处理中」对话框，后台线程执行 [task]，完成后在主线程切换到结果视图。
-     * [doneContent] 非空时用于自定义成功结果视图（如智能回复的按钮），
-     * 否则展示默认结果 + 复制按钮。
-     */
+    /** 弹「处理中」对话框，后台线程执行 [task]，完成后在主线程切换到结果视图 */
     private fun runWithProgressDialog(
-        view: View,
+        activity: Activity,
         title: String,
-        doneContent: (@Composable ShowComposeDialogScope.(result: String) -> Unit)? = null,
         task: (onResult: (Result<String>) -> Unit, onStageUpdate: (String) -> Unit) -> Unit
     ) {
-        showComposeDialog(view.context, directlyDismissable = false) {
+        showComposeDialog(activity, directlyDismissable = false) {
             var stage by remember { mutableStateOf(title) }
             var finished by remember { mutableStateOf(false) }
             var resultText by remember { mutableStateOf("") }
@@ -404,8 +284,6 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageContextMenuApi.IMenuIt
                     },
                     confirmButton = { Button(onDismiss) { Text("关闭") } }
                 )
-            } else if (doneContent != null) {
-                doneContent(resultText)
             } else {
                 AlertDialogContent(
                     title = { Text("AI 结果") },
@@ -421,7 +299,7 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageContextMenuApi.IMenuIt
                     confirmButton = { Button(onDismiss) { Text("关闭") } },
                     dismissButton = {
                         TextButton({
-                            copyToClipboard(view.context, resultText)
+                            copyToClipboard(activity, resultText)
                             showToast("已复制")
                         }) { Text("复制") }
                     }
@@ -432,14 +310,14 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageContextMenuApi.IMenuIt
                 thread {
                     task(
                         { result ->
-                            view.post {
+                            activity.runOnUiThread {
                                 finished = true
                                 result.onSuccess { resultText = it }
                                     .onFailure { errorText = it.message ?: "未知错误" }
                             }
                         },
                         { newStage ->
-                            view.post { stage = newStage }
+                            activity.runOnUiThread { stage = newStage }
                         }
                     )
                 }
