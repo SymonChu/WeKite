@@ -243,6 +243,15 @@ object WeDatabaseApi : ApiFeature(), IResolveDex {
             LIMIT $limit OFFSET $offset
         """.trimIndent()
 
+        /** 获取某时间点之后的消息（时间范围分析用，createTime 为毫秒时间戳） */
+        fun messagesSince(wxid: String, sinceTime: Long, limit: Int) = """
+            SELECT msgId, msgSvrId, talker, content, type, createTime, isSend
+            FROM message
+            WHERE talker='$wxid' AND createTime >= $sinceTime
+            ORDER BY createTime DESC
+            LIMIT $limit
+        """.trimIndent()
+
         /**
          * 获取指定会话中特定发送者的消息
          * 支持群聊（通过 content 匹配对方，或通过 isSend 匹配自己）与单聊
@@ -630,6 +639,25 @@ object WeDatabaseApi : ApiFeature(), IResolveDex {
         if (convId.isEmpty()) return emptyList()
         val offset = (pageIndex - 1) * pageSize
         return executeQuery(SqlStatements.messages(convId, pageSize, offset)).map { row ->
+            WeMessage(
+                msgId = row.long("msgId"),
+                msgSvrId = row.long("msgSvrId"),
+                talker = row.str("talker"),
+                content = row.str("content"),
+                typeCode = row.int("type"),
+                createTime = row.long("createTime"),
+                isSend = row.int("isSend")
+            )
+        }
+    }
+
+    /**
+     * 获取指定时间点之后的消息（时间范围分析用）
+     * @param sinceTime 起始时间戳（毫秒），返回 createTime >= sinceTime 的最新 limit 条
+     */
+    fun getMessagesSince(convId: String, sinceTime: Long, pageSize: Int = 500): List<WeMessage> {
+        if (convId.isEmpty()) return emptyList()
+        return executeQuery(SqlStatements.messagesSince(convId, sinceTime, pageSize)).map { row ->
             WeMessage(
                 msgId = row.long("msgId"),
                 msgSvrId = row.long("msgSvrId"),
