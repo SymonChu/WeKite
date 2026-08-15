@@ -1,11 +1,17 @@
 package com.github.wekite.features.items.chat
 
+import android.graphics.Color
 import android.graphics.Outline
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.WindowInsets
+import android.widget.EditText
+import android.widget.ImageButton
 import android.widget.RelativeLayout
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.ListItem
@@ -48,7 +54,7 @@ import kotlin.math.roundToInt
 @Feature(
     name = "悬浮输入框",
     categories = ["聊天"],
-    description = "将聊天输入框改为悬浮卡片形式, 带有圆角、阴影和侧边距"
+    description = "输入栏改 Telegram 式: 贴底全宽无阴影, 输入框浅灰胶囊, 背景透出聊天壁纸"
 )
 object FloatingChatFooter : ClickableFeature(), IResolveDex {
 
@@ -59,11 +65,11 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     private const val PANEL_STATE_SMILEY = 2
     private const val PANEL_STATE_APP = 3
 
-    private const val DEFAULT_CORNER_RADIUS = 24
-    private const val DEFAULT_SIDE_MARGIN = 12
-    private const val DEFAULT_BOTTOM_GAP = 4
-    private const val DEFAULT_ELEVATION = 4
-    private const val DEFAULT_BG_ALPHA = 100
+    private const val DEFAULT_CORNER_RADIUS = 0
+    private const val DEFAULT_SIDE_MARGIN = 0
+    private const val DEFAULT_BOTTOM_GAP = 0
+    private const val DEFAULT_ELEVATION = 0
+    private const val DEFAULT_BG_ALPHA = 0
 
     private const val MIN_CORNER_RADIUS = 0
     private const val MAX_CORNER_RADIUS = 32
@@ -73,8 +79,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     private const val MAX_BOTTOM_GAP = 24
     private const val MIN_ELEVATION = 0
     private const val MAX_ELEVATION = 16
-    private const val MIN_BG_ALPHA = 0
-    private const val MAX_BG_ALPHA = 100
 
     /** 键盘与面板同时展开时, 至少给会话内容留出的高度。 */
     private const val PANEL_TOP_RESERVE_DP = 120
@@ -520,7 +524,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             return null
         }
 
-    /** 设置 outline / 圆角裁剪 / 阴影 / 背景透明度 —— 全是不依赖 LayoutParams 的绘制属性, 可重复调用。 */
+    /** 设置 outline / 圆角裁剪 / 阴影 / 背景 —— 全是不依赖 LayoutParams 的绘制属性, 可重复调用。 */
     private fun applyDrawingStyle(footer: ChatFooter) {
         val density = footer.resources.displayMetrics.density
         footer.outlineProvider = object : ViewOutlineProvider() {
@@ -532,11 +536,67 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         }
         footer.clipToOutline = true
         footer.elevation = elevationDp * density
-        // 背景透明: 先 mutate 保证不污染共享 drawable, 再把改动挂回 view
-        footer.background = footer.background?.mutate()
-        footer.background?.alpha = (backgroundAlpha * 255 / 100).coerceIn(0, 255)
+        // Telegram 式: footer 背景 = 透明 + 顶部 1px 极淡分隔线; 子树透明化露出壁纸;
+        // EditText 换成浅灰胶囊 (Telegram 输入框 #F0F0F0 大圆角)。
+        applyTelegramStyle(footer)
         if (!movePanelAbove) trackOutlineWhileScrolling(footer)
         WeLogger.d(TAG, "applied drawing style: corner=${cornerRadiusDp}dp elev=${elevationDp}dp alpha=$backgroundAlpha")
+    }
+
+    /** Telegram 式整体样式: 透明底 + 顶部分隔线 + 子树透明 + EditText 胶囊。 */
+    private fun applyTelegramStyle(footer: ChatFooter) {
+        applyTopDivider(footer)
+        transparentizeFooterBackgrounds(footer)
+        footer.findViewWhich<EditText> { it is EditText }?.let { setTelegramEditBackground(it) }
+    }
+
+    /**
+     * footer 背景 = 透明 ColorDrawable + 顶部 1px 浅灰线 (LayerDrawable)。
+     * 高度未知 (attach 前) 时线不可见, 等布局就绪后重贴自动补上。
+     */
+    private fun applyTopDivider(footer: ChatFooter) {
+        val density = footer.resources.displayMetrics.density
+        val linePx = (1 * density).toInt().coerceAtLeast(1)
+        val h = footer.height
+        val base = ColorDrawable(Color.TRANSPARENT)
+        val line = GradientDrawable().apply { setColor(0xFFE8E8E8.toInt()) }
+        val layers = LayerDrawable(arrayOf(base, line))
+        if (h > 0) layers.setLayerInset(1, 0, 0, 0, (h - linePx).coerceAtLeast(0))
+        footer.background = layers
+    }
+
+    /** 递归透明化 footer 子树背景 (保留 EditText 胶囊/ImageButton 图标/ChatFooterBottom 面板)。 */
+    private fun transparentizeFooterBackgrounds(footer: ChatFooter) {
+        fun apply(v: View) {
+            if (v is EditText || v is ImageButton || v is ChatFooterBottom) return
+            v.background?.let {
+                try {
+                    v.background = it.mutate()
+                    v.background.alpha = 0
+                } catch (_: Throwable) {
+                }
+            }
+        }
+        fun walk(v: View) {
+            apply(v)
+            if (v is ViewGroup) for (i in 0 until v.childCount) {
+                val c = v.getChildAt(i)
+                if (c is EditText || c is ImageButton || c is ChatFooterBottom) continue
+                walk(c)
+            }
+        }
+        walk(footer)
+    }
+
+    /** EditText 换成 Telegram 风格浅灰胶囊 (圆角≈高度一半, 无边框)。 */
+    private fun setTelegramEditBackground(edit: EditText) {
+        val density = edit.resources.displayMetrics.density
+        val radius = (20 * density).toFloat()
+        val bg = GradientDrawable().apply {
+            setColor(0xFFF0F0F0.toInt())
+            cornerRadius = radius
+        }
+        edit.background = bg
     }
 
     /**
@@ -674,7 +734,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             var sideInput by remember { mutableFloatStateOf(sideMarginDp.toFloat()) }
             var gapInput by remember { mutableFloatStateOf(bottomGapDp.toFloat()) }
             var elevInput by remember { mutableFloatStateOf(elevationDp.toFloat()) }
-            var bgAlphaInput by remember { mutableFloatStateOf(backgroundAlpha.toFloat()) }
             var panelAboveInput by remember { mutableStateOf(movePanelAbove) }
 
             AlertDialogContent(
@@ -747,19 +806,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                                 )
                             }
                         )
-                        ListItem(
-                            colors = dialogListItemColors(),
-                            headlineContent = { Text("背景透明度: ${bgAlphaInput.roundToInt()}%") },
-                            supportingContent = {
-                                Slider(
-                                    value = bgAlphaInput,
-                                    onValueChange = { bgAlphaInput = it },
-                                    valueRange = MIN_BG_ALPHA.toFloat()..MAX_BG_ALPHA.toFloat(),
-                                    steps = MAX_BG_ALPHA - MIN_BG_ALPHA - 1,
-                                    colors = dialogSliderColors()
-                                )
-                            }
-                        )
                     }
                 },
                 dismissButton = { TextButton(onDismiss) { Text("取消") } },
@@ -770,7 +816,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                         sideMarginDp = sideInput.roundToInt()
                         bottomGapDp = gapInput.roundToInt()
                         elevationDp = elevInput.roundToInt()
-                        backgroundAlpha = bgAlphaInput.roundToInt()
                         onDismiss()
                     }) { Text("确定") }
                 }
