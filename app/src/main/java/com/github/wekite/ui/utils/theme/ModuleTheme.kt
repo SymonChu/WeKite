@@ -1,22 +1,28 @@
 package com.github.wekite.ui.utils.theme
 
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MotionScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import com.materialkolor.PaletteStyle
+import com.materialkolor.dynamicColorScheme
+import com.materialkolor.dynamiccolor.ColorSpec
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.LocalContentColor
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.ThemeController
+import top.yukonga.miuix.kmp.theme.darkColorScheme as miuixDarkColorScheme
+import top.yukonga.miuix.kmp.theme.lightColorScheme as miuixLightColorScheme
 
 /**
  * Theme for the module's OWN UI (settings page + module dialogs). Wraps content in BOTH a Material 3
  * [MaterialExpressiveTheme] and a miuix [MiuixTheme] driven by [ThemeSettings], so components from
  * either design system share one accent:
  *
- * - custom color OFF → each system's default palette (miuix blue / the bundled Material scheme);
+ * - custom color OFF → the selected settings engine's fixed default palette;
  * - custom color ON → the palette style + color spec generated from the user's custom seed
  *   ([SeedResolver.customSeed]: wallpaper accent when 动态壁纸取色 is on, else the chosen seed color).
  *
@@ -48,18 +54,19 @@ fun ModuleTheme(
     }
 
     // ---- Material 3 ----
-    val materialScheme = if (!ThemeSettings.customColor) {
-        // 与 miuix 默认主题色一致 (miuix 默认蓝 0xFF3482FF), 弹窗/设置页颜色统一
-        SeedResolver.materialScheme(0xFF3482FF.toInt(), darkTheme)
-    } else {
+    val materialScheme = if (ThemeSettings.customColor) {
         SeedResolver.materialScheme(SeedResolver.customSeed(context, darkTheme), darkTheme)
+    } else {
+        // 弹窗/设置页颜色统一: 直接从 miuix 配色映射 Material scheme (上游 v956 修正),
+        // 弹窗白/黑底与模块主界面一致, 不再有残留淡蓝。
+        defaultMiuixMaterialScheme(darkTheme)
     }
 
-    MaterialExpressiveTheme(
-        colorScheme = materialScheme,
-        motionScheme = MotionScheme.expressive(),
-    ) {
-        MiuixTheme(controller = controller) {
+    MiuixTheme(controller = controller) {
+        MaterialExpressiveTheme(
+            colorScheme = materialScheme,
+            motionScheme = MotionScheme.expressive(),
+        ) {
             CompositionLocalProvider(
                 LocalContentColor provides MiuixTheme.colorScheme.onBackground,
             ) {
@@ -67,4 +74,41 @@ fun ModuleTheme(
             }
         }
     }
+}
+
+private fun defaultMiuixMaterialScheme(darkTheme: Boolean): ColorScheme {
+    val miuixColors = if (darkTheme) miuixDarkColorScheme() else miuixLightColorScheme()
+    val dialogSurface = miuixColors.surfaceContainer
+
+    return dynamicColorScheme(
+        seedColor = miuixColors.primary,
+        isDark = darkTheme,
+        style = PaletteStyle.TonalSpot,
+        specVersion = ColorSpec.SpecVersion.SPEC_2021,
+    ).copy(
+        primary = miuixColors.primary,
+        onPrimary = miuixColors.onPrimary,
+        primaryContainer = miuixColors.primaryContainer,
+        onPrimaryContainer = miuixColors.onPrimaryContainer,
+        error = miuixColors.error,
+        onError = miuixColors.onError,
+        errorContainer = miuixColors.errorContainer,
+        onErrorContainer = miuixColors.onErrorContainer,
+        background = miuixColors.background,
+        onBackground = miuixColors.onBackground,
+        surface = dialogSurface,
+        onSurface = miuixColors.onSurfaceContainer,
+        surfaceVariant = miuixColors.surfaceVariant,
+        onSurfaceVariant = miuixColors.onSurfaceVariantSummary,
+        surfaceTint = dialogSurface,
+        outline = miuixColors.outline,
+        outlineVariant = miuixColors.dividerLine,
+        surfaceBright = dialogSurface,
+        surfaceContainerLowest = dialogSurface,
+        surfaceContainerLow = dialogSurface,
+        surfaceContainer = dialogSurface,
+        surfaceContainerHigh = miuixColors.surfaceContainerHigh,
+        surfaceContainerHighest = miuixColors.surfaceContainerHighest,
+        surfaceDim = miuixColors.surface,
+    )
 }

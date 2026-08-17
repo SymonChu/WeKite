@@ -114,6 +114,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
 
     private var useFloating by prefOption("nav_bar_use_floating", false)
     private var useBackdrop by prefOption("nav_bar_use_backdrop", false)
+    private var animatePageChange by prefOption("nav_bar_animate_page_change", true)
     private var showFinderBadge by prefOption("nav_bar_show_finder_badge", true)
     private var hideLabels by prefOption("nav_bar_hide_labels", false)
     private var blurRadius by prefOption("nav_bar_blur_radius", 8)
@@ -146,7 +147,32 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                     name = "onTabClick"
                 }.self
 
-            val navigateToTab = { index: Int -> methodOnTabClick.invoke(tabsAdapter, index) }
+            // 页面切换动画: 微信切 tab 时 WxViewPager.setCurrentItem 第二个参数是 smoothScroll,
+            // 微信恒传 false (点击直接跳转), 翻成 true 即滑动切换。guard 只在用户点击我们
+            // 底栏标签(即 navigateToTabAnimated)时生效, 避免首次布局/状态恢复路径也被翻成动画。
+            val animatePageChangeEnabled = animatePageChange
+            val programmaticTabChange = ThreadLocal.withInitial { false }
+            val navigateToTabAnimated = { index: Int ->
+                if (animatePageChangeEnabled) programmaticTabChange.set(true)
+                try {
+                    methodOnTabClick.invoke(tabsAdapter, index)
+                } finally {
+                    programmaticTabChange.remove()
+                }
+            }
+            if (animatePageChangeEnabled) {
+                "com.tencent.mm.ui.mogic.WxViewPager".toClass().reflekt().apply {
+                    listOf("setCurrentItem", "setCurrentItemNotify").forEach { methodName ->
+                        firstMethod {
+                            name = methodName
+                            parameters(int, bool)
+                        }.hookBefore(priority = 100) {
+                            if (programmaticTabChange.get() != true) return@hookBefore
+                            args[1] = true
+                        }
+                    }
+                }
+            }
 
             val viewParent = viewPager.parent as ViewGroup
 
@@ -200,7 +226,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                     bottomTabClickListener.onClick(doubleTapProbeView)
                     lastHomeTapUptime = SystemClock.uptimeMillis()
                 } else {
-                    navigateToTab(index)
+                    navigateToTabAnimated(index)
                     lastHomeTapUptime = if (index == 0) SystemClock.uptimeMillis() else 0L
                 }
             }
@@ -431,7 +457,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                                     // both directions, like the non-floating bar's crossfade.
                                     progress = { selectedIndex + scrollOffsetState.floatValue },
                                     isTracking = { isSwipingState.value },
-                                    onSelected = { navigateToTab(it) },
+                                    onSelected = { navigateToTabAnimated(it) },
                                     // In glass mode the pill covers the selected tab and eats
                                     // the tap before the item's onClick can run, so tapping /
                                     // double-tapping the current tab (e.g. Home) would do
@@ -696,6 +722,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
         showComposeDialog(context) {
             var useFloatingInput by remember { mutableStateOf(useFloating) }
             var useBackdropInput by remember { mutableStateOf(useBackdrop) }
+            var animatePageChangeInput by remember { mutableStateOf(animatePageChange) }
             var showFinderBadgeInput by remember { mutableStateOf(showFinderBadge) }
             var hideLabelsInput by remember { mutableStateOf(hideLabels) }
             var blurRadiusInput by remember { mutableFloatStateOf(blurRadius.toFloat()) }
@@ -704,6 +731,16 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                 title = { Text("美化首页底部导航栏") },
                 text = {
                     DefaultColumn {
+                        ListItem(
+                            colors = dialogListItemColors(),
+                            trailingContent = {
+                                Switch(
+                                    animatePageChangeInput,
+                                    { animatePageChangeInput = it }, colors = dialogSwitchColors())
+                            },
+                            supportingContent = { Text("点击标签时滑动切换页面, 而非直接跳转") },
+                            headlineContent = { Text("启用页面切换动画") },
+                        )
                         ListItem(
                             colors = dialogListItemColors(),
                         modifier = Modifier.height(48.dp),
@@ -769,6 +806,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                     Button(onClick = {
                         useFloating = useFloatingInput
                         useBackdrop = useBackdropInput
+                        animatePageChange = animatePageChangeInput
                         hideLabels = hideLabelsInput
                         showFinderBadge = showFinderBadgeInput
                         blurRadius = blurRadiusInput.roundToInt()
