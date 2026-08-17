@@ -624,7 +624,7 @@ private fun exportConfig(context: Context) {
                 withContext(Dispatchers.Main) { finish() }
             }
         }
-        exportLauncher.launch("wekit_prefs_backup.json")
+        exportLauncher.launch("wekite_prefs_backup.json")
     }
 }
 
