@@ -246,6 +246,8 @@ private fun MainPagerScreen(
             backdrop = backdrop,
             tabsCount = TAB_ITEMS.size,
             isBlurEnabled = true,
+            // 与微信首页悬浮导航栏(ReplaceNavigationBar)宽度一致: 全宽-左右16dp
+            fullWidth = true,
             colors = FloatingBottomBarDefaults.colors(
                 containerColor = MiuixTheme.colorScheme.surfaceContainer,
                 indicatorColor = MiuixTheme.colorScheme.primary,

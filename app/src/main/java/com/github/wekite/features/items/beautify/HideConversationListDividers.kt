@@ -9,7 +9,7 @@ import com.github.wekite.features.core.Feature
 import com.github.wekite.features.core.SwitchFeature
 import com.github.wekite.utils.WeLogger
 
-@Feature(name = "隐藏对话列表分割线", categories = ["聊天"], description = "隐藏主页对话列表里对话间的分割线")
+@Feature(name = "隐藏对话列表分割线", categories = ["界面美化"], description = "隐藏主页对话列表里对话间的分割线")
 object HideConversationListDividers : SwitchFeature(), IResolveDex {
 
     private const val TAG = "HideConversationListDividers"

@@ -48,7 +48,7 @@ import kotlin.math.roundToInt
 
 @Feature(
     name = "半屏相册选择器",
-    categories = ["聊天"],
+    categories = ["界面美化"],
     description = "将聊天「+」面板的相册选择器、图片预览和搜索页显示为半屏卡片, 上方可看到聊天内容 (图片编辑器保持全屏)"
 )
 object HalfScreenAlbumPicker : ClickableFeature() {

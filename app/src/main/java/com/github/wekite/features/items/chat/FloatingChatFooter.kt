@@ -53,7 +53,7 @@ import kotlin.math.roundToInt
 
 @Feature(
     name = "悬浮输入框",
-    categories = ["聊天"],
+    categories = ["界面美化"],
     description = "将聊天输入框改为悬浮卡片形式, 带有圆角、阴影和侧边距\n" +
         "建议同时启用「聊天/聊天界面沉浸」"
 )

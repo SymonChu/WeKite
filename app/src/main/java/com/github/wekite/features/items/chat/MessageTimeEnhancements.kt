@@ -58,7 +58,7 @@ import com.github.wekite.utils.android.showToast
 import com.github.wekite.utils.formatEpoch
 
 
-@Feature(name = "消息时间增强", categories = ["聊天"], description = "显示精确消息发送时间并允许显示更多详情")
+@Feature(name = "消息时间增强", categories = ["界面美化"], description = "显示精确消息发送时间并允许显示更多详情")
 object MessageTimeEnhancements : ClickableFeature(),
     WeChatMessageViewApi.ICreateViewListener {
 

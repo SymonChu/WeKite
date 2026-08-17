@@ -55,7 +55,7 @@ import kotlin.math.roundToInt
 @Suppress("DEPRECATION")
 @Feature(
     name = "悬浮标题栏",
-    categories = ["聊天"],
+    categories = ["界面美化"],
     description = "将聊天界面顶部标题栏及标题下方挂件改为悬浮卡片形式, 带有圆角、阴影和侧边距\n" +
         "建议同时启用「聊天/聊天界面沉浸」"
 )
