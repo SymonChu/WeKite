@@ -6,11 +6,14 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -31,6 +34,8 @@ import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
+import com.github.wekite.ui.content.dialogListItemColors
+import com.github.wekite.ui.content.dialogRadioButtonColors
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.android.showToast
 import com.github.wekite.utils.strings.stripWxId
@@ -65,10 +70,19 @@ object AiChatAssistant : ClickableFeature(), WeConversationContextMenuApi.IMenuI
     // 群聊分析分块大小（条/块）
     private const val GROUP_CHUNK_SIZE = 50
 
+    // 单次分析最多拉取的消息条数（防费用失控）
+    private const val MAX_ANALYZE_MESSAGES = 2000
+
+    // 群聊分析时间范围：0=当天, 1=近三天, 2=近一个星期
+    private const val RANGE_TODAY = 0
+    private const val RANGE_THREE_DAYS = 1
+    private const val RANGE_WEEK = 2
+    private val RANGE_LABELS = listOf("当天", "近三天", "近一个星期")
+
     private var apiBase by prefOption("ai_api_base", "https://api.deepseek.com/v1")
     private var apiKey by prefOption("ai_api_key", "")
     private var model by prefOption("ai_model", "deepseek-v4-flash")
-    private var groupMsgCount by prefOption("ai_group_msg_count", 100)
+    private var groupRange by prefOption("ai_group_range", RANGE_TODAY)
 
     private val httpClient by lazy {
         OkHttpClient.Builder()
@@ -102,7 +116,7 @@ object AiChatAssistant : ClickableFeature(), WeConversationContextMenuApi.IMenuI
             var baseInput by remember { mutableStateOf(apiBase) }
             var keyInput by remember { mutableStateOf(apiKey) }
             var modelInput by remember { mutableStateOf(model) }
-            var countInput by remember { mutableStateOf(groupMsgCount.toString()) }
+            var rangeInput by remember { mutableStateOf(groupRange) }
             AlertDialogContent(
                 title = { Text("AI 聊天助手") },
                 text = {
@@ -128,21 +142,29 @@ object AiChatAssistant : ClickableFeature(), WeConversationContextMenuApi.IMenuI
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
                         )
-                        OutlinedTextField(
-                            value = countInput,
-                            onValueChange = { countInput = it },
-                            label = { Text("群聊分析条数（最多 500）") },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        Text("群聊分析时间范围")
+                        RANGE_LABELS.forEachIndexed { index, label ->
+                            ListItem(
+                                modifier = Modifier.height(48.dp).clickable { rangeInput = index },
+                                colors = dialogListItemColors(),
+                                leadingContent = {
+                                    RadioButton(
+                                        selected = rangeInput == index,
+                                        onClick = { rangeInput = index },
+                                        colors = dialogRadioButtonColors()
+                                    )
+                                },
+                                headlineContent = { Text(label) }
+                            )
+                        }
                     }
                 },
                 confirmButton = {
                     Button({
                         apiBase = baseInput.trim().trimEnd('/')
-                        apiKey = keyInput.trim()
+                        apiKey = keyInput.filterNot { it.isWhitespace() } // 去掉所有空白/换行，防 Authorization header 非法字符
                         model = modelInput.trim()
-                        groupMsgCount = countInput.trim().toIntOrNull()?.coerceIn(10, 500) ?: 100
+                        groupRange = rangeInput
                         showToast("AI 配置已保存")
                         onDismiss()
                     }) { Text("保存") }
@@ -158,26 +180,61 @@ object AiChatAssistant : ClickableFeature(), WeConversationContextMenuApi.IMenuI
         val activity = context.activity
         if (!ensureConfigured(activity)) return
         val talker = context.talker
-        val count = groupMsgCount
 
-        runWithProgressDialog(activity, "读取群消息并分析中…") { onResult, onStageUpdate ->
-            val result = runCatching {
-                analyzeGroupMessages(talker, count) { stage -> onStageUpdate(stage) }
-            }
-            onResult(result)
+        // 先弹窗让用户选择时间范围（默认当天）
+        showComposeDialog(activity) {
+            var range by remember { mutableStateOf(groupRange) }
+            AlertDialogContent(
+                title = { Text("群聊分析") },
+                text = {
+                    DefaultColumn {
+                        Text("选择分析时间范围")
+                        RANGE_LABELS.forEachIndexed { index, label ->
+                            ListItem(
+                                modifier = Modifier.height(48.dp).clickable { range = index },
+                                colors = dialogListItemColors(),
+                                leadingContent = {
+                                    RadioButton(
+                                        selected = range == index,
+                                        onClick = { range = index },
+                                        colors = dialogRadioButtonColors()
+                                    )
+                                },
+                                headlineContent = { Text(label) }
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button({
+                        onDismiss()
+                        runWithProgressDialog(activity, "读取群消息并分析中…") { onResult, onStageUpdate ->
+                            val result = runCatching {
+                                analyzeGroupMessages(talker, range) { stage -> onStageUpdate(stage) }
+                            }
+                            onResult(result)
+                        }
+                    }) { Text("开始分析") }
+                },
+                dismissButton = { TextButton(onDismiss) { Text("取消") } }
+            )
         }
     }
 
-    /** 拉取群聊最近 N 条文本消息，分块调用 LLM 生成小结，最后汇总成报告 */
-    private fun analyzeGroupMessages(talker: String, count: Int, onStageUpdate: (String) -> Unit): String {
+    /** 拉取指定时间范围内的文本消息，分块调用 LLM 生成小结，最后汇总成报告 */
+    private fun analyzeGroupMessages(talker: String, range: Int, onStageUpdate: (String) -> Unit): String {
+        // 时间范围转起始时间戳（毫秒）
+        val sinceTime = when (range) {
+            RANGE_THREE_DAYS -> System.currentTimeMillis() - 3L * 24 * 60 * 60 * 1000
+            RANGE_WEEK -> System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+            else -> startOfTodayMillis()
+        }
         // 拉取消息（SQL 按 createTime DESC，最新在前，翻转到时间正序）
-        val pageSize = 500
-        val messages = WeDatabaseApi.getMessages(talker, pageIndex = 1, pageSize = pageSize)
+        val messages = WeDatabaseApi.getMessagesSince(talker, sinceTime, pageSize = MAX_ANALYZE_MESSAGES)
             .filter { it.type?.isText == true }
             .reversed() // 时间正序
-            .takeLast(count)
 
-        if (messages.isEmpty()) return "该群聊没有可分析的文本消息。"
+        if (messages.isEmpty()) return "该时间范围内没有可分析的文本消息。"
 
         val chunks = messages.chunked(GROUP_CHUNK_SIZE)
         onStageUpdate("共 ${messages.size} 条消息，分 ${chunks.size} 批分析中…")
@@ -209,6 +266,16 @@ object AiChatAssistant : ClickableFeature(), WeConversationContextMenuApi.IMenuI
 
     // ==================== 网络层 ====================
 
+    /** 当天 00:00 的毫秒时间戳（本地时区） */
+    private fun startOfTodayMillis(): Long {
+        val cal = java.util.Calendar.getInstance()
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        cal.set(java.util.Calendar.MINUTE, 0)
+        cal.set(java.util.Calendar.SECOND, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
+
     private fun ensureConfigured(context: Context): Boolean {
         if (apiKey.isBlank() || apiBase.isBlank()) {
             showToast("请先在 WeKite 设置中配置 AI 聊天助手的 API Key")
@@ -231,7 +298,7 @@ object AiChatAssistant : ClickableFeature(), WeConversationContextMenuApi.IMenuI
 
         val request = Request.Builder()
             .url(url)
-            .addHeader("Authorization", "Bearer $apiKey")
+            .addHeader("Authorization", "Bearer ${apiKey.filterNot { it.isWhitespace() }}")
             .addHeader("Content-Type", "application/json")
             .post(payload.toString().toRequestBody("application/json".toMediaType()))
             .build()
