@@ -158,7 +158,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
 
     private const val MIN_GLASS_BLUR = 2
     private const val MAX_GLASS_BLUR = 20
-    private const val MAX_GLASS_ALPHA = 90
 
     /**
      * Locates ChatFooter.refreshBottomHeight() by the unique log string WeChat emits at the
@@ -577,8 +576,14 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     private fun applyGlass(view: View) {
         if (glassEnabled) {
             val density = view.resources.displayMetrics.density
+            // rootView 未就绪(构造 hook 阶段)时跳过, attach hook 会再次调用
+            val root = view.rootView
+            if (root == null) {
+                WeLogger.w(TAG, "glass skipped: rootView not ready (${view.javaClass.simpleName})")
+                return
+            }
             val d = glassDrawables.getOrPut(view) {
-                GlassSurfaceDrawable(view, view.rootView).also {
+                GlassSurfaceDrawable(view, root).also {
                     view.background = it
                     it.attach()
                     WeLogger.d(TAG, "glass attached: ${view.javaClass.simpleName}")
@@ -591,6 +596,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                 it.detach()
                 WeLogger.d(TAG, "glass detached")
             }
+            WeLogger.d(TAG, "glass disabled (${view.javaClass.simpleName})")
             FloatingChatCardVisuals.applyDarkSurface(view, cornerRadiusDp)
         }
     }
@@ -968,7 +974,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             var panelAboveInput by remember { mutableStateOf(movePanelAbove) }
             var glassInput by remember { mutableStateOf(glassEnabled) }
             var glassBlurInput by remember { mutableFloatStateOf(glassBlur.toFloat()) }
-            var glassAlphaInput by remember { mutableFloatStateOf(glassAlpha.toFloat()) }
 
             AlertDialogContent(
                 title = { Text("悬浮输入框") },
@@ -1054,17 +1059,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                                     )
                                 }
                             )
-                            ListItem(
-                                content = { Text("毛玻璃透明度: ${glassAlphaInput.roundToInt()}%") },
-                                supportingContent = {
-                                    Slider(
-                                        value = glassAlphaInput,
-                                        onValueChange = { glassAlphaInput = it },
-                                        valueRange = 0f..MAX_GLASS_ALPHA.toFloat(),
-                                        steps = MAX_GLASS_ALPHA - 1
-                                    )
-                                }
-                            )
                         }
                     }
                 },
@@ -1078,7 +1072,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                         elevationDp = elevInput.roundToInt()
                         glassEnabled = glassInput
                         glassBlur = glassBlurInput.roundToInt()
-                        glassAlpha = glassAlphaInput.roundToInt()
                         // 保存后立即重刷当前 footer (毛玻璃开关/参数即时生效, 不必重启微信)
                         lastFooter?.let { applyDrawingStyle(it) }
                         onDismiss()

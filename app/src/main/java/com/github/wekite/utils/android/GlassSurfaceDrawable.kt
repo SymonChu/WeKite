@@ -1,5 +1,6 @@
 package com.github.wekite.utils.android
 
+import android.app.Activity
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -9,33 +10,34 @@ import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewTreeObserver
+import android.view.Window
 import com.github.wekite.utils.WeLogger
+import java.lang.reflect.Proxy
 import kotlin.math.roundToInt
 
 /**
  * 原生 View 液态玻璃背景 —— 与模块自身界面 (miuix / AndroidLiquidGlass 管线) 同构:
- * **降频捕获背后窗口内容 → GPU 模糊 (RenderEffect on RenderNode) → 放大绘制 → tint 叠加**。
+ * **降频捕获背后真实像素 → GPU 模糊 (RenderEffect on RenderNode) → 放大绘制 → tint 叠加**。
  *
- * 捕获: OnPreDrawListener 挂在 behind (rootView) 上, 仅 dirty 时重捕获 + 150ms 节流
- * (滚动时 ~6fps, 静止零开销) —— 全树绘制的 CPU 成本是卡顿大头, 必须降频。
+ * 捕获用 **PixelCopy** (API 26+): 直接从窗口 Surface 拷贝 GPU 合成后的真实渲染像素,
+ * 含所有硬件层/TextureView —— 解决 v1.74~v1.76 输入框玻璃不显示的根因:
+ * 旧实现 `behind.draw(softwareCanvas)` 绘制微信 View 树时, 树内有 View 重写 draw
+ * 调 `Canvas.drawRenderNode` (硬件 API), 软件 Canvas 上必抛 IllegalArgumentException
+ * ("Software rendering doesn't support drawRenderNode"), 捕获每帧失败 → bitmap 恒空。
+ * 日志特征: 每 ~150ms 一条 `capture failed: IllegalArgumentException`。
+ * PixelCopy 不可用时回退旧 View.draw 软件捕获 (try-catch 防御, 多数设备不会走)。
  *
- * 模糊: Android 12+ (API 31) 且硬件 canvas 时走 GPU —— RenderNode 缓存复用,
- * 捕获的 0.5x bitmap 放大录进 RenderNode, 挂 createBlurEffect, 硬件渲染器 GPU 模糊。
- * 反射调用绕开 stubs compileOnly 缺类 (v1.74 直接引用 RenderEffect 编译失败的教训)。
- * API < 31 或软件 canvas 回退 CPU 两遍盒式模糊 (v1.74 实现, 捕获时完成)。
+ * 频率: dirty gate + 150ms 节流 + 串行 (上一次拷贝未完成不叠加), 静止零开销。
+ * 模糊: API 31+ 且硬件 canvas 走 GPU (RenderNode + RenderEffect, 反射绕 stub),
+ * 否则 CPU 两遍盒式模糊 (捕获回调里做)。
  *
- * 相对 v1.80/81 作废实现的安全改进 (当年真机闪退):
- * 1. 不 recycle Bitmap —— 避免 "trying to use a recycled bitmap" 崩溃竞态
- * 2. 捕获期间只临时摘 background (不碰 visibility) —— 不触发重排, 避免 pre-draw 状态混乱
- * 3. 捕获节流 + isDirty gate —— 避免滚动时每帧全树绘制
- * 4. behind.draw 防御性 try-catch —— 微信树状态异常不向外抛
- * 5. 背景守护 —— 微信覆盖 background 时 (输入框键盘/面板切换) 自动重挂
- *
- * behind 必须用 view.rootView (decorView) + 窗口坐标换算 (v1.81 教训:
- * view.parent 捕获到的是壁纸/空白, 不是卡片背后的真实消息内容)。
+ * 安全设计 (v1.80/81 闪退史教训): 不 recycle 自持 bitmap (交给 GC); 捕获期间
+ * 只临时摘 background (不碰 visibility, 不触发重排); 全流程 try-catch 不外抛。
  */
 class GlassSurfaceDrawable(
     private val glass: View,
@@ -46,7 +48,7 @@ class GlassSurfaceDrawable(
     private companion object {
         const val TAG = "GlassSurfaceDrawable"
 
-        /** 两次捕获的最小间隔: 全树绘制是主线程大头, 滚动时 ~6fps 即可 (iOS 毛玻璃同思路)。 */
+        /** 两次捕获的最小间隔: 滚动时 ~6fps 即可 (iOS 毛玻璃同思路)。 */
         const val MIN_CAPTURE_INTERVAL_MS = 150L
     }
 
@@ -58,6 +60,9 @@ class GlassSurfaceDrawable(
     private var lastBounds: Rect? = null
     private var listener: ViewTreeObserver.OnPreDrawListener? = null
     private var attached = false
+
+    /** PixelCopy 串行门: 上一次拷贝未完成不再发起新请求。 */
+    private var pendingCopy = false
 
     /** 模糊强度(屏幕像素半径)。 */
     var blurRadiusPx: Float = 20f
@@ -86,6 +91,7 @@ class GlassSurfaceDrawable(
     fun detach() {
         if (!attached) return
         attached = false
+        pendingCopy = false
         listener?.let {
             runCatching { behind.viewTreeObserver.removeOnPreDrawListener(it) }
         }
@@ -114,7 +120,42 @@ class GlassSurfaceDrawable(
         val prev = lastBounds
         if (prev == b && !behind.isDirty) return
         lastCaptureAt = now
+        // 上一次 PixelCopy 未完成时不叠加发起 (回调会置回 false)
+        if (pendingCopy) return
 
+        if (PixelCopyCompat.request(glass, this::onPixels)) {
+            pendingCopy = true
+            return
+        }
+        // PixelCopy 不可用/失败: 回退 View.draw 软件捕获
+        captureViaViewDraw(b)
+    }
+
+    private fun onPixels(result: Int, src: Bitmap?) {
+        pendingCopy = false
+        if (result != 0 || src == null) return
+        val b = bounds
+        if (b.width() <= 0 || b.height() <= 0) return
+        try {
+            val sw = (src.width * captureScale).roundToInt().coerceAtLeast(2)
+            val sh = (src.height * captureScale).roundToInt().coerceAtLeast(2)
+            val small = if (sw == src.width && sh == src.height) src
+            else Bitmap.createScaledBitmap(src, sw, sh, true)
+            if (small !== src) src.recycle()  // PixelCopy 每次回调新 bitmap, 副本已建即可回收
+            bitmap = small
+            lastBounds = Rect(b)
+            if (!gpuBlur.available) {
+                val radius = (blurRadiusPx * captureScale / 2f).roundToInt().coerceAtLeast(1)
+                if (radius > 1) boxBlur(small, radius)
+            }
+            invalidateSelf()
+        } catch (t: Throwable) {
+            WeLogger.w(TAG, "onPixels failed: ${t.javaClass.simpleName}: ${t.message}")
+        }
+    }
+
+    /** 回退路径: 软件 Canvas 全树绘制 (PixelCopy 不可用/异常时)。 */
+    private fun captureViaViewDraw(b: Rect) {
         val glassLoc = IntArray(2).also { glass.getLocationInWindow(it) }
         val behindLoc = IntArray(2).also { behind.getLocationInWindow(it) }
         val ox = glassLoc[0] - behindLoc[0]
@@ -130,7 +171,6 @@ class GlassSurfaceDrawable(
         }
         lastBounds = Rect(b)
         // 捕获期间把玻璃自身背景临时摘掉, 防止把上次的模糊结果画进这次捕获
-        // (v1.74 输入框"发白/脏"根因; 只动 background 不碰 visibility, 不触发重排)
         val savedBg = glass.background
         glass.background = null
         try {
@@ -138,15 +178,13 @@ class GlassSurfaceDrawable(
             canvas.scale(captureScale, captureScale)
             canvas.translate(-ox.toFloat(), -oy.toFloat())
             behind.draw(canvas)
-            // CPU 兜底路径的模糊在捕获时做 (GPU 路径交给绘制时的 RenderEffect)
             if (!gpuBlur.available) {
-                // 低分辨率图上的盒式模糊半径: 屏幕半径 × 缩放, 两遍盒式 ≈ 高斯
                 val radius = (blurRadiusPx * captureScale / 2f).roundToInt().coerceAtLeast(1)
                 if (radius > 1) boxBlur(bmp, radius)
             }
             invalidateSelf()
         } catch (t: Throwable) {
-            WeLogger.w(TAG, "capture failed: ${t.javaClass.simpleName}")
+            WeLogger.w(TAG, "view-draw capture failed: ${t.javaClass.simpleName}: ${t.message}")
         } finally {
             glass.background = savedBg
         }
@@ -166,7 +204,10 @@ class GlassSurfaceDrawable(
     }
 
     private fun drawGpu(canvas: Canvas, bmp: Bitmap, b: Rect): Boolean {
-        val radius = blurRadiusPx.roundToInt().coerceAtLeast(1)
+        // bitmap 尺寸可能与 bounds×captureScale 不完全一致 (PixelCopy rect 裁剪),
+        // 按实际比例放大; 模糊半径按放大倍数换算到 node 像素空间。
+        val scale = b.width().toFloat() / bmp.width.coerceAtLeast(1)
+        val radius = (blurRadiusPx / scale).roundToInt().coerceAtLeast(1)
         val key = GpuKey(bmp, radius, b.width(), b.height())
         return try {
             if (gpuNode == null || gpuNodeKey != key) {
@@ -174,7 +215,7 @@ class GlassSurfaceDrawable(
                 gpuBlur.setPosition(node, 0, 0, b.width(), b.height())
                 gpuBlur.setContentSize(node, b.width(), b.height())
                 val rc = gpuBlur.beginRecording(node)
-                rc.scale(1f / captureScale, 1f / captureScale)
+                rc.scale(scale, scale)
                 rc.drawBitmap(bmp, 0f, 0f, paint)
                 gpuBlur.endRecording(node)
                 gpuBlur.setRenderEffect(node, gpuBlur.createBlur(radius.toFloat(), radius.toFloat()))
@@ -249,6 +290,73 @@ class GlassSurfaceDrawable(
     override fun setColorFilter(cf: ColorFilter?) {}
 
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}
+
+/**
+ * PixelCopy 反射封装 (API 26+): 从窗口 Surface 拷贝真实渲染像素。
+ * stubs compileOnly 缺类, 全反射调用; [request] 返回 false 时调用方回退 View.draw。
+ */
+private object PixelCopyCompat {
+
+    private const val TAG = "PixelCopyCompat"
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+
+    private var available: Boolean? = null
+    private var requestMethod: java.lang.reflect.Method? = null
+    private var listenerClass: Class<*>? = null
+
+    private fun resolve(): Boolean {
+        available?.let { return it }
+        available = try {
+            listenerClass = Class.forName("android.view.PixelCopy\$OnPixelCopyFinishedListener")
+            requestMethod = Class.forName("android.view.PixelCopy").getMethod(
+                "request", Window::class.java, Rect::class.java, listenerClass, Handler::class.java
+            )
+            true
+        } catch (t: Throwable) {
+            WeLogger.w(TAG, "PixelCopy unavailable: ${t.javaClass.simpleName}")
+            false
+        }
+        return available!!
+    }
+
+    /**
+     * 请求拷贝 [window] 的 [rect] 区域像素; 回调在 [onDone] (主线程)。
+     * @return true = 请求已发起 (结果异步到 onDone); false = 不可用/发起失败
+     */
+    fun request(
+        glass: View,
+        onDone: (result: Int, bitmap: Bitmap?) -> Unit,
+    ): Boolean {
+        if (Build.VERSION.SDK_INT < 26 || !resolve()) return false
+        val w = glass.width
+        val h = glass.height
+        if (w <= 0 || h <= 0) return false
+        val activity = glass.context as? Activity ?: return false
+        val window = activity.window ?: return false
+        val loc = IntArray(2).also { glass.getLocationInWindow(it) }
+        val rect = Rect(loc[0], loc[1], loc[0] + w, loc[1] + h)
+        val decor = window.decorView
+        rect.intersect(0, 0, decor.width, decor.height)
+        if (rect.isEmpty) return false
+
+        val listener = Proxy.newProxyInstance(
+            listenerClass!!.classLoader,
+            arrayOf(listenerClass),
+        ) { _, method, args ->
+            if (method.name == "onPixelCopyFinished") {
+                onDone(args[0] as Int, args[1] as? Bitmap)
+            }
+            null
+        }
+        return try {
+            requestMethod!!.invoke(null, window, rect, listener, mainHandler)
+            true
+        } catch (t: Throwable) {
+            WeLogger.w(TAG, "request failed: ${t.javaClass.simpleName}: ${t.message}")
+            false
+        }
+    }
 }
 
 /**

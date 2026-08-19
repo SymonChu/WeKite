@@ -490,8 +490,14 @@ object FloatingChatHeader : ClickableFeature() {
     private fun applyGlass(view: View) {
         if (glassEnabled) {
             val density = view.resources.displayMetrics.density
+            // rootView 未就绪(构造 hook 阶段)时跳过, 后续 preDraw 循环会再次调用
+            val root = view.rootView
+            if (root == null) {
+                WeLogger.w(TAG, "glass skipped: rootView not ready (${view.javaClass.simpleName})")
+                return
+            }
             val d = glassDrawables.getOrPut(view) {
-                GlassSurfaceDrawable(view, view.rootView).also {
+                GlassSurfaceDrawable(view, root).also {
                     view.background = it
                     it.attach()
                     WeLogger.d(TAG, "glass attached: ${view.javaClass.simpleName}")
@@ -504,6 +510,7 @@ object FloatingChatHeader : ClickableFeature() {
                 it.detach()
                 WeLogger.d(TAG, "glass detached")
             }
+            WeLogger.d(TAG, "glass disabled (${view.javaClass.simpleName})")
             FloatingChatCardVisuals.applyDarkSurface(view, cornerRadiusDp)
         }
     }
