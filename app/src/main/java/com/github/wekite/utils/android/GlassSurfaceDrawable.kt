@@ -51,6 +51,13 @@ class GlassSurfaceDrawable(
         /** 两次捕获的最小间隔: 滚动时 ~2.5fps 即可, 静止零开销 (iOS 毛玻璃同思路,
          *  再短会导致滚动时捕获+重绘太频繁 → 卡顿, v1.77 实测)。 */
         const val MIN_CAPTURE_INTERVAL_MS = 400L
+
+        /** 软件捕获连续失败多少次后熔断 (微信 View 树含 RuntimeShader, 软件 Canvas 必炸)。
+         *  不熔断的话每 400ms × 2 视图的全树软件绘制尝试 = 失败风暴, 主线程卡顿元凶。 */
+        const val SOFTWARE_CAPTURE_MAX_FAILURES = 5
+
+        /** 熔断后至少等这么久才重试 (视图尺寸大变化时立即重试)。 */
+        const val SOFTWARE_CAPTURE_RETRY_MS = 30_000L
     }
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -64,6 +71,13 @@ class GlassSurfaceDrawable(
 
     /** PixelCopy 串行门: 上一次拷贝未完成不再发起新请求。 */
     private var pendingCopy = false
+
+    /** 捕获期间摘掉的玻璃背景 (防上一次模糊帧被画进这次的拷贝 → 反馈发白), 回调里恢复。 */
+    private var savedGlassBg: Drawable? = null
+
+    /** 软件捕获连续失败计数 + 熔断时间戳 (微信树 RuntimeShader 必炸时停止全树绘制尝试)。 */
+    private var softwareCaptureFailures = 0
+    private var softwareCaptureDisabledAt = 0L
 
     /** 模糊强度(屏幕像素半径)。 */
     var blurRadiusPx: Float = 20f
@@ -126,14 +140,30 @@ class GlassSurfaceDrawable(
 
         if (PixelCopyCompat.request(glass, this::onPixels)) {
             pendingCopy = true
+            // 捕获期间摘掉玻璃背景: 防把上一次的模糊帧画进这次的拷贝 (反馈发白, v1.74 教训)。
+            // 只动 background 不碰 visibility, 不触发重排; onPixels 回调里恢复。
+            savedGlassBg = glass.background
+            glass.background = null
             return
         }
-        // PixelCopy 不可用/失败: 回退 View.draw 软件捕获
+        // PixelCopy 不可用/失败: 回退 View.draw 软件捕获。熔断期间暂停尝试,
+        // 防每 400ms 全树软件绘制风暴 (微信树 RuntimeShader 必炸); 尺寸大变化 (键盘/面板) 立即重试。
+        if (softwareCaptureDisabledAt != 0L) {
+            val sizeChanged = prev == null ||
+                prev.width() != b.width() || prev.height() != b.height()
+            if (sizeChanged) softwareCaptureDisabledAt = 0L
+            else if (SystemClock.uptimeMillis() - softwareCaptureDisabledAt < SOFTWARE_CAPTURE_RETRY_MS) return
+        }
         captureViaViewDraw(b)
     }
 
     private fun onPixels(result: Int, src: Bitmap?) {
         pendingCopy = false
+        // 恢复捕获期间摘掉的玻璃背景; 微信若已重贴其它背景则不覆盖, 由 recaptureIfDirty 守护重挂
+        if (glass.background == null && savedGlassBg != null) {
+            glass.background = savedGlassBg
+        }
+        savedGlassBg = null
         if (result != 0 || src == null) {
             WeLogger.w(TAG, "pixelcopy result=$result bitmap=${src != null} (${glass.javaClass.simpleName})")
             return
@@ -191,9 +221,17 @@ class GlassSurfaceDrawable(
                 val radius = (blurRadiusPx * captureScale / 2f).roundToInt().coerceAtLeast(1)
                 if (radius > 1) boxBlur(bmp, radius)
             }
+            softwareCaptureFailures = 0
             invalidateSelf()
         } catch (t: Throwable) {
             WeLogger.w(TAG, "view-draw capture failed: ${t.javaClass.simpleName}: ${t.message}")
+            if (++softwareCaptureFailures >= SOFTWARE_CAPTURE_MAX_FAILURES) {
+                softwareCaptureDisabledAt = SystemClock.uptimeMillis()
+                WeLogger.w(
+                    TAG,
+                    "software capture disabled: $softwareCaptureFailures consecutive failures"
+                )
+            }
         } finally {
             glass.background = savedBg
         }
@@ -222,8 +260,7 @@ class GlassSurfaceDrawable(
             if (gpuNode == null || gpuNodeKey != key) {
                 val node = gpuNode ?: gpuBlur.createRenderNode().also { gpuNode = it }
                 gpuBlur.setPosition(node, 0, 0, b.width(), b.height())
-                gpuBlur.setContentSize(node, b.width(), b.height())
-                val rc = gpuBlur.beginRecording(node)
+                val rc = gpuBlur.beginRecording(node, b.width(), b.height())
                 rc.scale(scale, scale)
                 rc.drawBitmap(bmp, 0f, 0f, paint)
                 gpuBlur.endRecording(node)
@@ -310,20 +347,40 @@ private object PixelCopyCompat {
     private const val TAG = "PixelCopyCompat"
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
+    /** 旧签名 (API 26-35): request(Window, Rect, listener, Handler), 回调带 (result, bitmap)。 */
+    private const val VARIANT_CALLBACK_BITMAP = 1
+
+    /** 新签名 (API 36+): request(Window, Rect, Bitmap dest, listener, Handler),
+     *  必须预分配目标 Bitmap, 回调只有 result 码。v1.78 死磕旧签名在用户手机
+     *  (SDK 36) 上 NoSuchMethodException → 回退软件捕获又被微信树 RuntimeShader
+     *  打死 → 玻璃不显示 + 失败风暴卡顿, 日志铁证。 */
+    private const val VARIANT_DEST_BITMAP = 2
+
     private var available: Boolean? = null
     private var requestMethod: java.lang.reflect.Method? = null
     private var listenerClass: Class<*>? = null
+    private var variant = 0
 
     private fun resolve(): Boolean {
         available?.let { return it }
         available = try {
             listenerClass = Class.forName("android.view.PixelCopy\$OnPixelCopyFinishedListener")
-            requestMethod = Class.forName("android.view.PixelCopy").getMethod(
-                "request", Window::class.java, Rect::class.java, listenerClass, Handler::class.java
-            )
+            val pixelCopy = Class.forName("android.view.PixelCopy")
+            if (Build.VERSION.SDK_INT >= 36) {
+                requestMethod = pixelCopy.getMethod(
+                    "request", Window::class.java, Rect::class.java, Bitmap::class.java,
+                    listenerClass, Handler::class.java
+                )
+                variant = VARIANT_DEST_BITMAP
+            } else {
+                requestMethod = pixelCopy.getMethod(
+                    "request", Window::class.java, Rect::class.java, listenerClass, Handler::class.java
+                )
+                variant = VARIANT_CALLBACK_BITMAP
+            }
             true
         } catch (t: Throwable) {
-            WeLogger.w(TAG, "PixelCopy unavailable: ${t.javaClass.simpleName}")
+            WeLogger.w(TAG, "PixelCopy unavailable: ${t.javaClass.simpleName}: ${t.message}")
             false
         }
         return available!!
@@ -367,17 +424,29 @@ private object PixelCopyCompat {
             return false
         }
 
+        // SDK 36+ 必须预分配 dest Bitmap (mutable, 尺寸与 srcRect 一致, 内容缩放适配)
+        val dest = if (variant == VARIANT_DEST_BITMAP) {
+            Bitmap.createBitmap(rect.width(), rect.height(), Bitmap.Config.ARGB_8888)
+        } else null
         val listener = Proxy.newProxyInstance(
             listenerClass!!.classLoader,
             arrayOf(listenerClass),
         ) { _, method, args ->
             if (method.name == "onPixelCopyFinished") {
-                onDone(args[0] as Int, args[1] as? Bitmap)
+                if (variant == VARIANT_DEST_BITMAP) {
+                    onDone(args[0] as Int, dest)
+                } else {
+                    onDone(args[0] as Int, args[1] as? Bitmap)
+                }
             }
             null
         }
         return try {
-            requestMethod!!.invoke(null, window, rect, listener, mainHandler)
+            if (variant == VARIANT_DEST_BITMAP) {
+                requestMethod!!.invoke(null, window, rect, dest, listener, mainHandler)
+            } else {
+                requestMethod!!.invoke(null, window, rect, listener, mainHandler)
+            }
             true
         } catch (t: Throwable) {
             WeLogger.w(TAG, "pixelcopy request failed: ${t.javaClass.simpleName}: ${t.message}")
@@ -408,9 +477,11 @@ private object GpuBlur {
     val INSTANCE = this
     val available: Boolean by lazy { resolve() }
 
-    private var createRenderNode: java.lang.reflect.Method? = null
+    /** API 29+ 是 public 构造器 RenderNode(String); 更早 @hide, getDeclaredConstructor + setAccessible。
+     *  老代码找 create(String, RenderNode) —— 该签名从来不存在 (实际是 create(String, AnimationHost)),
+     *  任何 SDK 都 NoSuchMethodException, GPU 路径从 v1.76 起一直在静默走 CPU 兜底。 */
+    private var renderNodeCtor: java.lang.reflect.Constructor<*>? = null
     private var setPosition: java.lang.reflect.Method? = null
-    private var setContentSize: java.lang.reflect.Method? = null
     private var beginRecording: java.lang.reflect.Method? = null
     private var endRecording: java.lang.reflect.Method? = null
     private var setRenderEffect: java.lang.reflect.Method? = null
@@ -428,16 +499,19 @@ private object GpuBlur {
             val renderEffect = Class.forName("android.graphics.RenderEffect")
             val tileMode = Class.forName("android.graphics.Shader\$TileMode")
             tileModeClamp = tileMode.getField("CLAMP").get(null)
-            createRenderNode = renderNode.getMethod("create", String::class.java, renderNode)
+            renderNodeCtor = runCatching { renderNode.getConstructor(String::class.java) }
+                .getOrElse { renderNode.getDeclaredConstructor(String::class.java) }
+            renderNodeCtor!!.isAccessible = true
             setPosition = renderNode.getMethod(
                 "setPosition",
                 java.lang.Integer.TYPE, java.lang.Integer.TYPE,
                 java.lang.Integer.TYPE, java.lang.Integer.TYPE
             )
-            setContentSize = renderNode.getMethod(
-                "setContentSize", java.lang.Integer.TYPE, java.lang.Integer.TYPE
+            // setContentSize 在 API 34/36 的 RenderNode 里都不存在 (老代码会 NoSuchMethodException);
+            // 内容尺寸由 beginRecording(w, h) 携带。
+            beginRecording = renderNode.getMethod(
+                "beginRecording", java.lang.Integer.TYPE, java.lang.Integer.TYPE
             )
-            beginRecording = renderNode.getMethod("beginRecording")
             endRecording = renderNode.getMethod("endRecording")
             setRenderEffect = renderNode.getMethod("setRenderEffect", renderEffect)
             discardDisplayList = renderNode.getMethod("discardDisplayList")
@@ -453,17 +527,14 @@ private object GpuBlur {
     }
 
     fun createRenderNode(): Any =
-        createRenderNode!!.invoke(null, "WeKiteGlass", null)
+        renderNodeCtor!!.newInstance("WeKiteGlass")
 
     fun setPosition(node: Any, l: Int, t: Int, r: Int, b: Int) {
         setPosition!!.invoke(node, l, t, r, b)
     }
 
-    fun setContentSize(node: Any, w: Int, h: Int) {
-        setContentSize!!.invoke(node, w, h)
-    }
-
-    fun beginRecording(node: Any): Canvas = beginRecording!!.invoke(node) as Canvas
+    fun beginRecording(node: Any, w: Int, h: Int): Canvas =
+        beginRecording!!.invoke(node, w, h) as Canvas
 
     fun endRecording(node: Any) {
         endRecording!!.invoke(node)

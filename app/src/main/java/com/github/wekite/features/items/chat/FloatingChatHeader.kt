@@ -54,6 +54,7 @@ import com.github.wekite.utils.android.GlassSurfaceDrawable
 import com.github.wekite.utils.android.isDarkMode
 import java.lang.reflect.Field
 import java.util.WeakHashMap
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Suppress("DEPRECATION")
@@ -111,11 +112,12 @@ object FloatingChatHeader : ClickableFeature() {
 
     private var glassEnabled by prefOption("floating_chat_header_glass", false)
     private var glassBlur by prefOption("floating_chat_header_glass_blur", 8)
-    private var glassAlpha by prefOption("floating_chat_header_glass_alpha", 55)
+
+    /** 玻璃叠色不透明度 40% (与主页悬浮底栏一致: containerColor.copy(0.4f), 取消调节滑块只留模糊强度)。 */
+    private const val GLASS_TINT_ALPHA_PERCENT = 40
 
     private const val MIN_GLASS_BLUR = 2
     private const val MAX_GLASS_BLUR = 20
-    private const val MAX_GLASS_ALPHA = 90
 
     /** 每个会话页布局 (ChattingUILayout) 对应的标题栏容器。 */
     private val headerViews = WeakHashMap<View, View>()
@@ -515,9 +517,9 @@ object FloatingChatHeader : ClickableFeature() {
         }
     }
 
-    /** 毛玻璃叠加色: 暗色模式半透明深色, 亮色模式半透明白。 */
+    /** 毛玻璃叠加色: 暗色模式半透明深色, 亮色模式半透明白。不透明度固定 8%。 */
     private fun glassTint(view: View): Int {
-        val tintAlpha = (glassAlpha * 255 / 100).coerceIn(0, 255)
+        val tintAlpha = (GLASS_TINT_ALPHA_PERCENT * 255 / 100).coerceIn(0, 255)
         return if (view.context.isDarkMode) {
             android.graphics.Color.argb(tintAlpha, 0x10, 0x10, 0x14)
         } else {
@@ -1378,6 +1380,9 @@ object FloatingChatHeader : ClickableFeature() {
         }
         val target = base + extra
         if (recycler.paddingTop == target) return
+        // 死区: 标题卡高度/状态栏偏移在布局回写中逐帧抖 1~2px (日志实测 332↔333 ping-pong),
+        // 直接应用 = 每帧 setPadding 触发列表布局 churn。3px 内不动, 误差收敛。
+        if (abs(recycler.paddingTop - target) < 3) return
         recycler.setPadding(recycler.paddingLeft, target, recycler.paddingRight, recycler.paddingBottom)
         WeLogger.d(TAG, "chat list top padding: ${recycler.paddingTop} -> $target (extra=$extra)")
     }
@@ -1491,7 +1496,6 @@ object FloatingChatHeader : ClickableFeature() {
             var elevInput by remember { mutableFloatStateOf(elevationDp.toFloat()) }
             var glassInput by remember { mutableStateOf(glassEnabled) }
             var glassBlurInput by remember { mutableFloatStateOf(glassBlur.toFloat()) }
-            var glassAlphaInput by remember { mutableFloatStateOf(glassAlpha.toFloat()) }
 
             AlertDialogContent(
                 title = { Text("悬浮标题栏") },
@@ -1524,17 +1528,6 @@ object FloatingChatHeader : ClickableFeature() {
                                         onValueChange = { glassBlurInput = it },
                                         valueRange = MIN_GLASS_BLUR.toFloat()..MAX_GLASS_BLUR.toFloat(),
                                         steps = MAX_GLASS_BLUR - MIN_GLASS_BLUR - 1
-                                    )
-                                }
-                            )
-                            ListItem(
-                                content = { Text("毛玻璃透明度: ${glassAlphaInput.roundToInt()}%") },
-                                supportingContent = {
-                                    Slider(
-                                        value = glassAlphaInput,
-                                        onValueChange = { glassAlphaInput = it },
-                                        valueRange = 0f..MAX_GLASS_ALPHA.toFloat(),
-                                        steps = MAX_GLASS_ALPHA - 1
                                     )
                                 }
                             )
@@ -1606,7 +1599,6 @@ object FloatingChatHeader : ClickableFeature() {
                         elevationDp = elevInput.roundToInt()
                         glassEnabled = glassInput
                         glassBlur = glassBlurInput.roundToInt()
-                        glassAlpha = glassAlphaInput.roundToInt()
                         onDismiss()
                     }) { Text("确定") }
                 }

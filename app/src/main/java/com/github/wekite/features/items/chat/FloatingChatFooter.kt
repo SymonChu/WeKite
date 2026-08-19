@@ -51,6 +51,7 @@ import com.github.wekite.utils.android.GlassSurfaceDrawable
 import com.github.wekite.utils.android.constructor
 import com.github.wekite.utils.android.isDarkMode
 import java.util.WeakHashMap
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Feature(
@@ -154,7 +155,9 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
 
     private var glassEnabled by prefOption("floating_chat_footer_glass", false)
     private var glassBlur by prefOption("floating_chat_footer_glass_blur", 8)
-    private var glassAlpha by prefOption("floating_chat_footer_glass_alpha", 55)
+
+    /** 玻璃叠色不透明度 40% (与主页悬浮底栏一致: containerColor.copy(0.4f), 取消调节滑块只留模糊强度)。 */
+    private const val GLASS_TINT_ALPHA_PERCENT = 40
 
     private const val MIN_GLASS_BLUR = 2
     private const val MAX_GLASS_BLUR = 20
@@ -601,9 +604,9 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         }
     }
 
-    /** 毛玻璃叠加色: 暗色模式半透明深色, 亮色模式半透明白。 */
+    /** 毛玻璃叠加色: 暗色模式半透明深色, 亮色模式半透明白。不透明度固定 8%。 */
     private fun glassTint(view: View): Int {
-        val tintAlpha = (glassAlpha * 255 / 100).coerceIn(0, 255)
+        val tintAlpha = (GLASS_TINT_ALPHA_PERCENT * 255 / 100).coerceIn(0, 255)
         return if (view.context.isDarkMode) {
             android.graphics.Color.argb(tintAlpha, 0x10, 0x10, 0x14)
         } else {
@@ -846,6 +849,10 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         val old = recycler.paddingBottom
         if (old == target) return
         val wasAtBottom = !recycler.canScrollVertically(1)
+        // 死区: 滚动中微信会逐帧微调 footer 布局 (输入列高度回写), extra 每帧抖 1~4px。
+        // 直接应用会触发 setPadding+scrollBy+requestLayout 的每帧循环 (日志实测 244Hz 布局风暴 = 卡顿)。
+        // 3px 内不动, 抖动结束误差自然收敛, 一次性到位。
+        if (abs(target - old) < 3) return
         recycler.setPadding(recycler.paddingLeft, recycler.paddingTop, recycler.paddingRight, target)
         WeLogger.d(
             TAG,
@@ -883,7 +890,9 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         val targetBottom = gapPx + bottomNavBarInsetToAdd(footer)
         val overlay = overlayAmount(footer)
         val targetTop = -(overlay + targetBottom)
-        if (lp.bottomMargin != targetBottom || lp.topMargin != targetTop) {
+        // 死区: 滚动中微信逐帧微调 footer 布局, overlay 抖 1~2px 时不动,
+        // 否则 requestLayout 每帧触发整棵 ChattingScrollLayout 布局循环 (卡顿)。2px 内视觉无感。
+        if (abs(lp.bottomMargin - targetBottom) >= 2 || abs(lp.topMargin - targetTop) >= 2) {
             lp.bottomMargin = targetBottom
             lp.topMargin = targetTop
             footer.requestLayout()
