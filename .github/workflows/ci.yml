@@ -40,7 +40,7 @@ jobs:
           workspaces: . -> target
 
       - run: |
-          sudo apt-get update
+          timeout 180 sudo apt-get update || echo "apt-get update 超时跳过（不影响编译）"
           sudo apt install -y gcc-multilib || echo "gcc-multilib 安装失败但不影响编译"
 
       - name: Build native library
