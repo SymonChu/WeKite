@@ -50,7 +50,6 @@ import com.github.wekite.ui.utils.findViewWhich
 import com.github.wekite.ui.utils.findViewsWhich
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
-import com.github.wekite.utils.android.GlassEffect
 import com.github.wekite.utils.android.GlassSurfaceDrawable
 import com.github.wekite.utils.android.isDarkMode
 import java.lang.reflect.Field
@@ -487,17 +486,10 @@ object FloatingChatHeader : ClickableFeature() {
         WeLogger.d(TAG, "applied drawing style: corner=${cornerRadiusDp}dp elev=${elevationDp}dp")
     }
 
-    /** 液态玻璃背景: GPU RenderEffect (Android 12+) 优先, CPU 捕获模糊回退; 关闭时回退暗色浮层。 */
+    /** 液态玻璃背景: 捕获降频 + GPU 模糊 (模块自身同款管线), 关闭时回退暗色浮层。 */
     private fun applyGlass(view: View) {
         if (glassEnabled) {
             val density = view.resources.displayMetrics.density
-            val tint = glassTint(view)
-            if (GlassEffect.applyGpu(view, glassBlur * density, tint)) {
-                // GPU 毛玻璃已接管: 背景=半透明 tint, 背后内容由渲染管线实时模糊
-                glassDrawables.remove(view)?.let { it.detach() }
-                return
-            }
-            // CPU 回退 (Android 11-): 捕获背后树 + 盒式模糊
             val d = glassDrawables.getOrPut(view) {
                 GlassSurfaceDrawable(view, view.rootView).also {
                     view.background = it
@@ -506,9 +498,8 @@ object FloatingChatHeader : ClickableFeature() {
                 }
             }
             d.blurRadiusPx = glassBlur * density
-            d.tintColor = tint
+            d.tintColor = glassTint(view)
         } else {
-            GlassEffect.clearGpu(view)
             glassDrawables.remove(view)?.let {
                 it.detach()
                 WeLogger.d(TAG, "glass detached")
@@ -1498,7 +1489,7 @@ object FloatingChatHeader : ClickableFeature() {
             AlertDialogContent(
                 title = { Text("悬浮标题栏") },
                 text = {
-                    DefaultColumn {
+                    DefaultColumn(scrollable = true) {
                         ListItem(
                             content = { Text("改动在重新进入聊天后生效") },
                             supportingContent = {

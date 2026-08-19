@@ -1099,7 +1099,7 @@ fn export_zygisk_payload(apk: &Path, payload_dir: &Path) -> Result<()> {
         }
     }
 
-    let apk_destination = payload_dir.join("wekit.apk");
+    let apk_destination = payload_dir.join("wekite.apk");
     fs::copy(apk, &apk_destination).with_context(|| {
         format!(
             "could not copy payload {} to {}",
@@ -1352,7 +1352,7 @@ fn package_zygisk_module(
     let source = resolve_zygisk_payload_apk(root, apk_profile, explicit_apk)?;
     export_zygisk_payload(&source, &payload_dir)?;
     println!(
-        "zygisk(package): embedded {} -> payload/wekit.apk (DEX extracted during installation)",
+        "zygisk(package): embedded {} -> payload/wekite.apk (DEX extracted during installation)",
         source.display()
     );
 
@@ -1698,8 +1698,8 @@ mod tests {
 
     #[test]
     fn zygisk_build_accepts_only_one_universal_apk() {
-        let args = parse_zygisk_build_args(&["--apk", "wekit-universal.apk"]);
-        assert_eq!(args.apk, Some(PathBuf::from("wekit-universal.apk")));
+        let args = parse_zygisk_build_args(&["--apk", "wekite-universal.apk"]);
+        assert_eq!(args.apk, Some(PathBuf::from("wekite-universal.apk")));
 
         assert!(
             Cli::try_parse_from([

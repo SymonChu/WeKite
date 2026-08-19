@@ -148,8 +148,8 @@ extract_payload_dex() {
 
 ui_print "- Extracting WeKite payload"
 mkdir -p "$MODPATH/payload"
-extract "$ZIPFILE" "payload/wekit.apk" "$MODPATH"
-extract_payload_dex "$MODPATH/payload/wekit.apk" "$MODPATH/payload"
+extract "$ZIPFILE" "payload/wekite.apk" "$MODPATH"
+extract_payload_dex "$MODPATH/payload/wekite.apk" "$MODPATH/payload"
 ui_print "  WeKite payload installed to $MODPATH/payload"
 
 ui_print "- Setting permissions"

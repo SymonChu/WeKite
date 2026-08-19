@@ -246,16 +246,16 @@ pub unsafe fn do_post_app_specialize(module: &mut WeKitModule, _args: *const App
     crate::payload::ensure_dir(&format!("{data_dir}/files/mmkv"), uid, gid);
 
     // Copy APK
-    let apk_dst = format!("{data_dir}/files/mmkv/.wekit-bootstrap.apk");
+    let apk_dst = format!("{data_dir}/files/mmkv/.wekite-bootstrap.apk");
     if !crate::payload::copy_module_file(
         mod_fd,
-        "payload/wekit.apk",
+        "payload/wekite.apk",
         &apk_dst,
         uid,
         gid,
         256 * 1024 * 1024,
     ) {
-        loge!("Zygisk: failed to copy wekit.apk");
+        loge!("Zygisk: failed to copy wekite.apk");
         return;
     }
 
@@ -263,7 +263,7 @@ pub unsafe fn do_post_app_specialize(module: &mut WeKitModule, _args: *const App
     // dex_names already includes the .dex extension.
     let mut dex_bufs: Vec<Vec<u8>> = Vec::new();
     for name in module.dex_names.clone() {
-        let dst = format!("{data_dir}/files/mmkv/.wekit-bootstrap-{name}");
+        let dst = format!("{data_dir}/files/mmkv/.wekite-bootstrap-{name}");
         if !crate::payload::copy_module_file(
             mod_fd,
             &format!("payload/{name}"),
