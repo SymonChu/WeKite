@@ -50,6 +50,7 @@ import com.github.wekite.ui.utils.findViewWhich
 import com.github.wekite.ui.utils.findViewsWhich
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
+import com.github.wekite.utils.android.GlassEffect
 import com.github.wekite.utils.android.GlassSurfaceDrawable
 import com.github.wekite.utils.android.isDarkMode
 import java.lang.reflect.Field
@@ -60,7 +61,7 @@ import kotlin.math.roundToInt
 @Feature(
     name = "悬浮标题栏",
     categories = ["界面美化"],
-    description = "将聊天界面顶部标题栏及标题下方挂件改为悬浮卡片形式, 带有圆角、阴影和侧边距, 可开启液态玻璃毛玻璃效果\n" +
+    description = "将聊天界面顶部标题栏及标题下方挂件改为悬浮卡片形式, 带有圆角、阴影和侧边距, 可开启液态玻璃毛玻璃效果(含群置顶卡片)\n" +
         "建议同时启用「聊天/聊天界面沉浸」"
 )
 object FloatingChatHeader : ClickableFeature() {
@@ -486,10 +487,17 @@ object FloatingChatHeader : ClickableFeature() {
         WeLogger.d(TAG, "applied drawing style: corner=${cornerRadiusDp}dp elev=${elevationDp}dp")
     }
 
-    /** 液态玻璃背景: 开启时 background 换成 GlassSurfaceDrawable(捕获+模糊), 关闭时回退暗色浮层。 */
+    /** 液态玻璃背景: GPU RenderEffect (Android 12+) 优先, CPU 捕获模糊回退; 关闭时回退暗色浮层。 */
     private fun applyGlass(view: View) {
         if (glassEnabled) {
             val density = view.resources.displayMetrics.density
+            val tint = glassTint(view)
+            if (GlassEffect.applyGpu(view, glassBlur * density, tint)) {
+                // GPU 毛玻璃已接管: 背景=半透明 tint, 背后内容由渲染管线实时模糊
+                glassDrawables.remove(view)?.let { it.detach() }
+                return
+            }
+            // CPU 回退 (Android 11-): 捕获背后树 + 盒式模糊
             val d = glassDrawables.getOrPut(view) {
                 GlassSurfaceDrawable(view, view.rootView).also {
                     view.background = it
@@ -498,18 +506,24 @@ object FloatingChatHeader : ClickableFeature() {
                 }
             }
             d.blurRadiusPx = glassBlur * density
-            val tintAlpha = (glassAlpha * 255 / 100).coerceIn(0, 255)
-            d.tintColor = if (view.context.isDarkMode) {
-                android.graphics.Color.argb(tintAlpha, 0x10, 0x10, 0x14)
-            } else {
-                android.graphics.Color.argb(tintAlpha, 0xFF, 0xFF, 0xFF)
-            }
+            d.tintColor = tint
         } else {
+            GlassEffect.clearGpu(view)
             glassDrawables.remove(view)?.let {
                 it.detach()
                 WeLogger.d(TAG, "glass detached")
             }
             FloatingChatCardVisuals.applyDarkSurface(view, cornerRadiusDp)
+        }
+    }
+
+    /** 毛玻璃叠加色: 暗色模式半透明深色, 亮色模式半透明白。 */
+    private fun glassTint(view: View): Int {
+        val tintAlpha = (glassAlpha * 255 / 100).coerceIn(0, 255)
+        return if (view.context.isDarkMode) {
+            android.graphics.Color.argb(tintAlpha, 0x10, 0x10, 0x14)
+        } else {
+            android.graphics.Color.argb(tintAlpha, 0xFF, 0xFF, 0xFF)
         }
     }
 
@@ -522,7 +536,12 @@ object FloatingChatHeader : ClickableFeature() {
      */
     private fun applyTipsBarCardStyle(group: View) {
         val style = HeaderStyle(cornerRadiusDp, elevationDp)
-        FloatingChatCardVisuals.applyDarkSurface(group, cornerRadiusDp)
+        if (glassEnabled) {
+            // 玻璃模式: 组底色清掉, 让卡片体 (body) 的毛玻璃直接透出背后消息
+            if (group.background != null) group.background = null
+        } else {
+            FloatingChatCardVisuals.applyDarkSurface(group, cornerRadiusDp)
+        }
         if (tipsBarStyles[group] != style) {
             val density = group.resources.displayMetrics.density
             group.outlineProvider = group.outlineProvider as? TipsBarCardOutline
@@ -854,7 +873,8 @@ object FloatingChatHeader : ClickableFeature() {
             }
             return
         }
-        FloatingChatCardVisuals.applyDarkSurface(body, cornerRadiusDp)
+        // 卡片体背景: 毛玻璃开启时走液态玻璃 (GPU/CPU), 否则暗色浮层
+        applyGlass(body)
         // 早退 2: 找不到内容列表 (MaxHeightWxRecyclerView), 保留原生布局。
         val recycler = tipsBarRecycler(group) ?: return
         // 早退 3: 只对置顶消息行 (s4.xml 结构) 生效; 直播等其它提示条共用同一组件, 不碰。

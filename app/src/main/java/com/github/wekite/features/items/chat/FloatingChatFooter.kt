@@ -47,6 +47,7 @@ import com.github.wekite.ui.utils.allViews
 import com.github.wekite.ui.utils.findViewWhich
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
+import com.github.wekite.utils.android.GlassEffect
 import com.github.wekite.utils.android.GlassSurfaceDrawable
 import com.github.wekite.utils.android.constructor
 import com.github.wekite.utils.android.isDarkMode
@@ -567,10 +568,17 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         WeLogger.d(TAG, "applied drawing style: corner=${cornerRadiusDp}dp elev=${elevationDp}dp")
     }
 
-    /** 液态玻璃背景: 开启时 background 换成 GlassSurfaceDrawable(捕获+模糊), 关闭时回退暗色浮层。 */
+    /** 液态玻璃背景: GPU RenderEffect (Android 12+) 优先, CPU 捕获模糊回退; 关闭时回退暗色浮层。 */
     private fun applyGlass(view: View) {
         if (glassEnabled) {
             val density = view.resources.displayMetrics.density
+            val tint = glassTint(view)
+            if (GlassEffect.applyGpu(view, glassBlur * density, tint)) {
+                // GPU 毛玻璃已接管: 背景=半透明 tint, 背后内容由渲染管线实时模糊
+                glassDrawables.remove(view)?.let { it.detach() }
+                return
+            }
+            // CPU 回退 (Android 11-): 捕获背后树 + 盒式模糊
             val d = glassDrawables.getOrPut(view) {
                 GlassSurfaceDrawable(view, view.rootView).also {
                     view.background = it
@@ -579,18 +587,24 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                 }
             }
             d.blurRadiusPx = glassBlur * density
-            val tintAlpha = (glassAlpha * 255 / 100).coerceIn(0, 255)
-            d.tintColor = if (view.context.isDarkMode) {
-                android.graphics.Color.argb(tintAlpha, 0x10, 0x10, 0x14)
-            } else {
-                android.graphics.Color.argb(tintAlpha, 0xFF, 0xFF, 0xFF)
-            }
+            d.tintColor = tint
         } else {
+            GlassEffect.clearGpu(view)
             glassDrawables.remove(view)?.let {
                 it.detach()
                 WeLogger.d(TAG, "glass detached")
             }
             FloatingChatCardVisuals.applyDarkSurface(view, cornerRadiusDp)
+        }
+    }
+
+    /** 毛玻璃叠加色: 暗色模式半透明深色, 亮色模式半透明白。 */
+    private fun glassTint(view: View): Int {
+        val tintAlpha = (glassAlpha * 255 / 100).coerceIn(0, 255)
+        return if (view.context.isDarkMode) {
+            android.graphics.Color.argb(tintAlpha, 0x10, 0x10, 0x14)
+        } else {
+            android.graphics.Color.argb(tintAlpha, 0xFF, 0xFF, 0xFF)
         }
     }
 
