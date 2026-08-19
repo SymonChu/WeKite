@@ -48,8 +48,9 @@ class GlassSurfaceDrawable(
     private companion object {
         const val TAG = "GlassSurfaceDrawable"
 
-        /** 两次捕获的最小间隔: 滚动时 ~6fps 即可 (iOS 毛玻璃同思路)。 */
-        const val MIN_CAPTURE_INTERVAL_MS = 150L
+        /** 两次捕获的最小间隔: 滚动时 ~2.5fps 即可, 静止零开销 (iOS 毛玻璃同思路,
+         *  再短会导致滚动时捕获+重绘太频繁 → 卡顿, v1.77 实测)。 */
+        const val MIN_CAPTURE_INTERVAL_MS = 400L
     }
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -133,7 +134,10 @@ class GlassSurfaceDrawable(
 
     private fun onPixels(result: Int, src: Bitmap?) {
         pendingCopy = false
-        if (result != 0 || src == null) return
+        if (result != 0 || src == null) {
+            WeLogger.w(TAG, "pixelcopy result=$result bitmap=${src != null} (${glass.javaClass.simpleName})")
+            return
+        }
         val b = bounds
         if (b.width() <= 0 || b.height() <= 0) return
         try {
@@ -148,6 +152,11 @@ class GlassSurfaceDrawable(
                 val radius = (blurRadiusPx * captureScale / 2f).roundToInt().coerceAtLeast(1)
                 if (radius > 1) boxBlur(small, radius)
             }
+            WeLogger.d(
+                TAG,
+                "pixelcopy ok: src=${src.width}x${src.height} stored=${small.width}x${small.height} " +
+                    "bounds=${b.width()}x${b.height()} (${glass.javaClass.simpleName})"
+            )
             invalidateSelf()
         } catch (t: Throwable) {
             WeLogger.w(TAG, "onPixels failed: ${t.javaClass.simpleName}: ${t.message}")
@@ -321,24 +330,42 @@ private object PixelCopyCompat {
     }
 
     /**
-     * 请求拷贝 [window] 的 [rect] 区域像素; 回调在 [onDone] (主线程)。
-     * @return true = 请求已发起 (结果异步到 onDone); false = 不可用/发起失败
+     * 请求拷贝 [glass] 所在窗口的对应区域像素; 回调在 [onDone] (主线程)。
+     * @return true = 请求已发起 (结果异步到 onDone); false = 不可用/发起失败 (调用方回退 View.draw)
      */
     fun request(
         glass: View,
         onDone: (result: Int, bitmap: Bitmap?) -> Unit,
     ): Boolean {
-        if (Build.VERSION.SDK_INT < 26 || !resolve()) return false
+        if (Build.VERSION.SDK_INT < 26 || !resolve()) {
+            WeLogger.w(TAG, "pixelcopy unavailable sdk=${Build.VERSION.SDK_INT}")
+            return false
+        }
         val w = glass.width
         val h = glass.height
-        if (w <= 0 || h <= 0) return false
-        val activity = glass.context as? Activity ?: return false
-        val window = activity.window ?: return false
+        if (w <= 0 || h <= 0) {
+            WeLogger.w(TAG, "pixelcopy skipped: view size ${w}x${h}")
+            return false
+        }
+        // 微信 View 的 context 可能是 ContextWrapper 链, 逐层解包找 Activity
+        val activity = unwrapActivity(glass.context)
+        if (activity == null) {
+            WeLogger.w(TAG, "pixelcopy skipped: no activity in context chain " +
+                "(${glass.context.javaClass.name})")
+            return false
+        }
+        val window = activity.window ?: run {
+            WeLogger.w(TAG, "pixelcopy skipped: activity window null")
+            return false
+        }
         val loc = IntArray(2).also { glass.getLocationInWindow(it) }
         val rect = Rect(loc[0], loc[1], loc[0] + w, loc[1] + h)
         val decor = window.decorView
         rect.intersect(0, 0, decor.width, decor.height)
-        if (rect.isEmpty) return false
+        if (rect.isEmpty) {
+            WeLogger.w(TAG, "pixelcopy skipped: rect empty after intersect")
+            return false
+        }
 
         val listener = Proxy.newProxyInstance(
             listenerClass!!.classLoader,
@@ -353,8 +380,18 @@ private object PixelCopyCompat {
             requestMethod!!.invoke(null, window, rect, listener, mainHandler)
             true
         } catch (t: Throwable) {
-            WeLogger.w(TAG, "request failed: ${t.javaClass.simpleName}: ${t.message}")
+            WeLogger.w(TAG, "pixelcopy request failed: ${t.javaClass.simpleName}: ${t.message}")
             false
+        }
+    }
+
+    /** 逐层解包 ContextWrapper 链, 找到 Activity (微信 View 的 context 常被包装)。 */
+    private fun unwrapActivity(context: android.content.Context): Activity? {
+        var c: android.content.Context = context
+        while (true) {
+            if (c is Activity) return c
+            if (c !is android.content.ContextWrapper) return null
+            c = c.baseContext
         }
     }
 }
