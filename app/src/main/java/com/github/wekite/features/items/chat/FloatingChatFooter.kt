@@ -47,14 +47,16 @@ import com.github.wekite.ui.utils.allViews
 import com.github.wekite.ui.utils.findViewWhich
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
+import com.github.wekite.utils.android.GlassSurfaceDrawable
 import com.github.wekite.utils.android.constructor
+import com.github.wekite.utils.android.isDarkMode
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
 
 @Feature(
     name = "悬浮输入框",
     categories = ["界面美化"],
-    description = "将聊天输入框改为悬浮卡片形式, 带有圆角、阴影和侧边距\n" +
+    description = "将聊天输入框改为悬浮卡片形式, 带有圆角、阴影和侧边距, 可开启液态玻璃毛玻璃效果\n" +
         "建议同时启用「聊天/聊天界面沉浸」"
 )
 object FloatingChatFooter : ClickableFeature(), IResolveDex {
@@ -107,6 +109,9 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     /** 已经装过 outline 追踪器的 footer, 防止重复注册 OnPreDrawListener。 */
     private val outlineTrackers = WeakHashMap<View, Boolean>()
 
+    /** 每个 footer 对应的液态玻璃 drawable (开启时 background 换成它)。 */
+    private val glassDrawables = WeakHashMap<View, GlassSurfaceDrawable>()
+
     /** 临时挪动面板期间保存的原 translationY。key 是 ChatFooterBottom。 */
     private val savedPanelTranslations = WeakHashMap<View, Float>()
 
@@ -143,6 +148,14 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     private var sideMarginDp by prefOption("floating_chat_footer_side_margin", DEFAULT_SIDE_MARGIN)
     private var bottomGapDp by prefOption("floating_chat_footer_bottom_gap", DEFAULT_BOTTOM_GAP)
     private var elevationDp by prefOption("floating_chat_footer_elevation", DEFAULT_ELEVATION)
+
+    private var glassEnabled by prefOption("floating_chat_footer_glass", false)
+    private var glassBlur by prefOption("floating_chat_footer_glass_blur", 8)
+    private var glassAlpha by prefOption("floating_chat_footer_glass_alpha", 55)
+
+    private const val MIN_GLASS_BLUR = 2
+    private const val MAX_GLASS_BLUR = 20
+    private const val MAX_GLASS_ALPHA = 90
 
     /**
      * Locates ChatFooter.refreshBottomHeight() by the unique log string WeChat emits at the
@@ -549,9 +562,36 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         }
         footer.clipToOutline = true
         footer.elevation = elevationDp * density
-        FloatingChatCardVisuals.applyDarkSurface(footer, cornerRadiusDp)
+        applyGlass(footer)
         if (!movePanelAbove) trackOutlineWhileScrolling(footer)
         WeLogger.d(TAG, "applied drawing style: corner=${cornerRadiusDp}dp elev=${elevationDp}dp")
+    }
+
+    /** 液态玻璃背景: 开启时 background 换成 GlassSurfaceDrawable(捕获+模糊), 关闭时回退暗色浮层。 */
+    private fun applyGlass(view: View) {
+        if (glassEnabled) {
+            val density = view.resources.displayMetrics.density
+            val d = glassDrawables.getOrPut(view) {
+                GlassSurfaceDrawable(view, view.rootView).also {
+                    view.background = it
+                    it.attach()
+                    WeLogger.d(TAG, "glass attached: ${view.javaClass.simpleName}")
+                }
+            }
+            d.blurRadiusPx = glassBlur * density
+            val tintAlpha = (glassAlpha * 255 / 100).coerceIn(0, 255)
+            d.tintColor = if (view.context.isDarkMode) {
+                android.graphics.Color.argb(tintAlpha, 0x10, 0x10, 0x14)
+            } else {
+                android.graphics.Color.argb(tintAlpha, 0xFF, 0xFF, 0xFF)
+            }
+        } else {
+            glassDrawables.remove(view)?.let {
+                it.detach()
+                WeLogger.d(TAG, "glass detached")
+            }
+            FloatingChatCardVisuals.applyDarkSurface(view, cornerRadiusDp)
+        }
     }
 
     /**
@@ -915,6 +955,9 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             var gapInput by remember { mutableFloatStateOf(bottomGapDp.toFloat()) }
             var elevInput by remember { mutableFloatStateOf(elevationDp.toFloat()) }
             var panelAboveInput by remember { mutableStateOf(movePanelAbove) }
+            var glassInput by remember { mutableStateOf(glassEnabled) }
+            var glassBlurInput by remember { mutableFloatStateOf(glassBlur.toFloat()) }
+            var glassAlphaInput by remember { mutableFloatStateOf(glassAlpha.toFloat()) }
 
             AlertDialogContent(
                 title = { Text("悬浮输入框") },
@@ -976,6 +1019,42 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                                 )
                             }
                         )
+                        ListItem(
+                            content = { Text("液态玻璃效果") },
+                            supportingContent = {
+                                Text("输入框卡片背后内容实时模糊(毛玻璃), 全 Android 版本支持")
+                            },
+                            trailingContent = {
+                                Switch(
+                                    checked = glassInput,
+                                    onCheckedChange = { glassInput = it }
+                                )
+                            }
+                        )
+                        if (glassInput) {
+                            ListItem(
+                                content = { Text("模糊强度: ${glassBlurInput.roundToInt()}") },
+                                supportingContent = {
+                                    Slider(
+                                        value = glassBlurInput,
+                                        onValueChange = { glassBlurInput = it },
+                                        valueRange = MIN_GLASS_BLUR.toFloat()..MAX_GLASS_BLUR.toFloat(),
+                                        steps = MAX_GLASS_BLUR - MIN_GLASS_BLUR - 1
+                                    )
+                                }
+                            )
+                            ListItem(
+                                content = { Text("毛玻璃透明度: ${glassAlphaInput.roundToInt()}%") },
+                                supportingContent = {
+                                    Slider(
+                                        value = glassAlphaInput,
+                                        onValueChange = { glassAlphaInput = it },
+                                        valueRange = 0f..MAX_GLASS_ALPHA.toFloat(),
+                                        steps = MAX_GLASS_ALPHA - 1
+                                    )
+                                }
+                            )
+                        }
                     }
                 },
                 dismissButton = { TextButton(onDismiss) { Text("取消") } },
@@ -986,6 +1065,9 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                         sideMarginDp = sideInput.roundToInt()
                         bottomGapDp = gapInput.roundToInt()
                         elevationDp = elevInput.roundToInt()
+                        glassEnabled = glassInput
+                        glassBlur = glassBlurInput.roundToInt()
+                        glassAlpha = glassAlphaInput.roundToInt()
                         onDismiss()
                     }) { Text("确定") }
                 }
