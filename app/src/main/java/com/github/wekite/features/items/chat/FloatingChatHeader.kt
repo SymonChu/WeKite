@@ -24,11 +24,9 @@ import android.widget.RelativeLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.core.view.isGone
@@ -50,18 +48,15 @@ import com.github.wekite.ui.utils.findViewWhich
 import com.github.wekite.ui.utils.findViewsWhich
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
-import com.github.wekite.utils.android.GlassSurfaceDrawable
-import com.github.wekite.utils.android.isDarkMode
 import java.lang.reflect.Field
 import java.util.WeakHashMap
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Suppress("DEPRECATION")
 @Feature(
     name = "悬浮标题栏",
     categories = ["界面美化"],
-    description = "将聊天界面顶部标题栏及标题下方挂件改为悬浮卡片形式, 带有圆角、阴影和侧边距, 可开启液态玻璃毛玻璃效果(含群置顶卡片)\n" +
+    description = "将聊天界面顶部标题栏及标题下方挂件改为悬浮卡片形式, 带有圆角、阴影和侧边距\n" +
         "建议同时启用「聊天/聊天界面沉浸」"
 )
 object FloatingChatHeader : ClickableFeature() {
@@ -109,15 +104,6 @@ object FloatingChatHeader : ClickableFeature() {
     private var topGapDp by prefOption("floating_chat_header_top_gap", DEFAULT_TOP_GAP)
     private var extraGapDp by prefOption("floating_chat_header_extra_gap", DEFAULT_EXTRA_GAP)
     private var elevationDp by prefOption("floating_chat_header_elevation", DEFAULT_ELEVATION)
-
-    private var glassEnabled by prefOption("floating_chat_header_glass", false)
-    private var glassBlur by prefOption("floating_chat_header_glass_blur", 8)
-
-    /** 玻璃叠色不透明度 40% (与主页悬浮底栏一致: containerColor.copy(0.4f), 取消调节滑块只留模糊强度)。 */
-    private const val GLASS_TINT_ALPHA_PERCENT = 40
-
-    private const val MIN_GLASS_BLUR = 2
-    private const val MAX_GLASS_BLUR = 20
 
     /** 每个会话页布局 (ChattingUILayout) 对应的标题栏容器。 */
     private val headerViews = WeakHashMap<View, View>()
@@ -269,9 +255,6 @@ object FloatingChatHeader : ClickableFeature() {
 
     /** 上次实际套用的样式, 配置变化后下一帧自动重刷。 */
     private val headerStyles = WeakHashMap<View, HeaderStyle>()
-
-    /** 每个视图对应的液态玻璃 drawable (开启时 background 换成它)。 */
-    private val glassDrawables = WeakHashMap<View, GlassSurfaceDrawable>()
 
     private data class HeaderStyle(val cornerRadiusDp: Int, val elevationDp: Int)
 
@@ -466,7 +449,7 @@ object FloatingChatHeader : ClickableFeature() {
         val style = HeaderStyle(cornerRadiusDp, elevationDp)
         val density = view.resources.displayMetrics.density
         val expectedElevation = elevationDp * density
-        applyGlass(view)
+        FloatingChatCardVisuals.applyDarkSurface(view, cornerRadiusDp)
         // 半屏路径微信会在展开动画结束时清掉 ActionBarContainer 的 outline (m.a()),
         // 只按样式缓存判断会漏掉这次恢复, 所以 outline/elevation 被微信改掉时也要重刷。
         if (headerStyles[view] == style &&
@@ -488,45 +471,6 @@ object FloatingChatHeader : ClickableFeature() {
         WeLogger.d(TAG, "applied drawing style: corner=${cornerRadiusDp}dp elev=${elevationDp}dp")
     }
 
-    /** 液态玻璃背景: 捕获降频 + GPU 模糊 (模块自身同款管线), 关闭时回退暗色浮层。 */
-    private fun applyGlass(view: View) {
-        if (glassEnabled) {
-            val density = view.resources.displayMetrics.density
-            // rootView 未就绪(构造 hook 阶段)时跳过, 后续 preDraw 循环会再次调用
-            val root = view.rootView
-            if (root == null) {
-                WeLogger.w(TAG, "glass skipped: rootView not ready (${view.javaClass.simpleName})")
-                return
-            }
-            val d = glassDrawables.getOrPut(view) {
-                GlassSurfaceDrawable(view, root).also {
-                    view.background = it
-                    it.attach()
-                    WeLogger.d(TAG, "glass attached: ${view.javaClass.simpleName}")
-                }
-            }
-            d.blurRadiusPx = glassBlur * density
-            d.tintColor = glassTint(view)
-        } else {
-            glassDrawables.remove(view)?.let {
-                it.detach()
-                WeLogger.d(TAG, "glass detached")
-            }
-            WeLogger.d(TAG, "glass disabled (${view.javaClass.simpleName})")
-            FloatingChatCardVisuals.applyDarkSurface(view, cornerRadiusDp)
-        }
-    }
-
-    /** 毛玻璃叠加色: 暗色模式半透明深色, 亮色模式半透明白。不透明度固定 8%。 */
-    private fun glassTint(view: View): Int {
-        val tintAlpha = (GLASS_TINT_ALPHA_PERCENT * 255 / 100).coerceIn(0, 255)
-        return if (view.context.isDarkMode) {
-            android.graphics.Color.argb(tintAlpha, 0x10, 0x10, 0x14)
-        } else {
-            android.graphics.Color.argb(tintAlpha, 0xFF, 0xFF, 0xFF)
-        }
-    }
-
     /**
      * 提示条卡自己的样式: 投影/裁剪的轮廓只覆盖卡片区域, 而不是整组。
      *
@@ -536,12 +480,7 @@ object FloatingChatHeader : ClickableFeature() {
      */
     private fun applyTipsBarCardStyle(group: View) {
         val style = HeaderStyle(cornerRadiusDp, elevationDp)
-        if (glassEnabled) {
-            // 玻璃模式: 组底色清掉, 让卡片体 (body) 的毛玻璃直接透出背后消息
-            if (group.background != null) group.background = null
-        } else {
-            FloatingChatCardVisuals.applyDarkSurface(group, cornerRadiusDp)
-        }
+        FloatingChatCardVisuals.applyDarkSurface(group, cornerRadiusDp)
         if (tipsBarStyles[group] != style) {
             val density = group.resources.displayMetrics.density
             group.outlineProvider = group.outlineProvider as? TipsBarCardOutline
@@ -873,8 +812,7 @@ object FloatingChatHeader : ClickableFeature() {
             }
             return
         }
-        // 卡片体背景: 毛玻璃开启时走液态玻璃 (GPU/CPU), 否则暗色浮层
-        applyGlass(body)
+        FloatingChatCardVisuals.applyDarkSurface(body, cornerRadiusDp)
         // 早退 2: 找不到内容列表 (MaxHeightWxRecyclerView), 保留原生布局。
         val recycler = tipsBarRecycler(group) ?: return
         // 早退 3: 只对置顶消息行 (s4.xml 结构) 生效; 直播等其它提示条共用同一组件, 不碰。
@@ -1380,9 +1318,6 @@ object FloatingChatHeader : ClickableFeature() {
         }
         val target = base + extra
         if (recycler.paddingTop == target) return
-        // 死区: 标题卡高度/状态栏偏移在布局回写中逐帧抖 1~2px (日志实测 332↔333 ping-pong),
-        // 直接应用 = 每帧 setPadding 触发列表布局 churn。3px 内不动, 误差收敛。
-        if (abs(recycler.paddingTop - target) < 3) return
         recycler.setPadding(recycler.paddingLeft, target, recycler.paddingRight, recycler.paddingBottom)
         WeLogger.d(TAG, "chat list top padding: ${recycler.paddingTop} -> $target (extra=$extra)")
     }
@@ -1494,44 +1429,17 @@ object FloatingChatHeader : ClickableFeature() {
             var gapInput by remember { mutableFloatStateOf(topGapDp.toFloat()) }
             var extraGapInput by remember { mutableFloatStateOf(extraGapDp.toFloat()) }
             var elevInput by remember { mutableFloatStateOf(elevationDp.toFloat()) }
-            var glassInput by remember { mutableStateOf(glassEnabled) }
-            var glassBlurInput by remember { mutableFloatStateOf(glassBlur.toFloat()) }
 
             AlertDialogContent(
                 title = { Text("悬浮标题栏") },
                 text = {
-                    DefaultColumn(scrollable = true) {
+                    DefaultColumn {
                         ListItem(
                             content = { Text("改动在重新进入聊天后生效") },
                             supportingContent = {
                                 Text("标题栏及标题下方的置顶消息等卡片均以悬浮卡片显示")
                             }
                         )
-                        ListItem(
-                            content = { Text("液态玻璃效果") },
-                            supportingContent = {
-                                Text("标题栏卡片背后内容实时模糊(毛玻璃), 全 Android 版本支持")
-                            },
-                            trailingContent = {
-                                Switch(
-                                    checked = glassInput,
-                                    onCheckedChange = { glassInput = it }
-                                )
-                            }
-                        )
-                        if (glassInput) {
-                            ListItem(
-                                content = { Text("模糊强度: ${glassBlurInput.roundToInt()}") },
-                                supportingContent = {
-                                    Slider(
-                                        value = glassBlurInput,
-                                        onValueChange = { glassBlurInput = it },
-                                        valueRange = MIN_GLASS_BLUR.toFloat()..MAX_GLASS_BLUR.toFloat(),
-                                        steps = MAX_GLASS_BLUR - MIN_GLASS_BLUR - 1
-                                    )
-                                }
-                            )
-                        }
                         ListItem(
                             content = { Text("圆角半径: ${cornerInput.roundToInt()} dp") },
                             supportingContent = {
@@ -1597,8 +1505,6 @@ object FloatingChatHeader : ClickableFeature() {
                         topGapDp = gapInput.roundToInt()
                         extraGapDp = extraGapInput.roundToInt()
                         elevationDp = elevInput.roundToInt()
-                        glassEnabled = glassInput
-                        glassBlur = glassBlurInput.roundToInt()
                         onDismiss()
                     }) { Text("确定") }
                 }

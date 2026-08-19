@@ -47,17 +47,14 @@ import com.github.wekite.ui.utils.allViews
 import com.github.wekite.ui.utils.findViewWhich
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
-import com.github.wekite.utils.android.GlassSurfaceDrawable
 import com.github.wekite.utils.android.constructor
-import com.github.wekite.utils.android.isDarkMode
 import java.util.WeakHashMap
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 @Feature(
     name = "悬浮输入框",
     categories = ["界面美化"],
-    description = "将聊天输入框改为悬浮卡片形式, 带有圆角、阴影和侧边距, 可开启液态玻璃毛玻璃效果\n" +
+    description = "将聊天输入框改为悬浮卡片形式, 带有圆角、阴影和侧边距\n" +
         "建议同时启用「聊天/聊天界面沉浸」"
 )
 object FloatingChatFooter : ClickableFeature(), IResolveDex {
@@ -110,12 +107,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     /** 已经装过 outline 追踪器的 footer, 防止重复注册 OnPreDrawListener。 */
     private val outlineTrackers = WeakHashMap<View, Boolean>()
 
-    /** 每个 footer 对应的液态玻璃 drawable (开启时 background 换成它)。 */
-    private val glassDrawables = WeakHashMap<View, GlassSurfaceDrawable>()
-
-    /** 当前会话已挂载样式的 footer, 设置弹窗确认后用它即时重刷 (不必重启微信)。 */
-    private var lastFooter: ChatFooter? = null
-
     /** 临时挪动面板期间保存的原 translationY。key 是 ChatFooterBottom。 */
     private val savedPanelTranslations = WeakHashMap<View, Float>()
 
@@ -152,15 +143,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     private var sideMarginDp by prefOption("floating_chat_footer_side_margin", DEFAULT_SIDE_MARGIN)
     private var bottomGapDp by prefOption("floating_chat_footer_bottom_gap", DEFAULT_BOTTOM_GAP)
     private var elevationDp by prefOption("floating_chat_footer_elevation", DEFAULT_ELEVATION)
-
-    private var glassEnabled by prefOption("floating_chat_footer_glass", false)
-    private var glassBlur by prefOption("floating_chat_footer_glass_blur", 8)
-
-    /** 玻璃叠色不透明度 40% (与主页悬浮底栏一致: containerColor.copy(0.4f), 取消调节滑块只留模糊强度)。 */
-    private const val GLASS_TINT_ALPHA_PERCENT = 40
-
-    private const val MIN_GLASS_BLUR = 2
-    private const val MAX_GLASS_BLUR = 20
 
     /**
      * Locates ChatFooter.refreshBottomHeight() by the unique log string WeChat emits at the
@@ -247,9 +229,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
 
         // 绘制属性不依赖 LayoutParams, 构造完就能设
         ChatFooter::class.constructor.hookAfter {
-            val footer = thisObject as ChatFooter
-            lastFooter = footer
-            applyDrawingStyle(footer)
+            applyDrawingStyle(thisObject as ChatFooter)
         }
 
         // 结构改造与边距必须等 LayoutParams 就位 —— 它由父容器 (ChattingScrollLayout)
@@ -259,7 +239,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         // ChatFooter 早已构造完毕, 构造函数 hook 会整个错过。
         reflekt.firstMethod { name = "onAttachedToWindow" }.hookAfter {
             val footer = thisObject as ChatFooter
-            lastFooter = footer
             applyDrawingStyle(footer)
             applySideMargins(footer)
             if (movePanelAbove) {
@@ -570,48 +549,9 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         }
         footer.clipToOutline = true
         footer.elevation = elevationDp * density
-        applyGlass(footer)
+        FloatingChatCardVisuals.applyDarkSurface(footer, cornerRadiusDp)
         if (!movePanelAbove) trackOutlineWhileScrolling(footer)
         WeLogger.d(TAG, "applied drawing style: corner=${cornerRadiusDp}dp elev=${elevationDp}dp")
-    }
-
-    /** 液态玻璃背景: 捕获降频 + GPU 模糊 (模块自身同款管线), 关闭时回退暗色浮层。 */
-    private fun applyGlass(view: View) {
-        if (glassEnabled) {
-            val density = view.resources.displayMetrics.density
-            // rootView 未就绪(构造 hook 阶段)时跳过, attach hook 会再次调用
-            val root = view.rootView
-            if (root == null) {
-                WeLogger.w(TAG, "glass skipped: rootView not ready (${view.javaClass.simpleName})")
-                return
-            }
-            val d = glassDrawables.getOrPut(view) {
-                GlassSurfaceDrawable(view, root).also {
-                    view.background = it
-                    it.attach()
-                    WeLogger.d(TAG, "glass attached: ${view.javaClass.simpleName}")
-                }
-            }
-            d.blurRadiusPx = glassBlur * density
-            d.tintColor = glassTint(view)
-        } else {
-            glassDrawables.remove(view)?.let {
-                it.detach()
-                WeLogger.d(TAG, "glass detached")
-            }
-            WeLogger.d(TAG, "glass disabled (${view.javaClass.simpleName})")
-            FloatingChatCardVisuals.applyDarkSurface(view, cornerRadiusDp)
-        }
-    }
-
-    /** 毛玻璃叠加色: 暗色模式半透明深色, 亮色模式半透明白。不透明度固定 8%。 */
-    private fun glassTint(view: View): Int {
-        val tintAlpha = (GLASS_TINT_ALPHA_PERCENT * 255 / 100).coerceIn(0, 255)
-        return if (view.context.isDarkMode) {
-            android.graphics.Color.argb(tintAlpha, 0x10, 0x10, 0x14)
-        } else {
-            android.graphics.Color.argb(tintAlpha, 0xFF, 0xFF, 0xFF)
-        }
     }
 
     /**
@@ -849,10 +789,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         val old = recycler.paddingBottom
         if (old == target) return
         val wasAtBottom = !recycler.canScrollVertically(1)
-        // 死区: 滚动中微信会逐帧微调 footer 布局 (输入列高度回写), extra 每帧抖 1~4px。
-        // 直接应用会触发 setPadding+scrollBy+requestLayout 的每帧循环 (日志实测 244Hz 布局风暴 = 卡顿)。
-        // 3px 内不动, 抖动结束误差自然收敛, 一次性到位。
-        if (abs(target - old) < 3) return
         recycler.setPadding(recycler.paddingLeft, recycler.paddingTop, recycler.paddingRight, target)
         WeLogger.d(
             TAG,
@@ -890,9 +826,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         val targetBottom = gapPx + bottomNavBarInsetToAdd(footer)
         val overlay = overlayAmount(footer)
         val targetTop = -(overlay + targetBottom)
-        // 死区: 滚动中微信逐帧微调 footer 布局, overlay 抖 1~2px 时不动,
-        // 否则 requestLayout 每帧触发整棵 ChattingScrollLayout 布局循环 (卡顿)。2px 内视觉无感。
-        if (abs(lp.bottomMargin - targetBottom) >= 2 || abs(lp.topMargin - targetTop) >= 2) {
+        if (lp.bottomMargin != targetBottom || lp.topMargin != targetTop) {
             lp.bottomMargin = targetBottom
             lp.topMargin = targetTop
             footer.requestLayout()
@@ -981,13 +915,11 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             var gapInput by remember { mutableFloatStateOf(bottomGapDp.toFloat()) }
             var elevInput by remember { mutableFloatStateOf(elevationDp.toFloat()) }
             var panelAboveInput by remember { mutableStateOf(movePanelAbove) }
-            var glassInput by remember { mutableStateOf(glassEnabled) }
-            var glassBlurInput by remember { mutableFloatStateOf(glassBlur.toFloat()) }
 
             AlertDialogContent(
                 title = { Text("悬浮输入框") },
                 text = {
-                    DefaultColumn(scrollable = true) {
+                    DefaultColumn {
                         ListItem(
                             content = { Text("菜单显示在输入框上方") },
                             supportingContent = {
@@ -1044,31 +976,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                                 )
                             }
                         )
-                        ListItem(
-                            content = { Text("液态玻璃效果") },
-                            supportingContent = {
-                                Text("输入框卡片背后内容实时模糊(毛玻璃), 全 Android 版本支持")
-                            },
-                            trailingContent = {
-                                Switch(
-                                    checked = glassInput,
-                                    onCheckedChange = { glassInput = it }
-                                )
-                            }
-                        )
-                        if (glassInput) {
-                            ListItem(
-                                content = { Text("模糊强度: ${glassBlurInput.roundToInt()}") },
-                                supportingContent = {
-                                    Slider(
-                                        value = glassBlurInput,
-                                        onValueChange = { glassBlurInput = it },
-                                        valueRange = MIN_GLASS_BLUR.toFloat()..MAX_GLASS_BLUR.toFloat(),
-                                        steps = MAX_GLASS_BLUR - MIN_GLASS_BLUR - 1
-                                    )
-                                }
-                            )
-                        }
                     }
                 },
                 dismissButton = { TextButton(onDismiss) { Text("取消") } },
@@ -1079,10 +986,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                         sideMarginDp = sideInput.roundToInt()
                         bottomGapDp = gapInput.roundToInt()
                         elevationDp = elevInput.roundToInt()
-                        glassEnabled = glassInput
-                        glassBlur = glassBlurInput.roundToInt()
-                        // 保存后立即重刷当前 footer (毛玻璃开关/参数即时生效, 不必重启微信)
-                        lastFooter?.let { applyDrawingStyle(it) }
                         onDismiss()
                     }) { Text("确定") }
                 }
