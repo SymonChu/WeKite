@@ -2,9 +2,12 @@ package com.github.wekite.utils.android
 
 import android.os.Build
 import android.view.View
+import com.github.wekite.utils.WeLogger
 
 /** Best-effort Android 12+ GPU backdrop blur, resolved entirely by reflection. */
 internal object GlassEffect {
+    private const val TAG = "GlassEffect"
+
     private var resolved = false
     private var renderEffectClass: Class<*>? = null
     private var setRenderEffect: java.lang.reflect.Method? = null
@@ -36,6 +39,8 @@ internal object GlassEffect {
             val backdrop = createBackdropEffect?.invoke(null, blur)
             setRenderEffect?.invoke(view, backdrop)
             blur != null && backdrop != null
+        }.onFailure {
+            WeLogger.w(TAG, "apply failed on ${view.javaClass.simpleName}: ${it.message}")
         }.getOrDefault(false)
     }
 

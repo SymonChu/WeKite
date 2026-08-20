@@ -1452,7 +1452,7 @@ object FloatingChatHeader : ClickableFeature() {
             AlertDialogContent(
                 title = { Text("悬浮标题栏") },
                 text = {
-                    DefaultColumn {
+                    DefaultColumn(scrollable = true) {
                         ListItem(
                             content = { Text("改动在重新进入聊天后生效") },
                             supportingContent = {

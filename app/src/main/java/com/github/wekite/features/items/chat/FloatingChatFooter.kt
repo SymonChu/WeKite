@@ -610,6 +610,11 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
      */
     private fun trackNavBarInset(footer: ChatFooter) {
         val listener = ViewTreeObserver.OnPreDrawListener {
+            // 玻璃自愈: 微信会在布局/状态变化时重贴 footer 背景, 覆盖掉玻璃的半透明面;
+            // 每帧幂等重刷 (样式没变+背景没被换就直接返回), 与标题栏的 preDraw 自愈一致。
+            if (glassInput) {
+                FloatingChatCardVisuals.applyGlassOrDarkSurface(footer, cornerRadiusDp, glassInput, glassBlurDp)
+            }
             if (movePanelAbove) {
                 applyBottomMargin(footer)
                 liftNewMessageBubble(footer)
@@ -936,7 +941,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             AlertDialogContent(
                 title = { Text("悬浮输入框") },
                 text = {
-                    DefaultColumn {
+                    DefaultColumn(scrollable = true) {
                         ListItem(
                             content = { Text("菜单显示在输入框上方") },
                             supportingContent = {
