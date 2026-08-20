@@ -490,7 +490,14 @@ object FloatingChatHeader : ClickableFeature() {
      */
     private fun applyTipsBarCardStyle(group: View) {
         val style = HeaderStyle(cornerRadiusDp, elevationDp)
-        FloatingChatCardVisuals.applyGlassOrDarkSurface(group, cornerRadiusDp, glassInput, glassBlurDp)
+        if (glassInput) {
+            // 玻璃模式下组背景清空: 玻璃面由置顶卡片体(hyi)单独承担, 避免组+体双层叠色
+            // 变暗 (40%×2 ≈ 64% 不透明, 比首页底栏暗一截); 背后消息直接透出。
+            FloatingChatCardVisuals.clearGlass(group)
+            if (group.background != null) group.background = null
+        } else {
+            FloatingChatCardVisuals.applyGlassOrDarkSurface(group, cornerRadiusDp, false, glassBlurDp)
+        }
         if (tipsBarStyles[group] != style) {
             val density = group.resources.displayMetrics.density
             group.outlineProvider = group.outlineProvider as? TipsBarCardOutline
