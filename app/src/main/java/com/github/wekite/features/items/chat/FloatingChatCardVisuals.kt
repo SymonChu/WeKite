@@ -3,7 +3,8 @@ package com.github.wekite.features.items.chat
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.view.View
-import com.github.wekite.utils.android.GlassEffect
+import com.github.wekite.utils.WeLogger
+import com.github.wekite.utils.android.GlassSurfaceDrawable
 import com.github.wekite.utils.android.isDarkMode
 import java.util.WeakHashMap
 import kotlin.math.roundToInt
@@ -14,11 +15,14 @@ import kotlin.math.roundToInt
  * Light mode keeps WeChat's own backgrounds intact. Dark mode needs an explicit surface and a
  * hairline border because Android elevation is barely visible on near-black chat backgrounds.
  *
- * 液态玻璃: Android 12+ (API 31+) 用系统 RenderEffect backdrop blur 做 GPU 实时模糊,
- * 叠 40% 半透明主题色 —— 与首页悬浮底栏 (FloatingBottomBar 的 containerColor.copy(0.4f))
- * 观感一致。API 31 以下自动降级为纯半透明 (无模糊), 不会报错也不会闪退。
+ * 液态玻璃: 降频捕获卡片背后真实像素 (PixelCopy, 窗口 Surface 拷贝) → GPU 模糊
+ * (RenderNode + RenderEffect, API 31+) 或 CPU 盒式模糊兜底 → 放大绘制 → 40% 半透明主题色
+ * 叠加 → 1dp 细高光描边 —— 与首页悬浮底栏 (FloatingBottomBar 的 containerColor.copy(0.4f))
+ * 观感一致。全 Android 版本可用 (捕获 API 26+, 模糊 API<31 走 CPU)。
  */
 internal object FloatingChatCardVisuals {
+
+    private const val TAG = "FloatingChatCardVisuals"
 
     private const val DARK_SURFACE_COLOR = 0xFF242424.toInt()
     private const val DARK_STROKE_COLOR = 0x24FFFFFF
@@ -30,21 +34,15 @@ internal object FloatingChatCardVisuals {
     private const val GLASS_LIGHT_TINT = 0xFFFFFFFF.toInt()
     private const val GLASS_DARK_TINT = 0xFF101014.toInt()
 
-    /** 玻璃边缘细高光 (25% 白), 对齐首页底栏 Highlight 的玻璃感。 */
-    private const val GLASS_EDGE_HIGHLIGHT = 0x40FFFFFF
-
     private data class AppliedStyle(val cornerRadiusDp: Int, val strokeWidthPx: Int)
-
-    private data class AppliedGlass(val cornerRadiusDp: Int, val blurRadiusDp: Int)
 
     private val originalBackgrounds = WeakHashMap<View, Drawable?>()
     private val appliedBackgrounds = WeakHashMap<View, Drawable>()
     private val appliedStyles = WeakHashMap<View, AppliedStyle>()
 
-    /** 液态玻璃独立的原背景/当前背景/样式缓存, 与暗色浮层互不干扰。 */
+    /** 液态玻璃: 原始背景 + 当前捕获 drawable, 与暗色浮层互不干扰。 */
     private val glassOriginals = WeakHashMap<View, Drawable?>()
-    private val glassBackgrounds = WeakHashMap<View, Drawable>()
-    private val glassStyles = WeakHashMap<View, AppliedGlass>()
+    private val glassDrawables = WeakHashMap<View, GlassSurfaceDrawable>()
 
     fun applyDarkSurface(view: View, cornerRadiusDp: Int) {
         if (!view.context.isDarkMode) {
@@ -86,46 +84,64 @@ internal object FloatingChatCardVisuals {
     }
 
     /**
-     * 液态玻璃卡片面: 40% 半透明主题色圆角背景 + GPU backdrop blur。
-     * 幂等 —— 样式没变 (圆角/模糊值/背景未被微信覆盖) 时直接返回, 每帧可安全重放。
+     * 液态玻璃卡片面: PixelCopy 捕获背后 → GPU 模糊 → 40% tint + 高光描边。
+     * 幂等 —— drawable 已存在且背景未被微信换掉时只更新参数, 每帧可安全重放。
      */
     fun applyGlass(view: View, cornerRadiusDp: Int, blurRadiusDp: Int) {
-        val style = AppliedGlass(cornerRadiusDp, blurRadiusDp)
-        val background = glassBackgrounds[view]
-        if (glassStyles[view] == style && view.background === background) return
-
         if (!glassOriginals.containsKey(view)) {
             glassOriginals[view] = view.background
         }
 
+        val existing = glassDrawables[view]
         val density = view.resources.displayMetrics.density
-        val radiusPx = cornerRadiusDp * density
-        val base = if (view.context.isDarkMode) GLASS_DARK_TINT else GLASS_LIGHT_TINT
-        val alpha = GLASS_TINT_ALPHA_PERCENT * 255 / 100
-        val tint = (base and 0x00FFFFFF) or (alpha shl 24)
-        val bg = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = radiusPx
-            setColor(tint)
-            // 细高光描边, 模拟首页悬浮底栏的玻璃边缘高光
-            setStroke((1 * density).roundToInt().coerceAtLeast(1), GLASS_EDGE_HIGHLIGHT)
+        if (existing != null) {
+            existing.blurRadiusPx = blurRadiusDp * density
+            existing.tintColor = glassTint(view)
+            existing.cornerRadiusPx = cornerRadiusDp * density
+            existing.strokeWidthPx = (DARK_STROKE_WIDTH_DP * density).roundToInt().toFloat()
+            if (view.background !== existing) {
+                view.background = existing
+            }
+            return
         }
-        view.background = bg
-        glassBackgrounds[view] = bg
-        glassStyles[view] = style
-        GlassEffect.apply(view, blurRadiusDp * density)
+
+        // rootView 未就绪 (构造 hook 阶段) 时跳过, preDraw 自愈会再进来
+        val root = view.rootView
+        if (root == null) {
+            WeLogger.w(TAG, "glass skipped: rootView not ready (${view.javaClass.simpleName})")
+            return
+        }
+
+        val d = GlassSurfaceDrawable(view, root).also {
+            view.background = it
+            it.attach()
+        }
+        d.blurRadiusPx = blurRadiusDp * density
+        d.tintColor = glassTint(view)
+        d.cornerRadiusPx = cornerRadiusDp * density
+        d.strokeWidthPx = (DARK_STROKE_WIDTH_DP * density).roundToInt().toFloat()
+        glassDrawables[view] = d
+        WeLogger.d(TAG, "glass attached: ${view.javaClass.simpleName}")
     }
 
-    /** 摘掉液态玻璃: 清 GPU 效果并恢复原始背景。 */
+    /** 玻璃叠色: 40% 白 (亮色) / 40% 深色 (暗色), 对齐首页悬浮底栏。 */
+    private fun glassTint(view: View): Int {
+        val alpha = GLASS_TINT_ALPHA_PERCENT * 255 / 100
+        val base = if (view.context.isDarkMode) GLASS_DARK_TINT else GLASS_LIGHT_TINT
+        return (base and 0x00FFFFFF) or (alpha shl 24)
+    }
+
+    /** 摘掉液态玻璃: 停捕获并恢复原始背景 (背景已被微信换掉时不覆盖)。 */
     fun clearGlass(view: View) {
-        GlassEffect.clear(view)
-        val background = glassBackgrounds[view]
-        if (background != null && view.background === background) {
-            view.background = glassOriginals[view]
+        val d = glassDrawables.remove(view)
+        if (d != null) {
+            d.detach()
+            WeLogger.d(TAG, "glass detached (${view.javaClass.simpleName})")
+            if (view.background === d) {
+                view.background = glassOriginals[view]
+            }
         }
         glassOriginals.remove(view)
-        glassBackgrounds.remove(view)
-        glassStyles.remove(view)
     }
 
     /** 悬浮卡统一入口: 玻璃开 → 液态玻璃; 关 → 摘玻璃并回到暗色浮层/原背景。 */
