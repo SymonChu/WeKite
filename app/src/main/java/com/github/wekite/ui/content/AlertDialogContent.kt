@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -69,7 +70,12 @@ fun AlertDialogContent(
                 val bodyStyle = MaterialTheme.typography.bodyMedium
                 val bodyColor = if (dark) Color.White else Color.Black
 
-                Box(modifier = Modifier.weight(1f, fill = false)) {
+                // 有界高度: 内容超高时 text 区域内可滚动 (设置弹窗等长内容), 不会被窗口裁掉
+                Box(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .heightIn(max = 420.dp)
+                ) {
                     CompositionLocalProvider(
                         LocalTextStyle provides bodyStyle,
                         LocalContentColor provides bodyColor
