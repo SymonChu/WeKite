@@ -138,11 +138,11 @@ val FEATURE_CATEGORIES = listOf(
     "联系人与群组" to MaterialSymbols.Outlined.Contacts,
     "红包与支付" to MaterialSymbols.Outlined.Payments,
     "朋友圈" to MaterialSymbols.Outlined.Camera,
-    "系统与隐私" to MaterialSymbols.Outlined.Wand_stars,
     "音视频通话" to MaterialSymbols.Outlined.Call,
     "界面美化" to MaterialSymbols.Outlined.Imagesearch_roller,
     "公众号" to MaterialSymbols.Outlined.Newspaper,
     "小程序" to MaterialSymbols.Outlined.Package_2,
+    "系统与隐私" to MaterialSymbols.Outlined.Wand_stars,
 )
 
 // ---------------------------------------------------------------------------
@@ -217,7 +217,10 @@ private fun MainPagerScreen(
                 key = { it },
             ) { page ->
                 when (page) {
-                    0 -> HomePager(onOpenFeatures = { scope.launch { pagerState.animateScrollToPage(1) } })
+                    0 -> HomePager(
+                        onOpenEnabledFeatures = { onOpenCategory(ENABLED_FEATURES_CATEGORY) },
+                        onOpenFeatures = { scope.launch { pagerState.animateScrollToPage(1) } },
+                    )
                     1 -> FeaturesPager(onOpenCategory = onOpenCategory)
                     2 -> LogsPager()
                     else -> SettingsPager(onOpenLicense = onOpenLicense)

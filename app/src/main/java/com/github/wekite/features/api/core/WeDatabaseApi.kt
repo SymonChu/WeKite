@@ -11,10 +11,12 @@ import com.github.wekite.dexkit.abc.IResolveDex
 import com.github.wekite.dexkit.dsl.dexClass
 import com.github.wekite.dexkit.dsl.dexMethod
 import com.github.wekite.features.api.core.models.SelfProfileField
+import com.github.wekite.features.api.core.models.WeChatroomSyncState
 import com.github.wekite.features.api.core.models.WeContact
 import com.github.wekite.features.api.core.models.WeGroup
 import com.github.wekite.features.api.core.models.WeMessage
 import com.github.wekite.features.api.core.models.WeOfficialAccount
+import com.github.wekite.features.api.core.models.normalizeChatroomMemberIds
 import com.github.wekite.features.api.net.models.protobuf.ChatRoomDataProto
 import com.github.wekite.features.core.ApiFeature
 import com.github.wekite.features.core.Feature
@@ -315,6 +317,8 @@ object WeDatabaseApi : ApiFeature(), IResolveDex {
 
         /** 获取群聊成员列表字符串 */
         const val GROUP_MEMBERS = "SELECT memberlist FROM chatroom WHERE chatroomname = '%s'"
+
+        const val CHATROOM_SYNC_STATE = "SELECT memberlist, chatroomVersion FROM chatroom WHERE chatroomname = ?"
     }
 
     override fun onEnable() {
@@ -536,6 +540,25 @@ object WeDatabaseApi : ApiFeature(), IResolveDex {
                 nicknamePinyin = row.str("quanPin"),
                 avatarUrl = row.str("avatarUrl")
             )
+        }
+    }
+
+    fun getChatroomSyncState(roomId: String): WeChatroomSyncState? {
+        if (!isReady || roomId.isEmpty()) return null
+
+        return try {
+            db.rawQuery(SqlStatements.CHATROOM_SYNC_STATE, arrayOf(roomId)).use { cursor ->
+                if (!cursor.moveToFirst()) return null
+
+                WeChatroomSyncState(
+                    roomId = roomId,
+                    memberIds = normalizeChatroomMemberIds(cursor.getString(0).orEmpty()),
+                    memberVersion = if (cursor.isNull(1)) null else cursor.getInt(1),
+                )
+            }
+        } catch (e: Exception) {
+            WeLogger.e(TAG, "failed to get chatroom sync state; roomId=$roomId", e)
+            null
         }
     }
 

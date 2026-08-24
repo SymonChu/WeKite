@@ -20,9 +20,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Arrow_back
+import com.composables.icons.materialsymbols.outlined.Check_circle
 import com.composables.icons.materialsymbols.outlined.Close
 import com.composables.icons.materialsymbols.outlined.Search
 import com.github.wekite.features.core.BaseFeature
+import com.github.wekite.features.core.ClickableFeature
 import com.github.wekite.features.core.FeaturesProvider
 import com.github.wekite.features.core.SwitchFeature
 import com.github.wekite.preferences.WePrefs
@@ -45,6 +47,20 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
  * nor away from what MMKV actually holds.
  */
 private var featureToggleRevision by mutableIntStateOf(0)
+
+/** Special category shown first in the feature list: only features currently enabled. */
+const val ENABLED_FEATURES_CATEGORY = "__enabled_features__"
+
+private fun enabledFeatureItems(): List<SwitchFeature> =
+    FeaturesProvider.ALL_HOOK_ITEMS
+        .associateBy { it.name }
+        .values
+        .filterIsInstance<SwitchFeature>()
+        .filter { feature ->
+            WePrefs.getBoolOrDef(feature.name, feature.defaultEnabled) ||
+                (feature is ClickableFeature && feature.alwaysEnabled)
+        }
+        .sortedBy { it.name }
 
 /**
  * Current switch state of [item], read straight from MMKV using the feature's own
@@ -149,6 +165,19 @@ fun FeaturesPager(onOpenCategory: (String) -> Unit) {
                         .padding(top = 12.dp)
                         .fillMaxWidth()
                 ) {
+                    ArrowPreference(
+                        title = "已启用功能",
+                        summary = "查看当前已启用的全部功能",
+                        startAction = {
+                            Icon(
+                                imageVector = MaterialSymbols.Outlined.Check_circle,
+                                contentDescription = null,
+                                modifier = Modifier.padding(end = 6.dp),
+                                tint = MiuixTheme.colorScheme.onBackground,
+                            )
+                        },
+                        onClick = { onOpenCategory(ENABLED_FEATURES_CATEGORY) },
+                    )
                     FEATURE_CATEGORIES.forEach { (name, icon) ->
                         ArrowPreference(
                             title = name,
@@ -177,12 +206,16 @@ fun FeaturesPager(onOpenCategory: (String) -> Unit) {
 
 @Composable
 fun CategoryDetailScreen(categoryName: String, onBack: () -> Unit) {
-    val items = remember(categoryName) {
-        FeaturesProvider.ALL_HOOK_ITEMS.filter { categoryName in it.categories }
+    val items = remember(categoryName, featureToggleRevision) {
+        if (categoryName == ENABLED_FEATURES_CATEGORY) {
+            enabledFeatureItems()
+        } else {
+            FeaturesProvider.ALL_HOOK_ITEMS.filter { categoryName in it.categories }
+        }
     }
 
     MiuixListScaffold(
-        title = categoryName,
+        title = if (categoryName == ENABLED_FEATURES_CATEGORY) "已启用功能" else categoryName,
         navigationIcon = {
             IconButton(onClick = onBack) {
                 Icon(
@@ -193,7 +226,20 @@ fun CategoryDetailScreen(categoryName: String, onBack: () -> Unit) {
             }
         },
     ) {
-        if (items.isEmpty()) return@MiuixListScaffold
+        if (items.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(top = 48.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = if (categoryName == ENABLED_FEATURES_CATEGORY) "当前没有已启用的功能" else "当前分类没有功能",
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                }
+            }
+            return@MiuixListScaffold
+        }
 
         itemsIndexed(items, key = { _, item -> item.name }) { index, item ->
             Column(

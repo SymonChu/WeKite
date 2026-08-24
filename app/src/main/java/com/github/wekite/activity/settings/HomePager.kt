@@ -33,7 +33,9 @@ import androidx.core.net.toUri
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Check_circle
 import com.github.wekite.BuildConfig
+import com.github.wekite.features.core.ClickableFeature
 import com.github.wekite.features.core.FeaturesProvider
+import com.github.wekite.features.core.SwitchFeature
 import com.github.wekite.loader.startup.StartupInfo
 import com.github.wekite.preferences.WePrefs
 import com.github.wekite.utils.HostInfo
@@ -88,9 +90,17 @@ private fun openLsposedManager(context: Context) {
 }
 
 @Composable
-fun HomePager(onOpenFeatures: () -> Unit) {
+fun HomePager(
+    onOpenEnabledFeatures: () -> Unit,
+    onOpenFeatures: () -> Unit,
+) {
     val enabledCount = remember {
-        FeaturesProvider.ALL_HOOK_ITEMS.count { WePrefs.getBoolOrFalse(it.name) }
+        FeaturesProvider.ALL_HOOK_ITEMS
+            .filterIsInstance<SwitchFeature>()
+            .count { feature ->
+                WePrefs.getBoolOrDef(feature.name, feature.defaultEnabled) ||
+                    (feature is ClickableFeature && feature.alwaysEnabled)
+            }
     }
     val totalCount = remember { FeaturesProvider.ALL_HOOK_ITEMS.size }
 
@@ -103,6 +113,7 @@ fun HomePager(onOpenFeatures: () -> Unit) {
                 StatusRow(
                     enabledCount = enabledCount,
                     totalCount = totalCount,
+                    onOpenEnabledFeatures = onOpenEnabledFeatures,
                     onOpenFeatures = onOpenFeatures
                 )
                 SystemInfoCard()
@@ -113,7 +124,12 @@ fun HomePager(onOpenFeatures: () -> Unit) {
 }
 
 @Composable
-private fun StatusRow(enabledCount: Int, totalCount: Int, onOpenFeatures: () -> Unit) {
+private fun StatusRow(
+    enabledCount: Int,
+    totalCount: Int,
+    onOpenEnabledFeatures: () -> Unit,
+    onOpenFeatures: () -> Unit,
+) {
     val isDark = isSystemInDarkTheme()
     val context = LocalContext.current
     Row(
@@ -179,7 +195,7 @@ private fun StatusRow(enabledCount: Int, totalCount: Int, onOpenFeatures: () -> 
                     .fillMaxWidth()
                     .weight(1f),
                 label = "已启用功能", value = enabledCount.toString(),
-                onClick = onOpenFeatures,
+                onClick = onOpenEnabledFeatures,
             )
             Spacer(Modifier.height(12.dp))
             CountCard(
