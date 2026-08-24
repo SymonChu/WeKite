@@ -43,6 +43,9 @@ object WeLogger {
 
         /** Close the active writer and delete every run-log file; reports freed bytes via [result]. */
         class ClearAll(val completed: CountDownLatch, val result: AtomicLong) : WriteTask
+
+        /** Delete run-log files older than the configured retention period on the writer thread. */
+        class CleanOld(val completed: CountDownLatch) : WriteTask
     }
 
     /**
@@ -102,10 +105,42 @@ object WeLogger {
 
                     // If the log file date is older than the retention days, delete it
                     if (fileDate != null && fileDate.isBefore(thresholdDate)) {
-                        file.delete()
+                        if (file.delete()) {
+                            Log.d(TAG, "deleted old log file: ${file.name}")
+                        }
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Deletes old run-log files using the logger's own writer thread. This prevents the automatic
+     * cleaner from deleting a file while the asynchronous logger still has it open.
+     */
+    fun deleteOldLogs() {
+        if (Thread.currentThread() === writerThread) {
+            deleteOldLogs((KnownPaths.moduleData / "logs").createDirsSafe())
+            return
+        }
+
+        val completed = CountDownLatch(1)
+        val enqueued = try {
+            writeQueue.offer(WriteTask.CleanOld(completed), FLUSH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            false
+        }
+        if (!enqueued) {
+            Log.w(TAG, "timed out while enqueueing old-log cleanup")
+            return
+        }
+        try {
+            if (!completed.await(FLUSH_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "timed out while deleting old log files")
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
         }
     }
 
@@ -219,6 +254,18 @@ object WeLogger {
                             task.completed.countDown()
                         }
                         hasWrites = false
+                    }
+
+                    is WriteTask.CleanOld -> {
+                        try {
+                            flushWriter()
+                            val logsDir = runCatching {
+                                (KnownPaths.moduleData / "logs").createDirsSafe()
+                            }.getOrNull()
+                            if (logsDir != null) deleteOldLogs(logsDir)
+                        } finally {
+                            task.completed.countDown()
+                        }
                     }
                 }
             }
