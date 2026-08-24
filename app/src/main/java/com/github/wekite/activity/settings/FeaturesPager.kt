@@ -20,7 +20,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Arrow_back
-import com.composables.icons.materialsymbols.outlined.Check_circle
 import com.composables.icons.materialsymbols.outlined.Close
 import com.composables.icons.materialsymbols.outlined.Search
 import com.github.wekite.features.core.BaseFeature
@@ -165,19 +164,6 @@ fun FeaturesPager(onOpenCategory: (String) -> Unit) {
                         .padding(top = 12.dp)
                         .fillMaxWidth()
                 ) {
-                    ArrowPreference(
-                        title = "已启用功能",
-                        summary = "查看当前已启用的全部功能",
-                        startAction = {
-                            Icon(
-                                imageVector = MaterialSymbols.Outlined.Check_circle,
-                                contentDescription = null,
-                                modifier = Modifier.padding(end = 6.dp),
-                                tint = MiuixTheme.colorScheme.onBackground,
-                            )
-                        },
-                        onClick = { onOpenCategory(ENABLED_FEATURES_CATEGORY) },
-                    )
                     FEATURE_CATEGORIES.forEach { (name, icon) ->
                         ArrowPreference(
                             title = name,

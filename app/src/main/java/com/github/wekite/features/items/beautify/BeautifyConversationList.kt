@@ -2,15 +2,11 @@ package com.github.wekite.features.items.beautify
 
 import android.content.Context
 import android.content.res.ColorStateList
-import android.graphics.Outline
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.RippleDrawable
 import android.view.View
-import android.view.ViewGroup
-import android.view.ViewOutlineProvider
-import android.widget.ImageView
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.ListItem
@@ -35,14 +31,13 @@ import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.isDarkMode
-import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 
 @Feature(
     name = "美化对话列表",
-    categories = ["聊天", "界面美化"],
-    description = "为主页会话列表提供卡片布局、圆角头像、未读突出和分隔线设置",
+    categories = ["界面美化"],
+    description = "为主页会话列表提供卡片布局、未读突出和分隔线设置",
 )
 object BeautifyConversationList : ClickableFeature() {
 
@@ -52,20 +47,12 @@ object BeautifyConversationList : ClickableFeature() {
         "beautify_conversation_list_preset",
         ConversationListPreset.COMFORT_CARD.name,
     )
-    private var roundAvatarsEnabled by prefOption("beautify_conversation_list_round_avatars", true)
     private var highlightUnreadEnabled by prefOption("beautify_conversation_list_highlight_unread", true)
     private var hideDividersEnabled by prefOption("beautify_conversation_list_hide_dividers", true)
 
     private val selectedPreset: ConversationListPreset
         get() = ConversationListPreset.entries.firstOrNull { it.name == presetName }
             ?: ConversationListPreset.COMFORT_CARD
-
-    private data class AvatarVisualState(
-        val view: WeakReference<ImageView>,
-        val outlineProvider: ViewOutlineProvider,
-        val clipToOutline: Boolean,
-        val moduleOutlineProvider: ViewOutlineProvider,
-    )
 
     private data class RowVisualState(
         var baselineBackground: Drawable?,
@@ -74,7 +61,6 @@ object BeautifyConversationList : ClickableFeature() {
         var baselinePaddingRight: Int,
         var baselinePaddingBottom: Int,
         var moduleBackground: Drawable? = null,
-        var avatar: AvatarVisualState? = null,
     )
 
     private sealed interface UnreadAccessor {
@@ -107,7 +93,6 @@ object BeautifyConversationList : ClickableFeature() {
     override fun onClick(context: ComponentActivity) {
         showComposeDialog(context) {
             var draftPreset by remember { mutableStateOf(selectedPreset) }
-            var draftRoundAvatars by remember { mutableStateOf(roundAvatarsEnabled) }
             var draftHighlightUnread by remember { mutableStateOf(highlightUnreadEnabled) }
             var draftHideDividers by remember { mutableStateOf(hideDividersEnabled) }
 
@@ -132,16 +117,6 @@ object BeautifyConversationList : ClickableFeature() {
                                 },
                             )
                         }
-                        ListItem(
-                            modifier = Modifier.clickable { draftRoundAvatars = !draftRoundAvatars },
-                            headlineContent = { Text("圆角头像") },
-                            trailingContent = {
-                                Switch(
-                                    checked = draftRoundAvatars,
-                                    onCheckedChange = { draftRoundAvatars = it },
-                                )
-                            },
-                        )
                         ListItem(
                             modifier = Modifier.clickable { draftHighlightUnread = !draftHighlightUnread },
                             headlineContent = { Text("突出未读会话") },
@@ -170,7 +145,6 @@ object BeautifyConversationList : ClickableFeature() {
                 confirmButton = {
                     Button(onClick = {
                         presetName = draftPreset.name
-                        roundAvatarsEnabled = draftRoundAvatars
                         highlightUnreadEnabled = draftHighlightUnread
                         hideDividersEnabled = draftHideDividers
                         updateDividerRequest()
@@ -195,7 +169,6 @@ object BeautifyConversationList : ClickableFeature() {
             )
         }
         restoreRowBaseline(row, state)
-        clearAvatarState(state)
 
         val preset = selectedPreset
         val unread = highlightUnreadEnabled && isUnread(conversation)
@@ -209,8 +182,6 @@ object BeautifyConversationList : ClickableFeature() {
             state.baselinePaddingRight,
             state.baselinePaddingBottom,
         )
-
-        if (roundAvatarsEnabled) installAvatarOutline(row, state, preset)
     }
 
     private fun restoreRowBaseline(row: View, state: RowVisualState) {
@@ -229,17 +200,6 @@ object BeautifyConversationList : ClickableFeature() {
             state.baselinePaddingRight = row.paddingRight
             state.baselinePaddingBottom = row.paddingBottom
         }
-    }
-
-    private fun clearAvatarState(state: RowVisualState) {
-        val avatarState = state.avatar ?: return
-        val avatar = avatarState.view.get()
-        if (avatar?.outlineProvider === avatarState.moduleOutlineProvider) {
-            avatar.outlineProvider = avatarState.outlineProvider
-            avatar.clipToOutline = avatarState.clipToOutline
-            avatar.invalidateOutline()
-        }
-        state.avatar = null
     }
 
     private fun buildRowBackground(
@@ -292,55 +252,6 @@ object BeautifyConversationList : ClickableFeature() {
         if (!unreadFailuresLogged.add(modelClass)) return
         if (error == null) WeLogger.w(TAG, "$message on ${modelClass.name}")
         else WeLogger.w(TAG, "$message on ${modelClass.name}", error)
-    }
-
-    private fun installAvatarOutline(row: View, state: RowVisualState, preset: ConversationListPreset) {
-        val avatar = findAvatarCandidate(row) ?: return
-        val provider = object : ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: Outline) {
-                outline.setRoundRect(
-                    0,
-                    0,
-                    view.width,
-                    view.height,
-                    dpToPx(preset.avatarRadiusDp, view.resources.displayMetrics.density).toFloat(),
-                )
-            }
-        }
-        state.avatar = AvatarVisualState(
-            WeakReference(avatar),
-            avatar.outlineProvider,
-            avatar.clipToOutline,
-            provider,
-        )
-        avatar.outlineProvider = provider
-        avatar.clipToOutline = true
-        avatar.invalidateOutline()
-    }
-
-    private fun findAvatarCandidate(root: View): ImageView? {
-        var best: ImageView? = null
-        var bestScore: Float? = null
-        val stack = ArrayDeque<Pair<View, Int>>()
-        stack += root to 0
-        while (stack.isNotEmpty()) {
-            val (view, depth) = stack.removeLast()
-            if (view.visibility != View.VISIBLE) continue
-            if (view is ImageView && view.isLaidOut) {
-                val score = avatarCandidateScore(
-                    AvatarCandidateMetrics(view.width, view.height, depth),
-                    view.resources.displayMetrics.density,
-                )
-                if (score != null && (bestScore == null || score > bestScore)) {
-                    best = view
-                    bestScore = score
-                }
-            }
-            if (depth < 8 && view is ViewGroup) {
-                for (index in 0 until view.childCount) stack += view.getChildAt(index) to depth + 1
-            }
-        }
-        return best
     }
 
     private fun updateDividerRequest() {
