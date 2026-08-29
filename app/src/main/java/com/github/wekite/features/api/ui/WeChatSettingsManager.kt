@@ -9,6 +9,7 @@ import dev.ujhhgtg.reflekt.utils.createInstance
 import dev.ujhhgtg.reflekt.utils.toClass
 import com.github.wekite.loader.utils.ParcelableFixer
 import com.github.wekite.utils.HookHandle
+import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.hookAfterDirectly
 import com.github.wekite.utils.hookBeforeDirectly
 import com.github.wekite.utils.reflection.buildClass
@@ -218,22 +219,33 @@ class WeChatSettingsManager(
         return name.endsWith("MainSettingsUI") || name.endsWith("CommonSettingsUI")
     }
 
-    // 第一个设置页进入时安装全局 getString Hook
+    // 进入设置页时**幂等**确保 getString Hook 在位，而不依赖 activeSettingsUis 的数量。
+    // 该集合是弱引用集(GC 决定清理时机)，且进入/销毁分别挂在 BaseSettingPrefUI / BaseSettingUI 上，
+    // 只触发一边就会漂移成「集合非空但 Hook 已拆」——此时假 resId 取不到字符串，
+    // 表现为设置项还在、点击正常、唯独标题空白(须重装微信才恢复)。集合只用于决定何时拆钩。
     private fun onSettingsUiEntered(ui: Any) {
         synchronized(settingsUiLock) {
-            // 同一个页面重复触发，或者已经有别的设置页存活时，不重复挂钩
-            if (!activeSettingsUis.add(ui)) return
-            if (activeSettingsUis.size != 1) return
-            if (contextGetStringUnhook != null || resourcesGetStringUnhook != null) return
+            activeSettingsUis.add(ui)
 
-            contextGetStringUnhook = Context::class.reflekt()
-                .firstMethod { name = "getString"; parameters(Int::class) }
-                .hookBeforeDirectly {
-                    stringPool[args[0] as Int]?.let { result = it }
+            if (contextGetStringUnhook != null && resourcesGetStringUnhook != null) return
+
+            WeLogger.d(
+                TAG, "installing getString hooks (activeUis=${activeSettingsUis.size}, " +
+                        "ctx=${contextGetStringUnhook != null}, res=${resourcesGetStringUnhook != null})"
+            )
+
+            if (contextGetStringUnhook == null) {
+                contextGetStringUnhook = Context::class.reflekt()
+                    .firstMethod { name = "getString"; parameters(Int::class) }
+                    .hookBeforeDirectly {
+                        stringPool[args[0] as Int]?.let { result = it }
+                    }
+            }
+
+            if (resourcesGetStringUnhook == null) {
+                resourcesGetStringUnhook = methodResourceHelperGetStringById.hookBeforeDirectly {
+                    stringPool[args[1] as Int]?.let { result = it }
                 }
-
-            resourcesGetStringUnhook = methodResourceHelperGetStringById.hookBeforeDirectly {
-                stringPool[args[1] as Int]?.let { result = it }
             }
         }
     }
@@ -244,8 +256,13 @@ class WeChatSettingsManager(
             activeSettingsUis.remove(ui)
             if (activeSettingsUis.isNotEmpty()) return
 
+            WeLogger.d(TAG, "last settings ui destroyed, uninstalling getString hooks")
             contextGetStringUnhook?.unhook(); contextGetStringUnhook = null
             resourcesGetStringUnhook?.unhook(); resourcesGetStringUnhook = null
         }
+    }
+
+    private companion object {
+        const val TAG = "WeChatSettingsManager"
     }
 }

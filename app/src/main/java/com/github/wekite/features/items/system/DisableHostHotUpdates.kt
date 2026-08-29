@@ -55,7 +55,10 @@ object DisableHostHotUpdates : SwitchFeature() {
                         this,
                         it
                     ).setEnabled(this, enabled)
-                }.onFailure { WeLogger.e(TAG, "failed to set $enabled state for $it") }
+                }.onFailure {
+                    // 这些 Tinker 组件在部分微信版本里并不存在；拦截热更新真正靠的是 isTinkerEnabled Hook
+                    WeLogger.d(TAG, "failed to set $enabled state for $it")
+                }
             }
         }
     }
