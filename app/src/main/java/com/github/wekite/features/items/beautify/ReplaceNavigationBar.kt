@@ -725,11 +725,20 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
         if (screenH <= 0) return
         val density = metrics.density
         val scrollThresholdPx = (50f * density).toInt()
-        val shiftThresholdPx = screenH * 8 / 100
+        // 位移阈值 30% 屏高: v1.95 的 8% 用户实测偏灵敏, 用户明示「38% 才开始隐藏都可以」,
+        // 取 30% 兼顾「拉到位才隐藏」与「不必拉到底」。
+        val shiftThresholdPx = screenH * 30 / 100
         val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
         var pullDownRef: java.lang.ref.WeakReference<ViewGroup>? = null
-        val minTop = java.util.WeakHashMap<View, Int>()
+        // 每个候选 View 独立维护: 基线 top / 采样时高度 / 上次 top / 连续越界次数。
+        // v1.95 只有 minTop(历史最小值) 一张表, 面板内可复用 View 被换到更靠下位置时会带着旧基线,
+        // top-base 一上来就越界 → 轻轻一拉就隐藏; 开启圆角头像后头像 Hook 加剧重排, 复现率大幅上升。
+        val baseTop = java.util.WeakHashMap<View, Int>()
+        val baseHeight = java.util.WeakHashMap<View, Int>()
+        val lastTop = java.util.WeakHashMap<View, Int>()
+        val curTop = java.util.WeakHashMap<View, Int>()
+        val overCount = java.util.WeakHashMap<View, Int>()
         var loggedFound = false
         var loggedMissing = false
         var pollCount = 0
@@ -820,14 +829,50 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         val candidates = ArrayList<View>(8)
                         collectCandidates(panel, 0, candidates)
                         val loc = IntArray(2)
+
+                        // 第一遍: 采样 + 维护每个候选的基线。
+                        // 高度变化 / 出现更高位置 / 位移跳变(> 1/4 屏高, 只可能是重新布局而非手指下拉)
+                        // 一律重设基线 —— 防止复用 View 带着旧基线让位移量凭空越界。
                         for (c in candidates) {
                             c.getLocationOnScreen(loc)
                             val top = loc[1]
-                            val base = minTop[c]
-                            if (base == null || top < base) {
-                                minTop[c] = top
-                            } else if (top - base > shiftThresholdPx) {
+                            val h = c.height
+                            curTop[c] = top
+                            val base = baseTop[c]
+                            val prev = lastTop[c]
+                            val jumped = prev != null && kotlin.math.abs(top - prev) > screenH / 4
+                            if (base == null || baseHeight[c] != h || top < base || jumped) {
+                                baseTop[c] = top
+                                baseHeight[c] = h
+                                overCount[c] = 0
+                            }
+                            lastTop[c] = top
+                        }
+
+                        // 第二遍: 只用「收起时位于视口上方」(基线 top < 0) 的候选判定 —— 这是下拉面板的
+                        // 定义特征。主页会话列表基线 top >= 0 会被排除, 于是「圆角头像」Hook 每次加载头像
+                        // 引起的列表重排不再污染位移量(用户实测: 不开圆角头像正常, 开了就轻轻一拉即隐藏)。
+                        // 一个都没有时退回全部候选, 保持 v1.95 已在真机验证过的行为, 不做激进改变。
+                        val panelLike = candidates.filter { (baseTop[it] ?: 0) < 0 }
+                        val judged = if (panelLike.isNotEmpty()) panelLike else candidates
+
+                        for (c in judged) {
+                            val top = curTop[c] ?: continue
+                            val base = baseTop[c] ?: continue
+                            if (top - base <= shiftThresholdPx) {
+                                overCount[c] = 0
+                                continue
+                            }
+                            // 连续 3 次采样都越界(≈600ms)才认, 过滤瞬时跳变与短促滑动
+                            val n = (overCount[c] ?: 0) + 1
+                            overCount[c] = n
+                            if (n >= 3) {
                                 shouldHide = true
+                                // 诊断: 记录触发时真实几何, 手感不对时据此调阈值(别再靠猜)
+                                WeLogger.i(
+                                    TAG,
+                                    "pull-down hide trigger: top=$top base=$base shift=${top - base} thr=$shiftThresholdPx screenH=$screenH panelLike=${panelLike.size}/${candidates.size}"
+                                )
                                 break
                             }
                         }
