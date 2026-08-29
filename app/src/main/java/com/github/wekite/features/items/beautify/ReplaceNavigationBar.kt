@@ -584,6 +584,14 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         Gravity.BOTTOM
                     )
                 )
+
+                // 主页下拉小程序面板时, 悬浮底栏跟随下滑隐藏。
+                // 算法移植自真机验证可用的第三方实现「低栏美化 1.0.22」(dev.floatbar):
+                // 不猜微信意图 (v1.44 事件派失败), 也不做绝对几何判断 (v1.39/v1.42 误伤),
+                // 而是 200ms 轮询读取**下拉容器 (类名含 pulldown) 子树的相对基线变化**。
+                installPullDownHideWatcher(activity, composeView) {
+                    selectedPageIndexState.intValue
+                }
             } else {
                 val bottomTab = findBottomTabView()
                 if (bottomTab != null) {
@@ -691,6 +699,148 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
         }
 
     }
+    /**
+     * 悬浮底栏跟随主页下拉小程序面板隐藏。
+     *
+     * 算法移植自真机验证可用的第三方模块「低栏美化 1.0.22」(`dev.floatbar`)。要点:
+     *  - **锚点**: 递归查找类名 (lowercase) 含 `pulldown` 的 ViewGroup —— 这才是下拉面板的
+     *    真实挂载点 (v1.52 扫 decorView 直接子视图找 translationY 因此没有效果)。
+     *  - **判据 (相对基线, 不做绝对几何判断)**:
+     *      1. 面板位移: 面板子树中高度 ≥ 1/4 屏高的 View, 其 `getLocationOnScreen()[1]`
+     *         比历史最小值 (= 收起态) 下移超 8% 屏高 → 面板已被拉下。
+     *      2. 兜底: 面板容器 `scrollY > 50dp` (弹性滚动实现的面板)。
+     *  - **基线取历史最小 top** 而非一次性快照: 即使首次发现容器时面板恰好已展开也不会
+     *    把展开态错当基线, 收起一次即自校正。
+     *  - **恢复兜底天然存在**: 200ms 轮询读真值, 面板消失/收起必然被下一轮看到 →
+     *    不存在 v1.44 那种事件丢失卡死导致底栏永久消失的可能。
+     *  - **失败安全**: 找不到面板容器就永不隐藏 (退化成当前行为), 绝不误隐藏。
+     */
+    private fun installPullDownHideWatcher(
+        activity: Activity,
+        dock: View,
+        currentTabIndex: () -> Int
+    ) {
+        val metrics = activity.resources.displayMetrics
+        val screenH = metrics.heightPixels
+        if (screenH <= 0) return
+        val density = metrics.density
+        val scrollThresholdPx = (50f * density).toInt()
+        val shiftThresholdPx = screenH * 8 / 100
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+
+        var pullDownRef: java.lang.ref.WeakReference<ViewGroup>? = null
+        val minTop = java.util.WeakHashMap<View, Int>()
+        var loggedFound = false
+        var loggedMissing = false
+        var pollCount = 0
+        var hidden = false
+
+        fun findPullDown(v: View, depth: Int): ViewGroup? {
+            if (depth > 12 || v !is ViewGroup) return null
+            if (v.javaClass.name.lowercase().contains("pulldown") && v.childCount > 0) return v
+            for (i in 0 until v.childCount) {
+                findPullDown(v.getChildAt(i), depth + 1)?.let { return it }
+            }
+            return null
+        }
+
+        fun collectCandidates(v: View, depth: Int, out: MutableList<View>) {
+            if (depth > 4) return
+            if (v.visibility == View.VISIBLE && v.isShown && v.height >= screenH / 4) out.add(v)
+            if (v is ViewGroup) {
+                for (i in 0 until v.childCount) collectCandidates(v.getChildAt(i), depth + 1, out)
+            }
+        }
+
+        fun applyHidden(hide: Boolean) {
+            if (hide == hidden) return
+            hidden = hide
+            dock.animate().cancel()
+            if (hide) {
+                val h = if (dock.height > 0) dock.height else (96f * density).toInt()
+                val dy = h + 24f * density
+                dock.animate()
+                    .translationY(dy)
+                    .alpha(0f)
+                    .setDuration(260)
+                    .withEndAction { if (hidden) dock.visibility = View.INVISIBLE }
+                    .start()
+            } else {
+                dock.visibility = View.VISIBLE
+                dock.animate()
+                    .translationY(0f)
+                    .alpha(1f)
+                    .setDuration(260)
+                    .start()
+            }
+            WeLogger.i(TAG, "floating dock ${if (hide) "hidden" else "restored"} (pull-down watcher)")
+        }
+
+        val poll = object : Runnable {
+            override fun run() {
+                if (activity.isFinishing || activity.isDestroyed) return
+                runCatching {
+                    pollCount++
+                    var panel = pullDownRef?.get()
+                    if (panel == null || !panel.isAttachedToWindow) {
+                        panel = findPullDown(activity.window.decorView, 0)
+                        pullDownRef = panel?.let { java.lang.ref.WeakReference(it) }
+                        if (panel != null && !loggedFound) {
+                            loggedFound = true
+                            WeLogger.i(
+                                TAG,
+                                "pull-down container found: ${panel.javaClass.name} children=${panel.childCount}"
+                            )
+                        }
+                    }
+
+                    // 非首页 tab / 未找到面板容器 → 永不隐藏
+                    if (panel == null || currentTabIndex() != 0) {
+                        // 诊断: 15s 后仍找不到面板容器时打一次窗口顶层子视图类名, 便于真机排查
+                        if (panel == null && !loggedMissing && pollCount >= 75) {
+                            loggedMissing = true
+                            val root = activity.window.decorView as? ViewGroup
+                            val names = buildString {
+                                if (root != null) {
+                                    for (i in 0 until root.childCount) {
+                                        append(root.getChildAt(i)?.javaClass?.simpleName ?: "null")
+                                        append(' ')
+                                    }
+                                }
+                            }
+                            WeLogger.i(TAG, "pull-down container NOT found; decor children: $names")
+                        }
+                        applyHidden(false)
+                        return@runCatching
+                    }
+
+                    var shouldHide = panel.scrollY > scrollThresholdPx
+
+                    if (!shouldHide) {
+                        val candidates = ArrayList<View>(8)
+                        collectCandidates(panel, 0, candidates)
+                        val loc = IntArray(2)
+                        for (c in candidates) {
+                            c.getLocationOnScreen(loc)
+                            val top = loc[1]
+                            val base = minTop[c]
+                            if (base == null || top < base) {
+                                minTop[c] = top
+                            } else if (top - base > shiftThresholdPx) {
+                                shouldHide = true
+                                break
+                            }
+                        }
+                    }
+
+                    applyHidden(shouldHide)
+                }
+                handler.postDelayed(this, 200)
+            }
+        }
+        handler.postDelayed(poll, 600)
+    }
+
     private val unreadCountState = mutableIntStateOf(0)
     private val finderUnreadCountState = mutableIntStateOf(0)
     private val showFinderDotState = mutableStateOf(false)
