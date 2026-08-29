@@ -725,22 +725,24 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
         if (screenH <= 0) return
         val density = metrics.density
         val scrollThresholdPx = (50f * density).toInt()
-        // 位移阈值 30% 屏高: v1.95 的 8% 用户实测偏灵敏, 用户明示「38% 才开始隐藏都可以」,
-        // 取 30% 兼顾「拉到位才隐藏」与「不必拉到底」。
+        // 位移阈值 30% 屏高(真机 screenH=2800 → 840px)。真机日志实测面板完全展开时
+        // shift 达 1300~1800px, 故 840 不是「快滑不生效」的原因, 保持不变。
         val shiftThresholdPx = screenH * 30 / 100
         val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
         var pullDownRef: java.lang.ref.WeakReference<ViewGroup>? = null
-        // 每个候选 View 独立维护: 基线 top / 采样时高度 / 上次 top / 连续越界次数。
-        // v1.95 只有 minTop(历史最小值) 一张表, 面板内可复用 View 被换到更靠下位置时会带着旧基线,
+        // 每个候选 View 独立维护: 基线 top(收起时的最高位置) / 采样时高度 / 本轮 top / 连续越界次数。
+        // v1.95 只有 minTop(全局一张表), 面板内可复用 View 被换到更靠下位置时会带着旧基线,
         // top-base 一上来就越界 → 轻轻一拉就隐藏; 开启圆角头像后头像 Hook 加剧重排, 复现率大幅上升。
+        // v1.97: 防复用污染改由「基线 top < 0 的候选才参与判定」承担(真机 panelLike=1/9),
+        // 不再用「位移跳变」做重排信号 —— 那会把快速下拉误判为重排并重设基线, 导致快滑不生效。
         val baseTop = java.util.WeakHashMap<View, Int>()
         val baseHeight = java.util.WeakHashMap<View, Int>()
-        val lastTop = java.util.WeakHashMap<View, Int>()
         val curTop = java.util.WeakHashMap<View, Int>()
         val overCount = java.util.WeakHashMap<View, Int>()
         var loggedFound = false
         var loggedMissing = false
+        var loggedNoPanelLike = false
         var pollCount = 0
         var hidden = false
 
@@ -831,42 +833,49 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         val loc = IntArray(2)
 
                         // 第一遍: 采样 + 维护每个候选的基线。
-                        // 高度变化 / 出现更高位置 / 位移跳变(> 1/4 屏高, 只可能是重新布局而非手指下拉)
-                        // 一律重设基线 —— 防止复用 View 带着旧基线让位移量凭空越界。
+                        // 只在「首次见到 / 高度变化(重排或 View 复用) / 出现更高位置」时重设基线。
+                        // ⚠️ v1.96 曾额外把「位移跳变 > 1/4 屏高」当作重排信号重设基线 —— 那正是
+                        // 「快速下拉不生效」的根因: 快速下拉单次采样位移轻易超过 1/4 屏高, 基线被
+                        // 重设到已下拉的位置使 shift 归零, 面板随后停在展开位不再移动, 本次手势
+                        // 再也无法越界。防 View 复用污染已由第二遍的 panelLike 过滤承担, 故移除。
                         for (c in candidates) {
                             c.getLocationOnScreen(loc)
                             val top = loc[1]
                             val h = c.height
                             curTop[c] = top
                             val base = baseTop[c]
-                            val prev = lastTop[c]
-                            val jumped = prev != null && kotlin.math.abs(top - prev) > screenH / 4
-                            if (base == null || baseHeight[c] != h || top < base || jumped) {
+                            if (base == null || baseHeight[c] != h || top < base) {
                                 baseTop[c] = top
                                 baseHeight[c] = h
                                 overCount[c] = 0
                             }
-                            lastTop[c] = top
                         }
 
                         // 第二遍: 只用「收起时位于视口上方」(基线 top < 0) 的候选判定 —— 这是下拉面板的
-                        // 定义特征。主页会话列表基线 top >= 0 会被排除, 于是「圆角头像」Hook 每次加载头像
-                        // 引起的列表重排不再污染位移量(用户实测: 不开圆角头像正常, 开了就轻轻一拉即隐藏)。
-                        // 一个都没有时退回全部候选, 保持 v1.95 已在真机验证过的行为, 不做激进改变。
+                        // 定义特征。主页会话列表基线 top >= 0 被排除, 于是「圆角头像」Hook 每次加载头像
+                        // 引起的列表重排/View 复用不会污染判定(真机实测 panelLike=1/9, 过滤器有效)。
+                        // 一个都没有时不做几何判定(宁可不隐藏, 也不拿会话列表冒误触发风险)。
                         val panelLike = candidates.filter { (baseTop[it] ?: 0) < 0 }
-                        val judged = if (panelLike.isNotEmpty()) panelLike else candidates
+                        if (panelLike.isEmpty() && !loggedNoPanelLike) {
+                            loggedNoPanelLike = true
+                            WeLogger.i(
+                                TAG,
+                                "no panel-like candidate (all baselines >= 0); geometry judge idle, candidates=${candidates.size}"
+                            )
+                        }
 
-                        for (c in judged) {
+                        for (c in panelLike) {
                             val top = curTop[c] ?: continue
                             val base = baseTop[c] ?: continue
                             if (top - base <= shiftThresholdPx) {
                                 overCount[c] = 0
                                 continue
                             }
-                            // 连续 3 次采样都越界(≈600ms)才认, 过滤瞬时跳变与短促滑动
+                            // 连续 2 次采样越界(轮询 120ms → ≈240ms)才认, 过滤单帧抖动。
+                            // v1.96 要求 3 次 @200ms = 600ms, 快速手势根本凑不够帧数。
                             val n = (overCount[c] ?: 0) + 1
                             overCount[c] = n
-                            if (n >= 3) {
+                            if (n >= 2) {
                                 shouldHide = true
                                 // 诊断: 记录触发时真实几何, 手感不对时据此调阈值(别再靠猜)
                                 WeLogger.i(
@@ -880,7 +889,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
 
                     applyHidden(shouldHide)
                 }
-                handler.postDelayed(this, 200)
+                handler.postDelayed(this, 120)
             }
         }
         handler.postDelayed(poll, 600)
