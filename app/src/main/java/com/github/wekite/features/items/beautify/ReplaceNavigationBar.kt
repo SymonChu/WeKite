@@ -743,18 +743,94 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
         val curTop = java.util.WeakHashMap<View, Int>()
         val overCount = java.util.WeakHashMap<View, Int>()
         var loggedFound = false
-        var loggedMissing = false
+        // 找不到容器时的诊断打点(轮询次数 ≈ 秒数 ×8.3): 9s/18s/36s/72s 各一次。
+        val MISSING_LOG_AT = intArrayOf(75, 150, 300, 600)
+        var missingLogged = 0
         var loggedNoPanelLike = false
+
+        // ── J1/J2(容器无关判据)所需状态 ──
+        // overlayHosts: 覆盖层可能的挂载宿主, 每轮惰性补齐(高度信息要等 layout 完才准)。
+        // 参考实现 dev.floatbar 的 M0() 盯的**不是** dock.parent 的直接子层, 而是先在
+        // dock.parent 里找出「第一个 VISIBLE 且高度 ≥ 半屏的 ViewGroup」(内容容器 N),
+        // 再快照 N 的子视图可见性。冷启动后微信把下拉面板挂进内容容器**内部**, 只盯
+        // dock.parent/content/decorView 的直接子层看不到它 —— 这是 v1.99 划掉后台卡片
+        // 后 J1/J2 也失效的原因。故这里两个层级都收进来。
+        val overlayHosts = LinkedHashSet<ViewGroup>()
+        val coverBaseVisible = java.util.WeakHashMap<View, Boolean>()
+        val coverBaselineDone = java.util.WeakHashMap<ViewGroup, Boolean>()
+
+        fun isAncestorOf(ancestor: View, target: View): Boolean {
+            var p: android.view.ViewParent? = target.parent
+            while (p != null) {
+                if (p === ancestor) return true
+                p = p.parent
+            }
+            return false
+        }
+
+        fun collectOverlayHosts() {
+            val dockParent = dock.parent as? ViewGroup
+            val roots = listOfNotNull(
+                dockParent,
+                activity.findViewById<ViewGroup>(android.R.id.content),
+                activity.window.decorView as? ViewGroup
+            )
+            for (root in roots) {
+                overlayHosts.add(root)
+                // 参考实现 M0() 真正监视的宿主: root 里「VISIBLE 且高度 ≥ 半屏」的 ViewGroup 子节点
+                // (= LauncherUI 的根布局)。下拉面板是它的直接子视图, 只看 root 自己的子层看不到。
+                for (i in 0 until root.childCount) {
+                    val c = root.getChildAt(i)
+                    if (c !== dock && c is ViewGroup && c.visibility == View.VISIBLE &&
+                        c.height >= screenH / 2 && !isAncestorOf(c, dock)
+                    ) {
+                        overlayHosts.add(c)
+                    }
+                }
+            }
+        }
+
         var pollCount = 0
         var hidden = false
 
+        // 深度上限 24: v1.98 用 12, 真机冷启动(任务卡片划掉后重开)时会搜不到容器。
         fun findPullDown(v: View, depth: Int): ViewGroup? {
-            if (depth > 12 || v !is ViewGroup) return null
+            if (depth > 24 || v !is ViewGroup) return null
             if (v.javaClass.name.lowercase().contains("pulldown") && v.childCount > 0) return v
             for (i in 0 until v.childCount) {
                 findPullDown(v.getChildAt(i), depth + 1)?.let { return it }
             }
             return null
+        }
+
+        // 诊断用: 概述一棵窗口树(节点数/最大深度/pulldown|bounce 类名/高视图屏幕坐标)。
+        // 只在「找不到容器」时调用, 正常路径零开销。
+        fun describeTree(root: View?): String {
+            if (root == null) return "null"
+            var nodes = 0
+            var maxDepth = 0
+            val hits = LinkedHashSet<String>()
+            val tall = ArrayList<String>(4)
+            val loc = IntArray(2)
+            fun walk(v: View, d: Int) {
+                nodes++
+                if (d > maxDepth) maxDepth = d
+                val name = v.javaClass.name
+                val lower = name.lowercase()
+                if (lower.contains("pulldown") || lower.contains("bounce")) {
+                    hits.add("$name(d=$d,ch=${(v as? ViewGroup)?.childCount ?: 0})")
+                }
+                if (v.height >= screenH / 4 && tall.size < 4) {
+                    v.getLocationOnScreen(loc)
+                    tall.add("${v.javaClass.simpleName}@y${loc[1]}h${v.height}")
+                }
+                if (v is ViewGroup && d < 32) {
+                    for (i in 0 until v.childCount) walk(v.getChildAt(i), d + 1)
+                }
+            }
+            walk(root, 0)
+            return "${root.javaClass.simpleName} nodes=$nodes depth=$maxDepth " +
+                "pull=[${hits.joinToString()}] tall=[${tall.joinToString()}]"
         }
 
         fun collectCandidates(v: View, depth: Int, out: MutableList<View>) {
@@ -765,6 +841,8 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
             }
         }
 
+        // 隐藏 190ms / 恢复 260ms 有意不对称: 用户要求「往下隐藏的速度再稍微快一点点」。
+        // 隐藏是跟手动作(手指还在拉), 快一点才跟得上; 恢复是自动回弹, 保持 260ms 更从容。
         fun applyHidden(hide: Boolean) {
             if (hide == hidden) return
             hidden = hide
@@ -775,7 +853,7 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                 dock.animate()
                     .translationY(dy)
                     .alpha(0f)
-                    .setDuration(260)
+                    .setDuration(190)
                     .withEndAction { if (hidden) dock.visibility = View.INVISIBLE }
                     .start()
             } else {
@@ -794,9 +872,21 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                 if (activity.isFinishing || activity.isDestroyed) return
                 runCatching {
                     pollCount++
+                    // 非首页 tab → 永不隐藏(与容器是否找到无关, 先判掉)
+                    if (currentTabIndex() != 0) {
+                        applyHidden(false)
+                        return@runCatching
+                    }
+
                     var panel = pullDownRef?.get()
                     if (panel == null || !panel.isAttachedToWindow) {
-                        panel = findPullDown(activity.window.decorView, 0)
+                        // 每轮都重找: 冷启动(划掉任务卡片杀进程)后微信尚未 inflate 下拉面板容器,
+                        // 稍后才出现 —— 找到即接管精确判据(J3/J4)。
+                        panel = findPullDown(dock.rootView, 0)
+                            ?: findPullDown(activity.window.decorView, 0)
+                            ?: overlayHosts.asSequence()
+                                .mapNotNull { findPullDown(it, 0) }
+                                .firstOrNull()
                         pullDownRef = panel?.let { java.lang.ref.WeakReference(it) }
                         if (panel != null && !loggedFound) {
                             loggedFound = true
@@ -807,29 +897,85 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                         }
                     }
 
-                    // 非首页 tab / 未找到面板容器 → 永不隐藏
-                    if (panel == null || currentTabIndex() != 0) {
-                        // 诊断: 15s 后仍找不到面板容器时打一次窗口顶层子视图类名, 便于真机排查
-                        if (panel == null && !loggedMissing && pollCount >= 75) {
-                            loggedMissing = true
-                            val root = activity.window.decorView as? ViewGroup
-                            val names = buildString {
-                                if (root != null) {
-                                    for (i in 0 until root.childCount) {
-                                        append(root.getChildAt(i)?.javaClass?.simpleName ?: "null")
-                                        append(' ')
-                                    }
-                                }
-                            }
-                            WeLogger.i(TAG, "pull-down container NOT found; decor children: $names")
-                        }
-                        applyHidden(false)
-                        return@runCatching
+                    // 诊断: 容器长时间缺席时在 ≈9/18/36/72s 各打一次两棵树概况(不再影响是否隐藏)
+                    if (panel == null && missingLogged < MISSING_LOG_AT.size &&
+                        pollCount >= MISSING_LOG_AT[missingLogged]
+                    ) {
+                        missingLogged++
+                        WeLogger.i(
+                            TAG,
+                            "pull-down container NOT found (#$missingLogged @poll=$pollCount)" +
+                                "; dockRoot: ${describeTree(dock.rootView)}" +
+                                "; decor: ${describeTree(activity.window.decorView)}"
+                        )
                     }
 
-                    var shouldHide = panel.scrollY > scrollThresholdPx
+                    // ── 容器无关判据(J1/J2): 参考实现「低栏美化」共 4 条判据, 只有 J3/J4 依赖
+                    //    pulldown 容器; 它划掉后台卡片后仍生效, 靠的就是 J1/J2 兜底。
+                    //    v1.95~v1.98 只移植了 J3/J4, 故容器缺席时功能整体失效 —— 这是本轮真根因。
+                    var shouldHide = false
+                    var hideReason = ""
 
+                    // 每轮惰性补齐宿主集合(冷启动时首轮高度多为 0, 内容容器要等 layout 完才认得出)
+                    collectOverlayHosts()
+
+                    // J1 兄弟覆盖: dock 之后的兄弟里出现 VISIBLE 且高度 ≥ 半屏的视图 = 有覆盖层压上来
+                    val dockParent = dock.parent as? ViewGroup
+                    if (dockParent != null) {
+                        val idx = dockParent.indexOfChild(dock)
+                        if (idx >= 0) {
+                            for (i in idx + 1 until dockParent.childCount) {
+                                val sib = dockParent.getChildAt(i) ?: continue
+                                if (sib.visibility == View.VISIBLE && sib.height >= screenH / 2) {
+                                    shouldHide = true
+                                    hideReason = "sibling=${sib.javaClass.simpleName}"
+                                    break
+                                }
+                            }
+                        }
+                    }
+
+                    // J2 覆盖层快照 diff: 每个宿主的直接子视图中, 基线时不可见、现在 VISIBLE 且高度
+                    //    ≥ 半屏的(且不包含 dock 自身的)视图 = 新出现的全屏覆盖层。
+                    //    alive 门控: 该宿主基线可见项至少还有一个可见, 否则说明是整页切换而非叠加覆盖。
                     if (!shouldHide) {
+                        for (host in overlayHosts) {
+                            if (!host.isAttachedToWindow) continue
+                            if (coverBaselineDone[host] != true) {
+                                coverBaselineDone[host] = true
+                                for (i in 0 until host.childCount) {
+                                    val c = host.getChildAt(i) ?: continue
+                                    coverBaseVisible[c] = c.visibility == View.VISIBLE
+                                }
+                                continue
+                            }
+                            var alive = false
+                            var newCover: View? = null
+                            for (i in 0 until host.childCount) {
+                                val c = host.getChildAt(i) ?: continue
+                                val wasVisible = coverBaseVisible[c]
+                                if (wasVisible == true && c.visibility == View.VISIBLE) alive = true
+                                if (wasVisible != true && c.visibility == View.VISIBLE &&
+                                    c.height >= screenH / 2 && c !== dock && !isAncestorOf(c, dock)
+                                ) {
+                                    newCover = c
+                                }
+                            }
+                            if (newCover != null && alive) {
+                                shouldHide = true
+                                hideReason = "overlay=${newCover.javaClass.simpleName}@${host.javaClass.simpleName}"
+                                break
+                            }
+                        }
+                    }
+
+                    // ── 容器相关判据(J3/J4): 容器找到后才可用, 精度最高
+                    if (!shouldHide && panel != null && panel.scrollY > scrollThresholdPx) {
+                        shouldHide = true
+                        hideReason = "bounceScrollY=${panel.scrollY}"
+                    }
+
+                    if (!shouldHide && panel != null) {
                         val candidates = ArrayList<View>(8)
                         collectCandidates(panel, 0, candidates)
                         val loc = IntArray(2)
