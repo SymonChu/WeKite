@@ -702,18 +702,30 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
     /**
      * 悬浮底栏跟随主页下拉小程序面板隐藏。
      *
-     * 算法移植自真机验证可用的第三方模块「低栏美化 1.0.22」(`dev.floatbar`)。要点:
-     *  - **锚点**: 递归查找类名 (lowercase) 含 `pulldown` 的 ViewGroup —— 这才是下拉面板的
-     *    真实挂载点 (v1.52 扫 decorView 直接子视图找 translationY 因此没有效果)。
-     *  - **判据 (相对基线, 不做绝对几何判断)**:
-     *      1. 面板位移: 面板子树中高度 ≥ 1/4 屏高的 View, 其 `getLocationOnScreen()[1]`
-     *         比历史最小值 (= 收起态) 下移超 8% 屏高 → 面板已被拉下。
-     *      2. 兜底: 面板容器 `scrollY > 50dp` (弹性滚动实现的面板)。
-     *  - **基线取历史最小 top** 而非一次性快照: 即使首次发现容器时面板恰好已展开也不会
-     *    把展开态错当基线, 收起一次即自校正。
-     *  - **恢复兜底天然存在**: 200ms 轮询读真值, 面板消失/收起必然被下一轮看到 →
-     *    不存在 v1.44 那种事件丢失卡死导致底栏永久消失的可能。
-     *  - **失败安全**: 找不到面板容器就永不隐藏 (退化成当前行为), 绝不误隐藏。
+     * 算法移植自真机验证可用的第三方模块「低栏美化 1.0.22」(`dev.floatbar`)。判据共 4 条,
+     * 分两类 —— **这个分层是 v2.00 的关键**: 参考实现把微信从后台卡片划掉后仍然生效, 靠的
+     * 就是前两条「不依赖 pulldown 容器」的判据; v1.95~v1.99 只移植了后两条, 所以冷启动
+     * (容器搜不到) 时整个功能失效。
+     *
+     * 容器无关 (J1/J2, 冷启动兜底):
+     *  1. **兄弟覆盖**: dock 在父容器里之后的兄弟节点出现 VISIBLE 且高度 ≥ 半屏的视图。
+     *  2. **覆盖层快照 diff**: 监视宿主的直接子视图, 基线时不可见、现在 VISIBLE 且高度
+     *     ≥ 半屏 = 新叠加的全屏覆盖层 (`alive` 门控排除整页切换)。宿主集合按参考实现
+     *     `M0()` 的做法取两层: dock.parent / android.R.id.content / decorView **以及**
+     *     它们内部「VISIBLE 且高度 ≥ 半屏」的 ViewGroup (= LauncherUI 根布局) —— 面板
+     *     实际挂在后者的子层, 只盯前者看不到。每轮惰性补齐 (冷启动首轮高度还是 0)。
+     *
+     * 容器相关 (J3/J4, 精度最高):
+     *  3. **面板位移**: 递归找类名含 `pulldown` 的 ViewGroup 作锚点, 其子树中高度 ≥ 1/4
+     *     屏高的 View 的 `getLocationOnScreen()[1]` 比基线下移超 35% 屏高 → 面板被拉下。
+     *     基线取历史最小 top 并按「基线 top < 0」过滤候选 (排除主页会话列表, 防圆角头像
+     *     Hook 重排/View 复用污染)。
+     *  4. **弹性滚动兜底**: 面板容器 `scrollY > 50dp`。
+     *
+     * 其他不变量:
+     *  - 非首页 tab 一律不隐藏 (先判掉, 与容器是否找到无关)。
+     *  - 120ms 轮询读真值, 面板消失/收起下一轮必然看到 → 不存在 v1.44 那种事件丢失导致
+     *    底栏永久消失的风险。
      */
     private fun installPullDownHideWatcher(
         activity: Activity,
@@ -747,6 +759,8 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
         val MISSING_LOG_AT = intArrayOf(75, 150, 300, 600)
         var missingLogged = 0
         var loggedNoPanelLike = false
+        // 上一次已记日志的容器无关触发原因(去重, 免得 120ms 轮询刷屏)
+        var lastLoggedReason = ""
 
         // ── J1/J2(容器无关判据)所需状态 ──
         // overlayHosts: 覆盖层可能的挂载宿主, 每轮惰性补齐(高度信息要等 layout 完才准)。
@@ -1034,6 +1048,19 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                             }
                         }
                     }
+
+                    // 诊断: 容器无关判据(J1/J2)触发时也留一条日志, 否则「容器没找到但隐藏生效」
+                    // 这条路径在日志里完全不可见, 下一轮排查又得再发一版加日志。
+                    if (shouldHide && hideReason.isNotEmpty() && hideReason != lastLoggedReason) {
+                        lastLoggedReason = hideReason
+                        WeLogger.i(
+                            TAG,
+                            "pull-down hide trigger (container-free): $hideReason" +
+                                "; panel=${if (panel == null) "null" else panel.javaClass.simpleName}" +
+                                "; hosts=${overlayHosts.size} screenH=$screenH"
+                        )
+                    }
+                    if (!shouldHide) lastLoggedReason = ""
 
                     applyHidden(shouldHide)
                 }
