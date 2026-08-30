@@ -725,9 +725,11 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
         if (screenH <= 0) return
         val density = metrics.density
         val scrollThresholdPx = (50f * density).toInt()
-        // 位移阈值 30% 屏高(真机 screenH=2800 → 840px)。真机日志实测面板完全展开时
-        // shift 达 1300~1800px, 故 840 不是「快滑不生效」的原因, 保持不变。
-        val shiftThresholdPx = screenH * 30 / 100
+        // 位移阈值 35% 屏高(真机 screenH=2800 → 980px)。用户要求「触发再调下一些」,
+        // 用 v1.97 真机日志(40 次手势)重放确认: 35% 仍是 40/40 全触发的最高档位;
+        // 38%/40% 会漏掉 2 次浅拉手势(最大位移仅 984/996px), 45% 漏 5 次。
+        // 面板全行程实测 2715px(≈屏高 97%), 980px 相当于拉开面板 36%。
+        val shiftThresholdPx = screenH * 35 / 100
         val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
         var pullDownRef: java.lang.ref.WeakReference<ViewGroup>? = null
