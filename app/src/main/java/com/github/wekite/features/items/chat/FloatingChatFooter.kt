@@ -835,25 +835,41 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     }
 
     /**
-     * [movePanelAbove] 关闭时的底部间距。面板仍在输入行下方, 微信写入的
+     * [movePanelAbove] 关闭时的底部间距 + 悬浮。面板仍在输入行下方, 微信写入的
      * `bottomMargin = -面板高` 必须保留 (否则输入行会被推出屏幕), 只能在它之上叠加。
      *
      * 直接从面板的 LayoutParams 取那个"面板高"重算, 而不是在现值上做加法 —— 加法在
      * onAttachedToWindow 与 refreshBottomHeight 都会调到时会重复累加。
+     *
+     * **悬浮同样靠负 topMargin**, 与 [applyBottomMargin] 一个机制: 只补 bottomMargin 时
+     * footer 仍在 LinearLayout 流里实占「输入行高 + 间距」, 把 weight=1 的 ChattingContent
+     * 挤短同样的高度 —— 而壁纸 (ChattingImageBGView) 是 ChattingContent 的子 View, 它画到
+     * 哪儿壁纸就到哪儿, 于是卡片下方与两侧露出窗口底色 (#EDEDED), 看着像卡片后面垫了一条
+     * 灰底栏。把 topMargin 设成 `-(可见高 + 间距)` 让 footer 净占 0 高度, 卡片位置一像素不变
+     * (卡片顶 = H - 可见高 - 间距, 与原先 ChattingContent 结束处重合), 但壁纸恢复铺到屏幕
+     * 底边, 卡片才真正是悬浮的胶囊。
      */
     private fun applyBottomGap(footer: ChatFooter) {
         val lp = footer.layoutParams as? ViewGroup.MarginLayoutParams ?: return
-        if (lp.topMargin != 0) {
-            lp.topMargin = 0
-        }
         val panelHeight = footer.bottomPanel?.layoutParams?.height ?: return
         if (panelHeight <= 0) return
         val gapPx = (bottomGapDp * footer.resources.displayMetrics.density).toInt()
-        val target = -panelHeight + gapPx + bottomNavBarInsetToAdd(footer)
-        if (lp.bottomMargin != target) {
-            lp.bottomMargin = target
+        val extraBottom = gapPx + bottomNavBarInsetToAdd(footer)
+        val targetBottom = -panelHeight + extraBottom
+        // 卡片可见的那一段 = footer 总高扣掉被负 bottomMargin 挤到屏幕外的面板。
+        // 用 footer.height 而非兄弟节点求和: 关闭态面板没被 reparent, 它的父容器是输入列
+        // 而不是 footer 根布局, footerHeightExcludingPanel 会算成输入列内部的高度。
+        val visible = footer.height - panelHeight
+        // 还没量到真实高度 (onAttachedToWindow 首次调用) 时退回"不悬浮", 由 pre-draw
+        // 监听在下一帧补上, 免得拿一个错的 topMargin 把输入行拉飞。
+        val targetTop = if (visible > 0) -(visible + extraBottom) else 0
+        if (lp.bottomMargin != targetBottom || lp.topMargin != targetTop) {
+            lp.bottomMargin = targetBottom
+            lp.topMargin = targetTop
             footer.requestLayout()
         }
+        // 卡片现在盖在列表上方, 给列表底部补出同样的高度, 最后一条消息才不会藏在卡片后面
+        if (visible > 0) applyChatListPadding(footer, visible + extraBottom)
     }
 
     /**
