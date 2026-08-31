@@ -86,6 +86,20 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     private const val RECONCILE_LAYOUT = 1
     private const val RECONCILE_TIPS = 1 shl 1
     private const val RECONCILE_QUICK_SELECT = 1 shl 2
+    private const val RECONCILE_NEW_MSG_TIP = 1 shl 3
+
+    /**
+     * 顶部「N条新消息」提示条的 layout_gravity 候选值。
+     * 微信 8.0.72(3085) res/a7/sp.xml 实测: 上提示条 (c5t) = `0x05` 即 RIGHT,
+     * 纵向位不写默认为 top; 下提示条 (c5q) = `0x55` 即 BOTTOM|RIGHT, 不在此列。
+     * 顺带兼容其他版本可能写全的 TOP|RIGHT / RTL 的 END 形式。
+     */
+    private val NEW_MSG_TIP_UP_GRAVITIES = intArrayOf(
+        Gravity.RIGHT,
+        Gravity.END,
+        Gravity.TOP or Gravity.RIGHT,
+        Gravity.TOP or Gravity.END
+    )
 
     /** 标题栏容器, 微信把 ViewStub(bkr) inflate 成这个 androidx 控件。 */
     private const val ACTION_BAR_CONTAINER_CLASS = "androidx.appcompat.widget.ActionBarContainer"
@@ -197,6 +211,12 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
 
     /** 每个会话页布局对应的顶部"选择到这里"按钮, inflate 后缓存, 失效则重找。 */
     private val quickSelectUpViews = WeakHashMap<View, View>()
+
+    /** 每个会话页布局对应的顶部「N条新消息」提示条 (right|top 小浮层), 缓存避免每帧扫树。 */
+    private val newMsgTipUpViews = WeakHashMap<View, View>()
+
+    /** 顶部「N条新消息」提示条被本特性调整前的原始 topMargin (微信原生 24dip)。 */
+    private val newMsgTipBaseMargins = WeakHashMap<View, Int>()
 
     /** 每个会话页布局对应的内容区宿主 (包含 ChattingScrollLayout 的那个直接子 View)。 */
     private val contentHosts = WeakHashMap<View, View>()
@@ -574,6 +594,9 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         if (flags and RECONCILE_QUICK_SELECT != 0 && covered and RECONCILE_QUICK_SELECT == 0) {
             reconcileQuickSelect(layout)
         }
+        if (flags and RECONCILE_NEW_MSG_TIP != 0 && covered and RECONCILE_NEW_MSG_TIP == 0) {
+            reconcileNewMsgTip(layout)
+        }
     }
 
     private fun applyIfReady(layout: View): Int {
@@ -586,13 +609,16 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         suppressTipsBarDimFor(layout)
         applyChatListPadding(layout, header)
         val quickSelectCovered = applyQuickSelectOffset(layout, header)
+        val newMsgTipCovered = applyNewMsgTipOffset(layout, header)
         val covered = (if (quickSelectCovered) RECONCILE_QUICK_SELECT else 0) or
+            (if (newMsgTipCovered) RECONCILE_NEW_MSG_TIP else 0) or
             if (tipsCovered) RECONCILE_TIPS else 0
         val tracker = layoutTrackers[layout] ?: return covered
         tipsBarGroups[layout]?.takeIf { it.isAttachedToWindow }?.let { group ->
             registerTipsGroupOwnership(layout, group)
         }
         trackQuickSelectInputs(tracker, layout)
+        trackNewMsgTipInputs(tracker, layout)
         return covered
     }
 
@@ -617,6 +643,9 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         applyPinnedTipsBarLayout(group)
         applyHeaderZoneOverlays(layout, header)
         applyChatListPadding(layout, header)
+        // 群置顶通知卡出现/收起会改变 overlayCardBottoms, 顶部「N条新消息」提示要跟着走,
+        // 否则它会停在旧的卡下沿位置 (置顶卡出现时被卡片盖住, 收起时悬空一大段)。
+        applyNewMsgTipOffset(layout, header)
         val tracker = layoutTrackers[layout] ?: return
         tipsBarRecycler(group)?.let { observeTrackedView(tracker, it, RECONCILE_TIPS) }
     }
@@ -624,6 +653,11 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     private fun reconcileQuickSelect(layout: View) {
         val header = currentHeader(layout) ?: return
         applyQuickSelectOffset(layout, header)
+    }
+
+    private fun reconcileNewMsgTip(layout: View) {
+        val header = currentHeader(layout) ?: return
+        applyNewMsgTipOffset(layout, header)
     }
 
     private fun findHeader(layout: View): View? {
@@ -1264,6 +1298,23 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             overlayCardBottoms[layout] = bottom + height - previous
         }
         applyAnimatedChatListPadding(layout, recycler)
+        applyAnimatedNewMsgTipOffset(layout, height - previous)
+    }
+
+    /**
+     * 置顶通知卡展开/折叠动画期间同步顶部「N条新消息」提示条: 卡片下沿每帧变化
+     * (updateAnimatedTipsGeometry 已把差值写进 overlayCardBottoms), 提示条按同样的差值平移。
+     * 这里只改已缓存且可见的提示条, 不做树查找/父链遍历, 保持动画帧开销恒定。
+     */
+    private fun applyAnimatedNewMsgTipOffset(layout: View, delta: Int) {
+        if (delta == 0) return
+        val tip = newMsgTipUpViews[layout]?.takeIf { it.isVisible && it.parent != null } ?: return
+        val base = newMsgTipBaseMargins[tip] ?: return
+        val lp = tip.layoutParams as? FrameLayout.LayoutParams ?: return
+        val target = (lp.topMargin + delta).coerceAtLeast(base)
+        if (lp.topMargin == target) return
+        lp.topMargin = target
+        tip.requestLayout()
     }
 
     /** 折叠时驱动 hyi 的裁剪轮廓, 把行从底部逐行裁掉。 */
@@ -1633,6 +1684,26 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     }
 
     /**
+     * 悬浮标题卡的下沿, 换算到 ChattingUILayout 坐标系。
+     *
+     * ⚠️ 不能写成 `statusBarOffset + header.height + topGap`: 那个式子漏了
+     * `layout.paddingTop`。开着「聊天界面沉浸」时 paddingTop 被清零、状态栏高度改由
+     * statusBarOffset 提供, 两者刚好等价; **没开沉浸时 paddingTop 仍是状态栏高度而
+     * statusBarOffset 恒为 0**, 式子就整体偏高一个状态栏 (真机 140px), 于是内容区里按它
+     * 定位的浮层 (「N条新消息」提示条、多选「选择到这里」按钮) 仍被标题卡压住一截。
+     *
+     * 口径与 applyMargins / applyHeaderZoneOverlays 完全一致 (那两处都算了 paddingTop,
+     * 所以挂件卡与列表 padding 一直是对的), 这里补齐同一项。
+     */
+    private fun headerBottomInLayout(layout: View, header: View): Int {
+        val topGapPx = (topGapDp * layout.resources.displayMetrics.density).toInt()
+        val statusPx = ImmersiveChatUi.statusBarOffset(layout)
+        // 窗口级标题栏留在 ActionBarOverlayLayout 里, 其坐标原点已含系统栏偏移, 无 paddingTop 项
+        if (windowBarHeaders[layout] == true) return statusPx + topGapPx + header.height
+        return statusPx + layout.paddingTop + topGapPx + header.height
+    }
+
+    /**
      * 多选模式顶部"选择到这里"按钮 (ChattingContent 里 top|left 的 wrap_content 小浮层)
      * 原生位于标题栏下方; 标题栏重挂成悬浮卡后内容区顶到屏幕上方, 按钮会被标题卡盖住。
      * 这里把它下推到标题卡下沿 + 卡片间距, 几何与列表 top padding 同一套。
@@ -1643,9 +1714,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         val quickSelect = quickSelectUpView(content, layout) ?: return false
         val density = layout.resources.displayMetrics.density
         val gapPx = (extraGapDp * density).toInt()
-        // 标题卡下沿 (ChattingUILayout 坐标系): statusBarOffset + 卡高 + 顶部间距
-        val titleBottomPx = ImmersiveChatUi.statusBarOffset(layout) +
-            header.height + (topGapDp * density).toInt()
+        val titleBottomPx = headerBottomInLayout(layout, header)
         // ChattingScrollLayout 滚动时用 translationY 移动内容区, 要一起算进按钮的屏幕位置
         val contentTopPx = content.offsetTopIn(layout) + content.translationY.roundToInt()
         val marginTop = (titleBottomPx + gapPx - contentTopPx).coerceAtLeast(0)
@@ -1656,6 +1725,76 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             WeLogger.d(TAG, "quick select up view top margin: ${lp.topMargin} -> $marginTop")
         }
         return true
+    }
+
+    /**
+     * 顶部「N条新消息」提示条 (微信 8.0.72(3085) res/a7/sp.xml 的 c5t: ChattingContent 直接子
+     * LinearLayout, layout_gravity=right|top, marginTop=24dip, 初始 gone, 文案由代码 setText)。
+     * 与"选择到这里"按钮同宿主但 gravity 不同, 所以走独立判据; 标题栏悬浮后内容区顶到屏幕
+     * 上方, 这条提示会被标题卡盖住, 这里把它下推到标题卡下沿 + 卡片间距, 并保留微信原生的
+     * 24dip 间距作为基准 (基准取第一次见到时的 topMargin, 之后只加不覆盖)。
+     */
+    private fun applyNewMsgTipOffset(layout: View, header: View): Boolean {
+        if (headerTopOffsets[layout] == null) return false
+        val content = chatContent(layout) as? ViewGroup ?: return false
+        val tip = newMsgTipUpView(content, layout) ?: return false
+        val lp = tip.layoutParams as? FrameLayout.LayoutParams ?: return false
+        val base = newMsgTipBaseMargins.getOrPut(tip) { lp.topMargin }
+        val density = layout.resources.displayMetrics.density
+        val gapPx = (extraGapDp * density).toInt()
+        // 悬浮卡下沿 (ChattingUILayout 坐标系): 有挂件卡时用最下那张卡的下沿, 否则用标题卡下沿
+        val cardBottomPx = overlayCardBottoms[layout] ?: headerBottomInLayout(layout, header)
+        // ChattingScrollLayout 滚动时用 translationY 移动内容区, 要一起算进提示条的屏幕位置
+        val contentTopPx = content.offsetTopIn(layout) + content.translationY.roundToInt()
+        val marginTop = (cardBottomPx + gapPx - contentTopPx).coerceAtLeast(0) + base
+        if (lp.topMargin != marginTop) {
+            val previous = lp.topMargin
+            lp.topMargin = marginTop
+            tip.requestLayout()
+            WeLogger.d(TAG, "new msg tip top margin: $previous -> $marginTop (base=$base)")
+        }
+        return true
+    }
+
+    private fun newMsgTipUpView(content: ViewGroup, layout: View): View? {
+        newMsgTipUpViews[layout]?.takeIf { it.parent === content }?.let { return it }
+        for (i in 0 until content.childCount) {
+            val child = content.getChildAt(i)
+            if (child.isNewMsgTipUp()) {
+                newMsgTipUpViews[layout] = child
+                return child
+            }
+        }
+        return null
+    }
+
+    /**
+     * 结构特征 (8.0.72(3085) 实测): 内容区直接子 LinearLayout, layout_gravity 含 right 且不含
+     * bottom (下提示条是 bottom|right), 宽高皆 wrap_content。不要求可见: 初始 gone, 提前拿到
+     * 引用才能在它显示的那一帧就已经带正确边距。
+     */
+    @SuppressLint("RtlHardcoded")
+    private fun View.isNewMsgTipUp(): Boolean {
+        if (this !is LinearLayout) return false
+        val lp = layoutParams as? FrameLayout.LayoutParams ?: return false
+        if (NEW_MSG_TIP_UP_GRAVITIES.none { lp.gravity == it }) return false
+        return lp.width == ViewGroup.LayoutParams.WRAP_CONTENT &&
+            lp.height == ViewGroup.LayoutParams.WRAP_CONTENT
+    }
+
+    private fun trackNewMsgTipInputs(tracker: LayoutTracker, layout: View) {
+        val content = chatContent(layout) as? ViewGroup
+        if (content == null) {
+            newMsgTipUpViews.remove(layout)?.let { unobserveTrackedView(tracker, it) }
+            return
+        }
+        val oldTip = newMsgTipUpViews[layout]
+        val tip = newMsgTipUpView(content, layout)
+        if (oldTip !== tip) {
+            oldTip?.let { unobserveTrackedView(tracker, it) }
+            if (tip == null) newMsgTipUpViews.remove(layout)
+        }
+        if (tip != null) observeTrackedView(tracker, tip, RECONCILE_NEW_MSG_TIP)
     }
 
     private fun chatContent(layout: View): View? {
@@ -1690,7 +1829,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             quickSelectUpViews.remove(layout)?.let { unobserveTrackedView(tracker, it) }
             return
         }
-        observeTrackedView(tracker, content, RECONCILE_QUICK_SELECT)
+        observeTrackedView(tracker, content, RECONCILE_QUICK_SELECT or RECONCILE_NEW_MSG_TIP)
 
         val oldQuickSelect = quickSelectUpViews[layout]
         val quickSelect = (content as? ViewGroup)?.let { quickSelectUpView(it, layout) }
@@ -1790,6 +1929,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         headerTopOffsets.remove(layout)
         chatContents.remove(layout)
         quickSelectUpViews.remove(layout)
+        newMsgTipUpViews.remove(layout)
         contentHosts.remove(layout)
         overlayCardBottoms.remove(layout)
         windowBarHeaders.remove(layout)
@@ -1876,6 +2016,8 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         chatListTopOffsets.clear()
         chatContents.clear()
         quickSelectUpViews.clear()
+        newMsgTipUpViews.clear()
+        newMsgTipBaseMargins.clear()
         contentHosts.clear()
         overlayCardBottoms.clear()
         tipsBarGroups.clear()
