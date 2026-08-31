@@ -563,11 +563,20 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
      * 底边之外, 微信靠 translationY 把整个 footer 上移来"展开"面板。于是悬在外面的高度
      * 是 `面板高 + translationY` (translationY ∈ [-面板高, 0]): 收起时等于面板高, 圆角
      * 落在输入行下沿; 完全展开时归零, 圆角落在 footer 真正的底边。中间过程连续。
+     *
+     * 键盘弹出是个例外, 得单独算。面板在下方时微信开面板前一定先收键盘 (configPanel 里的
+     * hideVKB, 这条分支我们没有 hook), 所以**键盘可见 ⇒ 面板必然收起**, 卡片下沿恒等于
+     * 输入行下沿, 与 translationY 无关。而键盘态下微信正拿 translationY 把 footer 整体
+     * 上移, 上面那个公式会把裁剪下边界多留出一个底部间距的高度: 间距里于是露出面板背景
+     * (实测 #F7F7F7 一条), 下方两个圆角也被顶到间距下沿变成直角。改用面板 LayoutParams
+     * 的高度 (与 [applyBottomGap] 算 `visible` 同一份数据), 裁到卡片真实底沿 —— 间距恢复
+     * 透出壁纸、圆角完整, 与面板在上方时的键盘态观感一致。
      */
     private fun offscreenHeight(footer: ChatFooter): Int {
         if (movePanelAbove) return 0
-        val panelHeight = footer.bottomPanel?.height ?: return 0
-        return (panelHeight + footer.translationY).toInt().coerceAtLeast(0)
+        val panel = footer.bottomPanel ?: return 0
+        if (footer.isImeVisible) return panel.layoutParams?.height?.coerceAtLeast(0) ?: 0
+        return (panel.height + footer.translationY).toInt().coerceAtLeast(0)
     }
 
     /**
