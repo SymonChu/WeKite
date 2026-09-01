@@ -36,7 +36,7 @@ ktor = "3.5.2"
 dexmaker = "2.28.6"
 
 # noinspection UnusedVersionCatalogEntry
-versionName = "2.10"
+versionName = "2.11"
 # noinspection UnusedVersionCatalogEntry
 namespace = "com.github.wekite"
 # noinspection UnusedVersionCatalogEntry

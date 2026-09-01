@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Outline
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -134,9 +136,12 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     override fun onEnable() {
         val reflekt = ChatFooter::class.reflekt()
 
-        // 绘制属性不依赖 LayoutParams, 构造完就能设
+        // 绘制属性不依赖 LayoutParams, 构造完就能设。
+        // 注意: 通知路径下 ChatFooter 可能由微信布局预取线程提前 inflate, 构造 hook 会在
+        // 后台线程触发, 视图操作必须跳回主线程 (见 v2.11 修复③)。
         ChatFooter::class.constructor.hookAfter {
-            applyDrawingStyle(thisObject as ChatFooter)
+            val footer = thisObject as ChatFooter
+            runOnMainThread { applyDrawingStyle(footer) }
         }
 
         // 结构改造与边距必须等 LayoutParams 就位 —— 它由父容器 (ChattingScrollLayout)
@@ -146,15 +151,30 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         // ChatFooter 早已构造完毕, 构造函数 hook 会整个错过。
         reflekt.firstMethod { name = "onAttachedToWindow" }.hookAfter {
             val footer = thisObject as ChatFooter
-            applyDrawingStyle(footer)
-            applySideMargins(footer)
-            applyBottomGap(footer)
-            trackNavBarInset(footer)
+            runOnMainThread {
+                applyDrawingStyle(footer)
+                applySideMargins(footer)
+                applyBottomGap(footer)
+                trackNavBarInset(footer)
+            }
         }
 
         // 微信在这里写入 bottomMargin = -面板高, 我们在它之后覆盖掉。
         methodRefreshBottomHeight.hookAfter {
             applyBottomGap(thisObject as ChatFooter)
+        }
+    }
+
+    /**
+     * 视图操作统一跳回主线程。hook 回调不保证在主线程: 通知路径下微信布局预取线程会提前
+     * inflate ChattingUILayout/ChatFooter, 裸 WeakHashMap 读写 + 视图操作在后台线程执行
+     * 会 ConcurrentModificationException 闪退 (见 v2.11 修复③)。主线程上直接执行, 零开销。
+     */
+    private inline fun runOnMainThread(crossinline block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            block()
+        } else {
+            Handler(Looper.getMainLooper()).post { block() }
         }
     }
 
@@ -307,6 +327,10 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         val listener = ViewTreeObserver.OnPreDrawListener {
             applyBottomGap(footer)
             liftNewMessageBubble(footer)
+            // 每帧自愈玻璃层 (幂等, 零成本): 与 Header 的 applyIfReady 行为对称 ——
+            // 首帧 ChattingContent 尚未 add/查不到时, FloatingChatGlass.apply 会 early-return,
+            // 下一帧兄弟节点就位后自动补挂, 不再"整生不生效" (见 v2.11 修复①)。
+            applyGlass(footer)
             true
         }
         // 会话页会复用同一个 footer 实例: 重挂前先摘旧监听, 防止旧 observer 已失效或重复触发

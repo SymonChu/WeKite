@@ -7,6 +7,8 @@ import android.content.ContextWrapper
 import android.graphics.Outline
 import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.util.TypedValue
@@ -398,16 +400,19 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             parameters(Context::class, AttributeSet::class)
         }?.hookAfter {
             val layout = thisObject as? ChattingUILayout ?: return@hookAfter
-            ensureLayoutAttachListener(layout)
+            // 通知路径下布局可能由微信预取线程 inflate, 构造 hook 在后台线程触发 (见 v2.11 修复③)
+            runOnMainThread { ensureLayoutAttachListener(layout) }
         } ?: WeLogger.w(TAG, "ChattingUILayout constructor hook target not found")
 
         // 通知半屏/全屏路径下 ChatFooter 一定存在且稳定 attach, 借它兜底追踪 ChattingUILayout:
         // 这些路径的 ChattingUILayout 可能由微信布局预取线程提前 inflate, 构造 hook/attach 监听会漏。
         ChatFooter::class.reflekt().firstMethodOrNull { name = "onAttachedToWindow" }?.hookAfter {
             val footer = thisObject as? ChatFooter ?: return@hookAfter
-            footer.findAncestorChattingUILayout()?.let { layout ->
-                ensureLayoutAttachListener(layout)
-                trackLayout(layout)
+            runOnMainThread {
+                footer.findAncestorChattingUILayout()?.let { layout ->
+                    ensureLayoutAttachListener(layout)
+                    trackLayout(layout)
+                }
             }
         } ?: WeLogger.w(TAG, "ChatFooter.onAttachedToWindow hook target not found")
 
@@ -443,9 +448,24 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             parameters(Context::class, AttributeSet::class)
         }?.hookAfter {
             val group = thisObject as? View ?: return@hookAfter
-            ensureTipsGroupAttachListener(group)
+            // 预取线程 inflate 同样会命中此 hook, 跳主线程 (见 v2.11 修复③)
+            runOnMainThread { ensureTipsGroupAttachListener(group) }
         } ?: WeLogger.w(TAG, "ChatTipsBarGroup constructor hook target not found")
 
+    }
+
+    /**
+     * 视图操作统一跳回主线程。hook 回调不保证在主线程: 通知路径下微信布局预取线程会提前
+     * inflate ChattingUILayout/ChatFooter/ChatTipsBarGroup, 裸 WeakHashMap 读写 + 视图操作
+     * 在后台线程执行会 ConcurrentModificationException 闪退 (见 v2.11 修复③)。
+     * 主线程上直接执行, 零开销; 跨线程时样式晚一帧生效, 可接受。
+     */
+    private inline fun runOnMainThread(crossinline block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            block()
+        } else {
+            Handler(Looper.getMainLooper()).post { block() }
+        }
     }
 
     private fun cacheAnimationGroupFields() {

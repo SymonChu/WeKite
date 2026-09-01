@@ -111,6 +111,9 @@ internal object FloatingChatGlass {
 
     private val attachments = WeakHashMap<View, Attachment>()
 
+    /** 已经报过\"玻璃跳过\"的卡片, 避免每帧刷日志。 */
+    private val skippedWarned = WeakHashMap<View, Boolean>()
+
     private class Attachment(
         val owner: Any,
         val host: GlassHostLayout,
@@ -151,6 +154,16 @@ internal object FloatingChatGlass {
     ) {
         if (!enabled || !isSupported || source == null || card !is ViewGroup) {
             detach(card)
+            // 一次性日志: footer 玻璃"整生不生效"曾因首帧 early-return 后无重试而难以诊断,
+            // 现在 pre-draw 每帧重试, 这里记录首次跳过原因即可定位 (见 v2.11 修复①)。
+            if (skippedWarned.put(card, true) == null) {
+                WeLogger.w(
+                    TAG,
+                    "glass skipped: enabled=$enabled supported=$isSupported " +
+                        "source=${source != null} cardIsViewGroup=${card is ViewGroup} " +
+                        "(${card.javaClass.simpleName})"
+                )
+            }
             return
         }
 
