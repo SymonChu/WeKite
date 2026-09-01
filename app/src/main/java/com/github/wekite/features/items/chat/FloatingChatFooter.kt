@@ -16,13 +16,16 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooterBottom
+import com.tencent.mm.pluginsdk.ui.chat.ChattingUILayout
 import dev.ujhhgtg.reflekt.reflekt
 import com.github.wekite.dexkit.abc.IResolveDex
 import com.github.wekite.dexkit.dsl.dexMethod
@@ -34,6 +37,8 @@ import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
+import com.github.wekite.ui.content.dialogSliderColors
+import com.github.wekite.ui.content.dialogSwitchColors
 import com.github.wekite.ui.utils.ListItem
 import com.github.wekite.ui.utils.allViews
 import com.github.wekite.ui.utils.findViewWhich
@@ -67,8 +72,15 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     private const val MIN_ELEVATION = 0
     private const val MAX_ELEVATION = 16
 
+    private const val DEFAULT_BLUR_RADIUS = 8
+    private const val MIN_BLUR_RADIUS = 0
+    private const val MAX_BLUR_RADIUS = 40
+
     /** 微信原版「x条新消息」气泡与输入行之间的留白 (支持版本恒为 44dp)。 */
     private const val NEW_MSG_BUBBLE_GAP_DP = 44
+
+    /** 聊天内容区类名 (壁纸 + 消息列表的宿主), 玻璃层的采样源。 */
+    private const val CHATTING_CONTENT_CLASS = "com.tencent.mm.pluginsdk.ui.chat.ChattingContent"
 
     /** 气泡图标的宿主类名 (布局 XML 直接引用, 不会被混淆)。 */
     private const val WE_CHAT_ICON_VIEW = "com.tencent.mm.ui.widget.imageview.WeImageView"
@@ -91,13 +103,22 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     /** 已经报过"找不到气泡"警告的 footer, 避免每帧刷日志。 */
     private val newMessageBubbleLookupWarned = WeakHashMap<View, Boolean>()
 
-    /** 已注册的 pre-draw 监听, 重进会话时先摘掉旧的再挂新的, 避免监听失效。 */
+    /** 已注册的 pre-draw 监听, 重挂会话时先摘掉旧的再挂新的, 避免监听失效。 */
     private val navInsetPreDraws = WeakHashMap<View, ViewTreeObserver.OnPreDrawListener>()
+
+    /** 每个 footer 对应的聊天内容区 (ChattingContent), 玻璃层的采样源。 */
+    private val chatContents = WeakHashMap<View, View>()
+
+    /** 已经报过"找不到内容区"警告的 footer, 避免每帧刷日志。 */
+    private val chatContentWarned = WeakHashMap<View, Boolean>()
 
     private var cornerRadiusDp by prefOption("floating_chat_footer_corner_radius", DEFAULT_CORNER_RADIUS)
     private var sideMarginDp by prefOption("floating_chat_footer_side_margin", DEFAULT_SIDE_MARGIN)
     private var bottomGapDp by prefOption("floating_chat_footer_bottom_gap", DEFAULT_BOTTOM_GAP)
     private var elevationDp by prefOption("floating_chat_footer_elevation", DEFAULT_ELEVATION)
+    private var useGlass by prefOption("floating_chat_footer_glass", false)
+    private var blurRadiusDp by prefOption("floating_chat_footer_blur_radius", DEFAULT_BLUR_RADIUS)
+    private var liquidGlass by prefOption("floating_chat_footer_liquid", true)
 
     /**
      * Locates ChatFooter.refreshBottomHeight() by the unique log string WeChat emits at the
@@ -170,8 +191,73 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         footer.clipToOutline = true
         footer.elevation = elevationDp * density
         FloatingChatCardVisuals.applyDarkSurface(footer, cornerRadiusDp)
+        applyGlass(footer)
         trackOutlineWhileScrolling(footer)
         WeLogger.d(TAG, "applied drawing style: corner=${cornerRadiusDp}dp elev=${elevationDp}dp")
+    }
+
+    /**
+     * 给输入框卡垫液态玻璃。每帧调用, [FloatingChatGlass.apply] 内部幂等。
+     *
+     * 采样源是同一个 `ChattingScrollLayout` 下的兄弟 `ChattingContent` (壁纸 + 消息列表都在
+     * 它里面), 不是 footer 自己的子树, 所以不会自我递归绘制。
+     *
+     * 玻璃层做成 footer 的子 View, 所以 footer 的 outline 裁剪 (见 [applyDrawingStyle] /
+     * [offscreenHeight]) 同时把玻璃裁到卡片真实下沿: 面板收起/展开、键盘弹出都自动跟随,
+     * 不需要单独算面板那段的几何。
+     */
+    private fun applyGlass(footer: ChatFooter) {
+        FloatingChatGlass.apply(
+            owner = this,
+            card = footer,
+            source = footer.chatContent(),
+            cornerRadiusDp = cornerRadiusDp,
+            blurRadiusDp = blurRadiusDp,
+            enabled = useGlass,
+            liquid = liquidGlass,
+        )
+    }
+
+    /**
+     * 同层的聊天内容区 (`ChattingContent`): 先在 footer 的父容器 (`ChattingScrollLayout`)
+     * 的直接子 View 里找 —— 布局 XML 里两者就是兄弟。找不到 (版本差异) 再退到整棵会话页树里搜。
+     */
+    private fun ChatFooter.chatContent(): View? {
+        chatContents[this]?.takeIf { it.isAttachedToWindow }?.let { return it }
+        val parent = this.parent as? ViewGroup
+        var found: View? = null
+        if (parent != null) {
+            for (i in 0 until parent.childCount) {
+                val child = parent.getChildAt(i)
+                if (child.javaClass.name == CHATTING_CONTENT_CLASS) {
+                    found = child
+                    break
+                }
+            }
+        }
+        if (found == null) {
+            // 版本差异导致不是直接兄弟时的兜底: 从最近的 ChattingUILayout 祖先整树搜一次,
+            // 结果进缓存, 不会每帧 DFS。
+            found = ancestorChattingUiLayout()?.allViews?.firstOrNull {
+                it.javaClass.name == CHATTING_CONTENT_CLASS
+            }
+        }
+        if (found != null) {
+            chatContents[this] = found
+        } else if (chatContentWarned.put(this, true) == null) {
+            WeLogger.w(TAG, "ChattingContent not found, glass stays off for this footer")
+        }
+        return found
+    }
+
+    /** 沿 parent 链找最近的 ChattingUILayout 祖先。 */
+    private fun View.ancestorChattingUiLayout(): View? {
+        var parent = this.parent
+        while (parent != null) {
+            if (parent is ChattingUILayout) return parent
+            parent = parent.parent
+        }
+        return null
     }
 
     /**
@@ -453,12 +539,25 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         if (visible > 0) applyChatListPadding(footer, visible + extraBottom)
     }
 
+    override fun onDisable() {
+        FloatingChatGlass.detachAll(this)
+        navInsetPreDraws.entries.toList().forEach { (footer, listener) ->
+            runCatching { footer.viewTreeObserver.removeOnPreDrawListener(listener) }
+        }
+        navInsetPreDraws.clear()
+        chatContents.clear()
+        chatContentWarned.clear()
+    }
+
     override fun onClick(context: ComponentActivity) {
         showComposeDialog(context) {
             var cornerInput by remember { mutableFloatStateOf(cornerRadiusDp.toFloat()) }
             var sideInput by remember { mutableFloatStateOf(sideMarginDp.toFloat()) }
             var gapInput by remember { mutableFloatStateOf(bottomGapDp.toFloat()) }
             var elevInput by remember { mutableFloatStateOf(elevationDp.toFloat()) }
+            var useGlassInput by remember { mutableStateOf(useGlass) }
+            var blurRadiusInput by remember { mutableFloatStateOf(blurRadiusDp.toFloat()) }
+            var liquidInput by remember { mutableStateOf(liquidGlass) }
 
             AlertDialogContent(
                 title = { Text("悬浮输入框") },
@@ -508,6 +607,49 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                                 )
                             }
                         )
+                        ListItem(
+                            content = { Text("启用液态玻璃效果") },
+                            supportingContent = {
+                                Text("输入框背后实时模糊聊天内容, 需 Android 12 以上")
+                            },
+                            trailingContent = {
+                                Switch(
+                                    useGlassInput,
+                                    { useGlassInput = it },
+                                    colors = dialogSwitchColors()
+                                )
+                            }
+                        )
+                        if (useGlassInput) {
+                            ListItem(
+                                content = { Text("使用液态玻璃") },
+                                supportingContent = {
+                                    Text("关闭则为毛玻璃: 只模糊, 无折射和高光")
+                                },
+                                trailingContent = {
+                                    Switch(
+                                        liquidInput,
+                                        { liquidInput = it },
+                                        colors = dialogSwitchColors()
+                                    )
+                                }
+                            )
+                            ListItem(
+                                content = {
+                                    val r = blurRadiusInput.roundToInt()
+                                    Text(if (r <= 0) "模糊半径: 关闭 (完全透明)" else "模糊半径: $r")
+                                },
+                                supportingContent = {
+                                    Slider(
+                                        value = blurRadiusInput,
+                                        onValueChange = { blurRadiusInput = it },
+                                        valueRange = MIN_BLUR_RADIUS.toFloat()..MAX_BLUR_RADIUS.toFloat(),
+                                        steps = MAX_BLUR_RADIUS - MIN_BLUR_RADIUS - 1,
+                                        colors = dialogSliderColors()
+                                    )
+                                }
+                            )
+                        }
                     }
                 },
                 dismissButton = { TextButton(onDismiss) { Text("取消") } },
@@ -517,6 +659,9 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                         sideMarginDp = sideInput.roundToInt()
                         bottomGapDp = gapInput.roundToInt()
                         elevationDp = elevInput.roundToInt()
+                        useGlass = useGlassInput
+                        blurRadiusDp = blurRadiusInput.roundToInt()
+                        liquidGlass = liquidInput
                         onDismiss()
                     }) { Text("确定") }
                 }
