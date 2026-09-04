@@ -4,9 +4,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
@@ -41,10 +44,14 @@ fun AlertDialogContent(
         modifier = modifier
 //            .padding(12.dp)
             .fillMaxWidth()
+            // 弹窗整体封顶: 内容超屏时由 text 区滚动, 而不是被窗口直接裁掉
+            // (底部选项够不着, v2.11 修复②)
+            .heightIn(max = 560.dp)
             .wrapContentHeight()
     ) {
         DefaultColumn(
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            scrollable = true
         ) {
             if (icon != null) {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -69,7 +76,14 @@ fun AlertDialogContent(
                 val bodyStyle = MaterialTheme.typography.bodyMedium
                 val bodyColor = if (dark) Color.White else Color.Black
 
-                Box(modifier = Modifier.weight(1f, fill = false)) {
+                // 选项变多时 text 区内部滚动, 标题与按钮始终可见: 超屏内容不再被窗口裁掉
+                // (底部选项够不着, v2.11 修复②)。Material3 原版同款 heightIn(max)+verticalScroll。
+                Box(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .heightIn(max = 480.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
                     CompositionLocalProvider(
                         LocalTextStyle provides bodyStyle,
                         LocalContentColor provides bodyColor
