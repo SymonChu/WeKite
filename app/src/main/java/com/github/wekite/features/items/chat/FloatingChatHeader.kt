@@ -25,6 +25,8 @@ import android.widget.LinearLayout
 import android.widget.RelativeLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -33,6 +35,9 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.heightIn
 import androidx.core.view.isGone
 import androidx.core.view.isVisible
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
@@ -202,7 +207,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     private var elevationDp by prefOption("floating_chat_header_elevation", DEFAULT_ELEVATION)
     private var useGlass by prefOption("floating_chat_header_glass", false)
     private var blurRadiusDp by prefOption("floating_chat_header_blur_radius", DEFAULT_BLUR_RADIUS)
-    private var liquidGlass by prefOption("floating_chat_header_liquid", true)
+
 
     /** 每个会话页布局 (ChattingUILayout) 对应的标题栏容器。 */
     private val headerViews = WeakHashMap<View, View>()
@@ -852,6 +857,19 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         }
     }
 
+    /** 给群通知/置顶消息卡挂液态玻璃；采样源是同一会话的 ChattingContent。 */
+    private fun applyTipsBarGlass(layout: View, group: View) {
+        FloatingChatGlass.apply(
+            owner = this,
+            card = group,
+            source = chatContent(layout),
+            cornerRadiusDp = cornerRadiusDp,
+            blurRadiusDp = blurRadiusDp,
+            enabled = useGlass,
+            liquid = true,
+        )
+    }
+
     /** 左右留白 + 顶部间距; topMargin 以微信原本的位置为基准, 自动适配状态栏。 */
     private fun applyMargins(layout: View, header: View) {
         val lp = header.layoutParams as? ViewGroup.MarginLayoutParams ?: return
@@ -888,7 +906,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             cornerRadiusDp = cornerRadiusDp,
             blurRadiusDp = blurRadiusDp,
             enabled = useGlass,
-            liquid = liquidGlass,
+            liquid = true,
         )
     }
 
@@ -992,6 +1010,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
                 // 否则后面的高度兜底检查会把它当成全屏覆盖层跳过。
                 suppressTipsBarDim(child)
                 applyTipsBarCardStyle(child)
+                applyTipsBarGlass(layout, child)
                 pinnedTipsApplied = applyPinnedTipsBarLayout(child) || pinnedTipsApplied
             }
             if (!isHeaderZoneOverlay(child, hostGroup)) continue
@@ -1021,6 +1040,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         if (tracked != null) {
             suppressTipsBarDim(tracked)
             applyTipsBarCardStyle(tracked)
+            applyTipsBarGlass(layout, tracked)
             pinnedTipsApplied = applyPinnedTipsBarLayout(tracked) || pinnedTipsApplied
             val parentTopPx = (tracked.parent as? View)?.offsetTopIn(layout) ?: hostTopPx
             val topPx = (nextTopPx - parentTopPx).coerceAtLeast(0)
@@ -1996,6 +2016,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     }
 
     private fun clearTipsGroupCaches(group: View, recycler: View?) {
+        FloatingChatGlass.detach(group)
         recycler?.let { retireTipsRecycler(group, it) }
         val body = tipsBarCardBodies.remove(group)
         dimWarned.remove(group)
@@ -2118,12 +2139,16 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
             var elevInput by remember { mutableFloatStateOf(elevationDp.toFloat()) }
             var useGlassInput by remember { mutableStateOf(useGlass) }
             var blurRadiusInput by remember { mutableFloatStateOf(blurRadiusDp.toFloat()) }
-            var liquidInput by remember { mutableStateOf(liquidGlass) }
+
 
             AlertDialogContent(
                 title = { Text("悬浮标题栏") },
                 text = {
-                    DefaultColumn {
+                    DefaultColumn(
+                        Modifier
+                            .heightIn(max = 420.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
                         ListItem(
                             content = { Text("改动在重新进入聊天后生效") },
                             supportingContent = {
@@ -2200,19 +2225,6 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
                         )
                         if (useGlassInput) {
                             ListItem(
-                                content = { Text("使用液态玻璃") },
-                                supportingContent = {
-                                    Text("关闭则为毛玻璃: 只模糊, 无折射和高光")
-                                },
-                                trailingContent = {
-                                    Switch(
-                                        liquidInput,
-                                        { liquidInput = it },
-                                        colors = dialogSwitchColors()
-                                    )
-                                }
-                            )
-                            ListItem(
                                 content = {
                                     val r = blurRadiusInput.roundToInt()
                                     Text(if (r <= 0) "模糊半径: 关闭 (完全透明)" else "模糊半径: $r")
@@ -2240,7 +2252,7 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
                         elevationDp = elevInput.roundToInt()
                         useGlass = useGlassInput
                         blurRadiusDp = blurRadiusInput.roundToInt()
-                        liquidGlass = liquidInput
+
                         onDismiss()
                     }) { Text("确定") }
                 }

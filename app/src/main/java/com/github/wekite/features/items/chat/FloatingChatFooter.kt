@@ -17,6 +17,9 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -25,6 +28,8 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooterBottom
 import com.tencent.mm.pluginsdk.ui.chat.ChattingUILayout
@@ -111,6 +116,9 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     /** 每个 footer 对应的聊天内容区 (ChattingContent), 玻璃层的采样源。 */
     private val chatContents = WeakHashMap<View, View>()
 
+    /** 每个 footer 对应的真正药丸输入框宿主，不是外层 ChatFooter。 */
+    private val inputPills = WeakHashMap<View, View>()
+
     /** 已经报过"找不到内容区"警告的 footer, 避免每帧刷日志。 */
     private val chatContentWarned = WeakHashMap<View, Boolean>()
 
@@ -120,7 +128,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     private var elevationDp by prefOption("floating_chat_footer_elevation", DEFAULT_ELEVATION)
     private var useGlass by prefOption("floating_chat_footer_glass", false)
     private var blurRadiusDp by prefOption("floating_chat_footer_blur_radius", DEFAULT_BLUR_RADIUS)
-    private var liquidGlass by prefOption("floating_chat_footer_liquid", true)
+
 
     /**
      * Locates ChatFooter.refreshBottomHeight() by the unique log string WeChat emits at the
@@ -217,25 +225,52 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     }
 
     /**
-     * 给输入框卡垫液态玻璃。每帧调用, [FloatingChatGlass.apply] 内部幂等。
+     * 给底部药丸输入框本体垫液态玻璃。每帧调用, [FloatingChatGlass.apply] 内部幂等。
      *
-     * 采样源是同一个 `ChattingScrollLayout` 下的兄弟 `ChattingContent` (壁纸 + 消息列表都在
-     * 它里面), 不是 footer 自己的子树, 所以不会自我递归绘制。
-     *
-     * 玻璃层做成 footer 的子 View, 所以 footer 的 outline 裁剪 (见 [applyDrawingStyle] /
-     * [offscreenHeight]) 同时把玻璃裁到卡片真实下沿: 面板收起/展开、键盘弹出都自动跟随,
-     * 不需要单独算面板那段的几何。
+     * 目标是可输入控件的直接父容器 (药丸宿主), 不是 ChatFooter 外层。这样玻璃只覆盖
+     * 用户看到的药丸, 不会把整条微信底栏误当成药丸。
      */
     private fun applyGlass(footer: ChatFooter) {
+        val pill = footer.inputPill()
+        FloatingChatGlass.detach(footer)
+        if (pill == null) return
         FloatingChatGlass.apply(
             owner = this,
-            card = footer,
+            card = pill,
             source = footer.chatContent(),
             cornerRadiusDp = cornerRadiusDp,
             blurRadiusDp = blurRadiusDp,
             enabled = useGlass,
-            liquid = liquidGlass,
+            liquid = true,
         )
+    }
+
+    /**
+     * 定位开启悬浮输入框后底部显示的药丸本体。
+     *
+     * 微信不同版本的输入控件不一定仍然是 EditText, 但真正可输入的控件都会具备
+     * focusableInTouchMode。玻璃挂在它的直接父 ViewGroup 上；不能挂在 ChatFooter，
+     * 也不能挂在 TextView/EditText 自身，否则会覆盖光标/文字绘制或整栏铺满。
+     */
+    private fun ChatFooter.inputPill(): View? {
+        inputPills[this]?.takeIf { it.isAttachedToWindow && it.parent != null }?.let { return it }
+        val input = allViews.firstOrNull {
+            it !== this && it is TextView && it.isFocusable && it.isFocusableInTouchMode
+        }
+        val pill = (input?.parent as? ViewGroup)?.takeIf { it !== this }
+        if (pill != null) {
+            inputPills[this] = pill
+            WeLogger.d(
+                TAG,
+                "input pill host: ${pill.javaClass.name}, input=${input.javaClass.name}, " +
+                    "size=${pill.width}x${pill.height}"
+            )
+        } else if (input != null) {
+            WeLogger.w(TAG, "input control found but pill parent is unavailable: ${input.javaClass.name}")
+        } else if (chatContentWarned.put(this, true) == null) {
+            WeLogger.w(TAG, "editable input control not found in ChatFooter subtree")
+        }
+        return pill
     }
 
     /**
@@ -244,23 +279,13 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
      */
     private fun ChatFooter.chatContent(): View? {
         chatContents[this]?.takeIf { it.isAttachedToWindow }?.let { return it }
-        val parent = this.parent as? ViewGroup
         var found: View? = null
-        if (parent != null) {
-            for (i in 0 until parent.childCount) {
-                val child = parent.getChildAt(i)
-                if (child.javaClass.name == CHATTING_CONTENT_CLASS) {
-                    found = child
-                    break
-                }
-            }
-        }
-        if (found == null) {
-            // 版本差异导致不是直接兄弟时的兜底: 从最近的 ChattingUILayout 祖先整树搜一次,
-            // 结果进缓存, 不会每帧 DFS。
-            found = ancestorChattingUiLayout()?.allViews?.firstOrNull {
-                it.javaClass.name == CHATTING_CONTENT_CLASS
-            }
+        // Footer 在不同微信版本/通知路径中的 parent 层级并不稳定。不能只查直接兄弟，
+        // 也不能只沿 parent 链找 ChattingUILayout；8.0.72 的 footer 有时与内容区隔着
+        // 预加载容器。和标题栏统一，从当前窗口根节点 DFS 查找真实 ChattingContent。
+        // 该结果会缓存，只有缓存失效时才再次扫描。
+        found = rootView?.allViews?.firstOrNull {
+            it.javaClass.name == CHATTING_CONTENT_CLASS && it !== this
         }
         if (found != null) {
             chatContents[this] = found
@@ -570,6 +595,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         }
         navInsetPreDraws.clear()
         chatContents.clear()
+        inputPills.clear()
         chatContentWarned.clear()
     }
 
@@ -581,12 +607,16 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             var elevInput by remember { mutableFloatStateOf(elevationDp.toFloat()) }
             var useGlassInput by remember { mutableStateOf(useGlass) }
             var blurRadiusInput by remember { mutableFloatStateOf(blurRadiusDp.toFloat()) }
-            var liquidInput by remember { mutableStateOf(liquidGlass) }
+
 
             AlertDialogContent(
                 title = { Text("悬浮输入框") },
                 text = {
-                    DefaultColumn {
+                    DefaultColumn(
+                        Modifier
+                            .heightIn(max = 420.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
                         ListItem(
                             content = { Text("圆角半径: ${cornerInput.roundToInt()} dp") },
                             supportingContent = {
@@ -646,19 +676,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                         )
                         if (useGlassInput) {
                             ListItem(
-                                content = { Text("使用液态玻璃") },
-                                supportingContent = {
-                                    Text("关闭则为毛玻璃: 只模糊, 无折射和高光")
-                                },
-                                trailingContent = {
-                                    Switch(
-                                        liquidInput,
-                                        { liquidInput = it },
-                                        colors = dialogSwitchColors()
-                                    )
-                                }
-                            )
-                            ListItem(
                                 content = {
                                     val r = blurRadiusInput.roundToInt()
                                     Text(if (r <= 0) "模糊半径: 关闭 (完全透明)" else "模糊半径: $r")
@@ -685,7 +702,6 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                         elevationDp = elevInput.roundToInt()
                         useGlass = useGlassInput
                         blurRadiusDp = blurRadiusInput.roundToInt()
-                        liquidGlass = liquidInput
                         onDismiss()
                     }) { Text("确定") }
                 }
