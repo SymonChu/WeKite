@@ -202,10 +202,21 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
      */
     private fun trackOutlineWhileScrolling(footer: ChatFooter) {
         if (outlineTrackers.put(footer, true) != null) return
-        var last = Float.NaN
+        var lastY = Float.NaN
+        var lastBottom = -1
         footer.viewTreeObserver.addOnPreDrawListener {
-            if (footer.translationY != last) {
-                last = footer.translationY
+            // translationY 变了不会自动重算 outline: 展开动画/滚动时手动纠正。
+            val y = footer.translationY
+            if (y != lastY) {
+                lastY = y
+                footer.invalidateOutline()
+            }
+            // 面板高度(offscreenHeight 决定裁剪下边界)就位/变化时同步重算, 否则折叠重开等
+            // 场景首帧面板未就位会把圆角矩形盖满整卡、灰板延伸到屏幕底。此处对「底部变为
+            // 非 0」也会响应 —— 首帧 offscreenHeight=0 时记下, 面板一到就重算。
+            val bottom = offscreenHeight(footer)
+            if (bottom != lastBottom) {
+                lastBottom = bottom
                 footer.invalidateOutline()
             }
             true
