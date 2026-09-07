@@ -187,7 +187,16 @@ object MessageTimeEnhancements : ClickableFeature(),
             2f,
             context.resources.displayMetrics
         ).toInt()
-        time.setPadding(time.paddingLeft, verticalPaddingPx, time.paddingRight, verticalPaddingPx)
+
+        // 3. 透明背景: 不再设置任何 background, 仅保留 2dp 上下 / 4dp 左右的紧凑 padding,
+        //    让 time 文字纯净显示, 不会因为胶囊挡住下面的气泡。
+        val pillHorizontalPaddingPx = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            4f,
+            context.resources.displayMetrics
+        ).toInt()
+        time.background = null
+        time.setPadding(pillHorizontalPaddingPx, verticalPaddingPx, pillHorizontalPaddingPx, verticalPaddingPx)
 
         val lp = time.layoutParams as? RelativeLayout.LayoutParams
         if (lp != null) {
