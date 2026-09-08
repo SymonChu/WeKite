@@ -171,7 +171,7 @@ object ImmersiveChatUi : SwitchFeature() {
             name = "setStatusBarColor"
         }?.hookBefore {
             val window = thisObject as? Window ?: return@hookBefore
-            if (convBoxWindows[window] == true && !settingConvBoxColor) {
+            if ((convBoxWindows[window] == true || edgeToEdgeApplied[window] == true) && !settingConvBoxColor) {
                 result = null
             }
         } ?: WeLogger.w(TAG, "PhoneWindow.setStatusBarColor hook target not found")
