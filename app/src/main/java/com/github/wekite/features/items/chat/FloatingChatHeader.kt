@@ -1656,8 +1656,17 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         }
         val target = base + extra
         if (recycler.paddingTop == target) return
+        // 先取旧值再写, 否则打印出来的两侧永远是同一个数 (原实现写反了)。
+        val old = recycler.paddingTop
         recycler.setPadding(recycler.paddingLeft, target, recycler.paddingRight, recycler.paddingBottom)
-        WeLogger.d(TAG, "chat list top padding: ${recycler.paddingTop} -> $target (extra=$extra)")
+        // 诊断: 一并记录本次读到的状态栏偏移。该值由 ImmersiveChatUi 的 pre-draw 每帧写入,
+        // 与本源的 pre-draw 没有执行顺序保证 —— 两者交替先跑时, extra 会在「140+基准」与
+        // 「0+基准」之间反复切换, 表现为 paddingTop 的 317<->177 双稳态。
+        WeLogger.d(
+            TAG,
+            "chat list top padding: $old -> $target (extra=$extra " +
+                "statusBarOffset=${ImmersiveChatUi.statusBarOffset(layout)})"
+        )
     }
 
     private fun applyAnimatedChatListPadding(layout: View, recycler: View) {
@@ -1720,9 +1729,11 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         val marginTop = (titleBottomPx + gapPx - contentTopPx).coerceAtLeast(0)
         val lp = quickSelect.layoutParams as? ViewGroup.MarginLayoutParams ?: return false
         if (lp.topMargin != marginTop) {
+            // 先取旧值再写, 否则打印出来的两侧永远是同一个数 (原实现写反了)。
+            val previous = lp.topMargin
             lp.topMargin = marginTop
             quickSelect.requestLayout()
-            WeLogger.d(TAG, "quick select up view top margin: ${lp.topMargin} -> $marginTop")
+            WeLogger.d(TAG, "quick select up view top margin: $previous -> $marginTop")
         }
         return true
     }

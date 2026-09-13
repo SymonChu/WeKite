@@ -75,7 +75,9 @@ object WeLogger {
             (KnownPaths.moduleData / "logs").createDirsSafe()
         }.getOrNull() ?: return null
 
-        // Clean up logs older than 3 days during rotation/initialization
+        // Clean up expired logs during rotation/initialization. NOTE: 这里与「自动清理日志」
+        // 开关状态无关 —— 每次日期轮转都会执行一次清理, 所以关掉开关也照样会删。
+        WeLogger.d(TAG, "log file rotated/opened for $logDate, purging logs older than retention")
         deleteOldLogs(logsDir)
 
         val logPath = logsDir / "wekite-${dateFmt.format(logDate)}.log"
@@ -93,7 +95,10 @@ object WeLogger {
             // 保留天数可由「自动清理日志」功能调节 (clean_logs_interval_ms, 默认 3 天)
             val retentionMs = WePrefs.getLongOrDef("clean_logs_interval_ms", 3 * 24 * 60 * 60 * 1000L)
             val retentionDays = (retentionMs / (24 * 60 * 60 * 1000L)).coerceAtLeast(1)
-            val thresholdDate = LocalDate.now().minusDays(retentionDays)
+            // 保留 retentionDays 个自然日(含今天): 阈值 = 今天 - (retentionDays - 1), 只删
+            // 严格早于它的文件。原写的 minusDays(retentionDays) 会多留一天 —— 3 天档实际留
+            // 4 个日期文件 (今天、今天-1、今天-2、今天-3)。
+            val thresholdDate = LocalDate.now().minusDays(retentionDays - 1)
             // 兼容旧前缀 wekit- (品牌统一前的残留文件), 新文件均为 wekite-
             val logFileRegex = Regex("""(?:wekit|wekite)-(\d{4}-\d{2}-\d{2})\.log""")
 
@@ -106,7 +111,10 @@ object WeLogger {
                     // If the log file date is older than the retention days, delete it
                     if (fileDate != null && fileDate.isBefore(thresholdDate)) {
                         if (file.delete()) {
-                            Log.d(TAG, "deleted old log file: ${file.name}")
+                            // 走 WeLogger 让清理动作留在日志文件里 (原 Log.d 只进 logcat,
+                            // 日志文件里查不到删了哪个)。此处运行在 writer 线程, WeLogger.d
+                            // 只是入队, 不会自锁。
+                            WeLogger.d(TAG, "deleted old log file: ${file.name}")
                         }
                     }
                 }
@@ -154,7 +162,8 @@ object WeLogger {
             if (file.isFile && logFileRegex.matches(file.name)) {
                 deletedBytes += file.length()
                 if (file.delete()) {
-                    Log.d(TAG, "cleared log file: ${file.name}")
+                    // 走 WeLogger 让「立即清理」也留下痕迹 (原 Log.d 只进 logcat)。
+                    WeLogger.d(TAG, "cleared log file: ${file.name}")
                 }
             }
         }

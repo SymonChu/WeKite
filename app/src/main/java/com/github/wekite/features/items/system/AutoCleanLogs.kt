@@ -26,7 +26,6 @@ import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.showToastSuspend
 import com.github.wekite.utils.formatBytesSize
-import com.github.wekite.utils.formatEpoch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -40,6 +39,8 @@ import kotlin.time.Duration.Companion.milliseconds
 object AutoCleanLogs : ClickableFeature() {
 
     private const val DAY_MS = 24 * 60 * 60 * 1000L
+
+    private const val TAG = "AutoCleanLogs"
 
     /** 日志保留天数选项: 1天 / 3天 / 7天 */
     private val INTERVAL_OPTIONS = listOf(
@@ -56,12 +57,19 @@ object AutoCleanLogs : ClickableFeature() {
 
 
     override fun onEnable() {
+        WeLogger.i(TAG, "feature enabled")
         startCleaningJob()
     }
+
+    // 注意: 本功能没有 override onDisable(), 所以「关闭开关」不会取消下面的 cleanJob —— 它会
+    // 继续每 24h 跑一次 (BaseFeature.disable() 只在 onDisable() 里收 job)。而且
+    // WeLogger.getOrRotateWriter() 在每次日期轮转时也会独立清理一次, 与开关状态无关。
+    // 这里的日志就是为了让上面两种情况在日志里留下证据。
 
     private fun startCleaningJob() {
         cleanJob?.cancel()
         cleanJob = scope.launch {
+            WeLogger.i(TAG, "clean job started (retention=${intervalMs / DAY_MS}d, check every 24h)")
             while (isActive) {
                 performClean()
                 // intervalMs is the retention period, not the scheduler interval. Check daily so
@@ -73,6 +81,7 @@ object AutoCleanLogs : ClickableFeature() {
 
     /** 删除超过保留天数的模块日志文件，交给 WeLogger 写入线程执行。 */
     private fun performClean() {
+        WeLogger.i(TAG, "running scheduled cleanup (retention=${intervalMs / DAY_MS}d)")
         WeLogger.deleteOldLogs()
     }
 
@@ -85,7 +94,7 @@ object AutoCleanLogs : ClickableFeature() {
                 text = {
                     DefaultColumn {
                         Text(
-                            if (isEnabled) "下次自动清理: ${formatEpoch(System.currentTimeMillis() + selectedInterval)}"
+                            if (isEnabled) "保留 ${selectedInterval / DAY_MS} 天, 每天检查一次, 超期即删"
                             else "自动清理未启用, 可手动清理"
                         )
                         INTERVAL_OPTIONS.forEach { (ms, label) ->

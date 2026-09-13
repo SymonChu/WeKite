@@ -140,9 +140,19 @@ object AutoOpenRedPackets : ClickableFeature(), WeDatabaseListenerApi.IInsertLis
             }
 
             val amount = json.optInt("amount", 0)
-            if (amount <= 0) return@hookAfter
+            if (amount <= 0) {
+                // 拆包回包 retcode=0 且 receiveStatus=2, 但没有金额 —— 记录以便与「真抢到」区分
+                WeLogger.i(TAG, "opened packet but amount<=0 (amount=$amount, sendId=$sendId)")
+                return@hookAfter
+            }
 
             val displayAmount = amount / 100.0
+
+            // 成功路径原本只发 Toast, 不写日志 —— 导致成功率完全无法统计。补一行。
+            WeLogger.i(
+                TAG,
+                "grabbed red packet ¥$displayAmount (sendId=$sendId, talker=${info.talker})"
+            )
 
             val reply = info.autoReply
             if (reply.isNotBlank()) {

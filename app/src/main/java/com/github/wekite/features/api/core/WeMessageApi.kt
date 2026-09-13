@@ -1781,7 +1781,11 @@ object WeMessageApi : ApiFeature(), IResolveDex {
      * 在真正写入文件字节 *之前* 就从 SERVERID:// 改写为最终文件名, 所以只能以磁盘上文件是否存在为准。
      */
     private fun ensureImageCachedFile(msgSvrId: Long): Path? {
-        val baseRow = queryImgInfoRow(msgSvrId) ?: return null
+        val baseRow = queryImgInfoRow(msgSvrId) ?: run {
+            // 失败原因 1/3: ImgInfo2 里根本没有这个 msgSvrId 对应的行
+            WeLogger.w(TAG, "cacheImage: no ImgInfo2 row for msgSvrId=$msgSvrId")
+            return null
+        }
 
         // 有原图行则优先下载原图, 否则退回基础行
         val targetRow = baseRow.hdImgId.takeIf { it > 0 }
@@ -1793,7 +1797,11 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         resolveExistingImageFile(targetRow)?.let { return it }
 
         // 触发 CDN 下载, 轮询直到文件真正落地。talker 用基础行的 (原图行可能未存 msgTalker)。
-        if (!triggerDownload(targetRow.localId, targetRow.talker.ifEmpty { baseRow.talker })) return null
+        if (!triggerDownload(targetRow.localId, targetRow.talker.ifEmpty { baseRow.talker })) {
+            // 失败原因 2/3: 下载服务拒绝/调用异常 (triggerDownload 内部已记 E, 这里补上下文)
+            WeLogger.w(TAG, "cacheImage: triggerDownload refused for msgSvrId=$msgSvrId localId=${targetRow.localId}")
+            return null
+        }
         return pollUntilImageFileExists(targetRow.localId)
     }
 
@@ -1854,12 +1862,30 @@ object WeMessageApi : ApiFeature(), IResolveDex {
 
     /** 轮询直到该 ImgInfo2 行的图片文件真正落地到磁盘 (以文件存在为准, 而非 iscomplete 标志)。 */
     private fun pollUntilImageFileExists(imgLocalId: Long): Path? {
-        val deadline = System.currentTimeMillis() + 120_000
+        val startedAt = System.currentTimeMillis()
+        val deadline = startedAt + 120_000
+        var polls = 0
+        var rowMissing = 0
+        var rowFound = 0
         while (System.currentTimeMillis() < deadline) {
             Thread.sleep(1000)
-            val row = queryImgInfoRowById(imgLocalId) ?: continue
+            polls++
+            val row = queryImgInfoRowById(imgLocalId)
+            if (row == null) {
+                rowMissing++
+                continue
+            }
+            rowFound++
             resolveExistingImageFile(row)?.let { return it }
         }
+        // 失败原因 3/3: 轮询超时。区分「行查不到」与「行在但文件没落地」, 否则调用方只看到
+        // 一句 failed 完全无法定位。失败率约 9-17%, 但耗时恒为 120-128s 正是命中这里。
+        WeLogger.w(
+            TAG,
+            "cacheImage: timed out after ${(System.currentTimeMillis() - startedAt) / 1000}s " +
+                "waiting for image localId=$imgLocalId (polls=$polls rowFound=$rowFound rowMissing=$rowMissing) " +
+                "— 行查不到=行缺失, 行在=CDN 未下载完成",
+        )
         return null
     }
 
