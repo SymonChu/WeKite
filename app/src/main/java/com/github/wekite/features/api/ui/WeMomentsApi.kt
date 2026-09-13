@@ -251,13 +251,18 @@ object WeMomentsApi : ApiFeature(), IResolveDex {
         }
     }
 
+    /**
+     * `UploadPackHelper.f(...)` — sight (video) upload. The parameter count changed across host
+     * versions: 4 strings on 8.0.72 (`model.h8.f`), 5 strings on 8.0.77 (`model.j8.f`), so the
+     * old `paramCount(4)` / `paramTypes(4 × String)` constraints resolve to nothing on 8.0.77.
+     * The class anchor plus the `"addSightObjectByPath"` string are already unique, so the shape
+     * is asserted at the call site instead (see [postTextAndVideo]).
+     */
     val methodAddSightObjectByPath by dexMethod {
         searchPackages("com.tencent.mm.plugin.sns.model")
         matcher {
             declaredClass(classUploadPackHelper.clazz)
             returnType(bool)
-            paramCount(4)
-            paramTypes(String::class.java, String::class.java, String::class.java, String::class.java)
             usingStrings("addSightObjectByPath", "com.tencent.mm.plugin.sns.model.UploadPackHelper")
         }
     }
@@ -807,7 +812,14 @@ object WeMomentsApi : ApiFeature(), IResolveDex {
             if (copyExistingFile(videoPath, tempVideoPath)) {
                 val helper = ctorUploadPackHelper.constructor.newInstance(15, null)
                 methodSetContentDes.method.invoke(helper, text)
-                methodAddSightObjectByPath.method.invoke(helper, tempVideoPath, tempThumbPath, "", "")
+                // The host widened this call from 4 to 5 String parameters (8.0.72 -> 8.0.77), and
+                // the two versions are not signature-compatible, so dispatch on the resolved shape.
+                val sight = methodAddSightObjectByPath.method
+                if (sight.parameterCount == 5) {
+                    sight.invoke(helper, tempVideoPath, tempThumbPath, "", "", "")
+                } else {
+                    sight.invoke(helper, tempVideoPath, tempThumbPath, "", "")
+                }
                 if (!sdkId.isNullOrEmpty()) {
                     methodSetSdkId.method.invoke(helper, sdkId)
                 }

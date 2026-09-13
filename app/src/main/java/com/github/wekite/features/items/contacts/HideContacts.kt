@@ -67,6 +67,7 @@ import com.github.wekite.utils.android.getSystemService
 import com.github.wekite.utils.android.showToast
 import com.github.wekite.utils.now
 import org.luckypray.dexkit.query.enums.MatchType
+import org.luckypray.dexkit.query.matchers.MethodMatcher
 import java.lang.ref.WeakReference
 import kotlin.math.sqrt
 import kotlin.time.Duration.Companion.milliseconds
@@ -943,19 +944,51 @@ object HideContacts : ClickableFeature(), IResolveDex, WeChatInputBarApi.IInputB
         }
     }
 
-    /** `mp5.q2.Ii(String toUser, ...)` — VoIPMP call-record insertion (未接听 / 已取消 / duration). */
+    /**
+     * `mp5.q2.Ii(String toUser, ...)` — VoIPMP call-record insertion (未接听 / 已取消 / duration).
+     *
+     * 8.0.77 起 `"insertMsg() called with: toUser = "` 不再与 `"MicroMsg.VoIPMP.Launcher"` 同处一个
+     * 方法体（该串被搬到了 11 参的 ZIDL 桩 `ZIDL_DVO6HrxwB.ZIDL_DCV`），所以旧的「两串同体」匹配
+     * 在 8.0.77 上零命中。现在改为按 7 参签名锁定，并按 anyOf 允许
+     * `(Launcher tag + toUser 串)` 或 `(Launcher tag + closeReceiverBanner)` 两种类特征：
+     * 8.0.72 命中 `nn5.q2::Ci`，8.0.77 命中 `ru5.e3::ii`，两版都唯一（实测 2026-09-13）。
+     */
     internal val methodVoipMpInsertMsg by dexMethod {
         matcher {
-            // The CoreV2 ZIDL stub logs the same text under a different tag; pairing with the
-            // Launcher tag picks out q2.Ii.
-            usingEqStrings("MicroMsg.VoIPMP.Launcher", "insertMsg() called with: toUser = ")
+            paramTypes(
+                "java.lang.String",
+                "boolean",
+                "int",
+                "long",
+                "long",
+                "long",
+                "int",
+            )
+            returnType("void")
+            anyOf(
+                MethodMatcher().apply {
+                    usingEqStrings("MicroMsg.VoIPMP.Launcher", "insertMsg() called with: toUser = ")
+                },
+                MethodMatcher().apply {
+                    declaredClass {
+                        usingEqStrings("MicroMsg.VoIPMP.Launcher", "closeReceiverBanner")
+                    }
+                },
+            )
         }
     }
 
     // ── multitalk (群通话), used when the VoIPMP multitalk experiment is off ───────────────────
 
-    /** `v0.G(MultiTalkGroup)` — MultiTalkManager.onInviteMultiTalk. */
-    internal val methodMultiTalkOnInvite by dexMethod {
+    /**
+     * `v0.G(MultiTalkGroup)` — MultiTalkManager.onInviteMultiTalk.
+     *
+     * `allowFailure` 因为 8.0.77 **删除了** MultiTalk 结构：锚点串
+     * `"MicroMsg.MT.MultiTalkManager"` 在 8.0.72 存在、在 8.0.77 消失（锚点差分实测 2026-09-13）。
+     * 上游对同一处也是这么处理的（commit a19191f8）。保持 strict 会让整个「隐藏联系人」特性
+     * 在 8.0.77 上因一个已不存在的结构而整体不加载。
+     */
+    internal val methodMultiTalkOnInvite by dexMethod(allowFailure = true) {
         matcher {
             usingEqStrings(
                 "MicroMsg.MT.MultiTalkManager",

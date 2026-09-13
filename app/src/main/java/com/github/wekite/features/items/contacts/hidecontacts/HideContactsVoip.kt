@@ -145,6 +145,15 @@ private fun rejectVoipMpCall(wxId: String) {
  * "not open multitalk receiver or black user" and returns without showing any UI).
  */
 private fun HideContacts.installMultiTalkHooks() {
+    // 8.0.77 removed the MultiTalkManager structure this matcher anchors on, so the delegate is
+    // allowed to be a placeholder (see HideContacts.methodMultiTalkOnInvite). Reading `.method`
+    // on a placeholder throws, so it must be skipped — otherwise this hook would take down
+    // enable() for the whole feature and the other hiding surfaces would stay dead too.
+    if (methodMultiTalkOnInvite.isPlaceholder) {
+        WeLogger.w(TAG, "onInviteMultiTalk wasn't resolved (structure removed); group-call hiding unavailable")
+        return
+    }
+
     methodMultiTalkOnInvite.hookBefore {
         val group = args[0] ?: return@hookBefore
         val (chatroom, inviter) = readMultiTalkInvite(group) ?: return@hookBefore
