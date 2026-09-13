@@ -14,6 +14,7 @@ import android.widget.TextView
 import androidx.compose.ui.graphics.toArgb
 import dev.ujhhgtg.reflekt.reflekt
 import dev.ujhhgtg.reflekt.utils.toClass
+import java.util.concurrent.atomic.AtomicInteger
 import com.github.wekite.features.core.ApiFeature
 import com.github.wekite.features.core.Feature
 import com.github.wekite.ui.utils.theme.SeedResolver
@@ -86,16 +87,30 @@ object MonetEngine : ApiFeature() {
             return
         }
 
+        // NOTE (diagnostic): on 8.0.72/8.0.77 this hook is expected to be a STRUCTURAL NO-OP —
+        // the class holds no brand-green constant at all (its colors come from TypedArray
+        // resources), so no int field can ever equal DEFAULT_COLOR. The counters below exist to
+        // prove that from the log: "constructor entered" present + zero "field" lines = the hook
+        // runs and finds nothing (i.e. it can never recolor anything), rather than not running.
+        val switchConstructions = AtomicInteger(0)
+        val switchFieldHits = AtomicInteger(0)
         runCatching {
-            "com.tencent.mm.ui.widget.MMSwitchBtn".toClass().constructors.forEach {
+            val constructors = "com.tencent.mm.ui.widget.MMSwitchBtn".toClass().constructors
+            WeLogger.i(TAG, "MMSwitchBtn: hooking ${constructors.size} constructor(s)")
+            constructors.forEach {
                 it.hookAfter {
+                    if (switchConstructions.incrementAndGet() == 1) {
+                        WeLogger.i(TAG, "MMSwitchBtn constructor hook ENTERED (first call)")
+                    }
                     thisObject!!.reflekt()
                         .fields {
                             type = Int::class
                             superclass()
                         }.forEach { field ->
-                            if (field.get()!! as Int == DEFAULT_COLOR)
+                            if (field.get()!! as Int == DEFAULT_COLOR) {
+                                WeLogger.i(TAG, "MMSwitchBtn brand green -> primary (hit #${switchFieldHits.incrementAndGet()})")
                                 field.set(primaryColor)
+                            }
                         }
                 }
             }
@@ -105,23 +120,52 @@ object MonetEngine : ApiFeature() {
 
         // GradientDrawable/PaintDrawable fills (incl. WeChat's green button shapes) draw through
         // Paint.setColor, so swapping the brand green here recolors those backgrounds to primary.
+        //
+        // NOTE (fix): the previous spec `firstMethod { name = "setColor" }` pinned nothing but the
+        // name, so the overload was chosen by `declaredMethods` order — which the JVM does NOT
+        // specify. On Android 10+ Paint declares BOTH setColor(int) and setColor(long); binding to
+        // the (long) overload makes `args[0] as Int` throw on every call, and since the (long)
+        // overload is essentially never called in WeChat the net effect was a silent no-op: no
+        // recoloring AND no error logs. Pin the (int) overload explicitly.
         runCatching {
-            Paint::class.reflekt()
-                .firstMethod { name = "setColor" }
-                .hookBefore {
-                    val color = args[0] as Int
-                    if (color != DEFAULT_COLOR) return@hookBefore
-                    args[0] = primaryColor
+            val setColor = Paint::class.reflekt().firstMethod {
+                name = "setColor"
+                parameters(Int::class)
+                returnType(Void.TYPE)
+            }
+            WeLogger.i(TAG, "Paint hook bound to: ${setColor.self}")
+            val paintCalls = AtomicInteger(0)
+            val paintHits = AtomicInteger(0)
+            setColor.hookBefore {
+                val call = paintCalls.incrementAndGet()
+                val color = args[0] as Int
+                if (color != DEFAULT_COLOR) {
+                    // If the hook is dispatching but this is the only line we ever see, the calls
+                    // we care about never reach it (e.g. JIT-inlined callers on a bridge without
+                    // deoptimization support).
+                    if (call == 1) {
+                        WeLogger.i(TAG, "Paint.setColor dispatched (first call #${Integer.toHexString(color)}), brand green not seen yet")
+                    }
+                    return@hookBefore
                 }
+                val hits = paintHits.incrementAndGet()
+                if (hits == 1) {
+                    WeLogger.i(TAG, "Paint.setColor brand green -> primary (first hit at call #$call)")
+                }
+                args[0] = primaryColor
+            }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook Paint.setColor", it)
         }
 
         // ColorDrawable draws via Canvas.drawColor (not Paint.setColor), so it needs its own swap.
         runCatching {
-            View::class.reflekt().firstMethod { name = "setBackgroundDrawable" }.hookBefore {
+            val setBackground = View::class.reflekt().firstMethod { name = "setBackgroundDrawable" }
+            WeLogger.i(TAG, "View.setBackgroundDrawable hook bound to: ${setBackground.self}")
+            setBackground.hookBefore {
                 val drawable = args[0] as? Drawable? ?: return@hookBefore
                 if (drawable is ColorDrawable && drawable.color == DEFAULT_COLOR) {
+                    WeLogger.i(TAG, "View.setBackgroundDrawable brand green -> primary")
                     drawable.color = primaryColor
                 }
             }
@@ -133,9 +177,19 @@ object MonetEngine : ApiFeature() {
         // ColorDrawable hooks above. Neutral / cancel buttons keep their own colors —
         // we deliberately don't blanket-tint every Button.
         runCatching {
-            View::class.reflekt().firstMethod { name = "onFinishInflate" }.hookAfter {
+            val onFinishInflate = View::class.reflekt().firstMethod { name = "onFinishInflate" }
+            WeLogger.i(TAG, "View.onFinishInflate hook bound to: ${onFinishInflate.self}")
+            val buttonsSeen = AtomicInteger(0)
+            val buttonsTinted = AtomicInteger(0)
+            onFinishInflate.hookAfter {
                 val button = thisObject as? Button ?: return@hookAfter
+                if (buttonsSeen.incrementAndGet() == 1) {
+                    WeLogger.i(TAG, "View.onFinishInflate hook ENTERED (first Button instance seen)")
+                }
                 if (button.background?.hasBrandGreen() == true) {
+                    if (buttonsTinted.incrementAndGet() == 1) {
+                        WeLogger.i(TAG, "brand-green Button -> primary bg + onPrimary text")
+                    }
                     button.setTextColor(onPrimaryColor)
                     button.backgroundTintList = ColorStateList.valueOf(primaryColor)
                 }
@@ -149,7 +203,10 @@ object MonetEngine : ApiFeature() {
         }
 
         runCatching {
-            TextView::class.reflekt().firstMethod { name = "onAttachedToWindow" }.hookAfter {
+            val onAttached = TextView::class.reflekt().firstMethod { name = "onAttachedToWindow" }
+            WeLogger.i(TAG, "TextView.onAttachedToWindow hook bound to: ${onAttached.self}")
+            val cursorTinted = AtomicInteger(0)
+            onAttached.hookAfter {
                 val editText = thisObject as? EditText? ?: return@hookAfter
                 editText.apply {
                     textCursorDrawable?.apply {
@@ -162,6 +219,9 @@ object MonetEngine : ApiFeature() {
                     handle.mutate()
                     setTextSelectHandle(handle)
                     textSelectHandle!!.setTint(primaryColor)
+                    if (cursorTinted.incrementAndGet() == 1) {
+                        WeLogger.i(TAG, "EditText cursor/selection handle tinted to primary (first time)")
+                    }
                 }
             }
         }.onFailure {

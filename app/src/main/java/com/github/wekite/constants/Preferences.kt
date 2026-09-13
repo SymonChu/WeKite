@@ -7,8 +7,11 @@ object Preferences {
     const val VERBOSE_LOG = "verbose_log"
     const val NO_DEX_RESOLVE = "no_dex_resolve"
     const val SHOW_STARTUP_TOAST = "toast_startup"
-    const val RESET_DEX_ON_HOT_UPDATE = "reset_dex_on_hot_upd"
-    const val MATCH_GENERIC_WXID_EXP = "match_generic_wxid"
+
+    // 已移除的两个设置项 (设置界面入口已删除, 行为固化为原默认值):
+    //   "reset_dex_on_hot_upd"  → 恒为 false (宿主热更新时不重置 DEX 缓存), 见 WeLauncher.init
+    //   "match_generic_wxid"    → 恒为 true  (允许非标准微信 ID), 见 MessageTextUtils.stripWxId
+    // 旧 MMKV 里残留的键值不再被读取, 无害。
 
     // Settings UI theming
     const val THEME_MODE = "settings_theme_mode"
@@ -22,10 +25,6 @@ object Preferences {
     var verboseLog by prefOption(VERBOSE_LOG, false)
     var noDexResolve by prefOption(NO_DEX_RESOLVE, false)
     var showStartupToast by prefOption(SHOW_STARTUP_TOAST, false)
-    var resetDexCacheOnHotUpdate by prefOption(RESET_DEX_ON_HOT_UPDATE, false)
-
-    // ALWAYS check whether sender is group chat!!!
-    var matchGenericWxIdExp by prefOption(MATCH_GENERIC_WXID_EXP, true)
 
     // use this when Google fucked up itself again
 //    var useActivityInsteadOfDialog: Boolean

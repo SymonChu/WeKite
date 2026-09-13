@@ -1,7 +1,5 @@
 package com.github.wekite.utils.strings
 
-import com.github.wekite.constants.Preferences
-
 
 private val MAP_REGEX = Regex("\\[[^]]+]")
 
@@ -139,11 +137,13 @@ fun String.replaceEmojis(): String {
     }
 }
 
-private val WXID_PREFIX_REGEX = Regex("""^wxid_[^:]+:\n(.*)$""", setOf(RegexOption.DOT_MATCHES_ALL))
+// 非标准 ID (无 wxid_ 前缀) 的处理曾经由「调试 → 清理消息内容微信 ID 前缀时允许非标准 ID」
+// 开关控制; 该开关已从设置界面移除, 行为固化为原来的默认值 (允许)。
 private val GENERIC_PREFIX_REGEX = Regex("""^[^:]+:\n(.*)$""", setOf(RegexOption.DOT_MATCHES_ALL))
 
+// ALWAYS check whether sender is group chat!!! 通用前缀模式会剥掉任何 "xxx:\n" 前缀,
+// 群聊里普通消息正文也可能长成这样。
 fun String.stripWxId(): String {
-    val regex = if (Preferences.matchGenericWxIdExp) GENERIC_PREFIX_REGEX else WXID_PREFIX_REGEX
-    val match = regex.find(this)
+    val match = GENERIC_PREFIX_REGEX.find(this)
     return match?.groupValues?.get(1) ?: this
 }

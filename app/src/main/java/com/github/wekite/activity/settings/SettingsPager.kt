@@ -46,7 +46,6 @@ import coil3.compose.AsyncImage
 import com.composables.icons.materialsymbols.MaterialSymbols
 import com.composables.icons.materialsymbols.outlined.Account_circle
 import com.composables.icons.materialsymbols.outlined.Arrow_back
-import com.composables.icons.materialsymbols.outlined.Auto_delete
 import com.composables.icons.materialsymbols.outlined.Block
 import com.composables.icons.materialsymbols.outlined.Brightness_medium
 import com.composables.icons.materialsymbols.outlined.Build_circle
@@ -58,16 +57,13 @@ import com.composables.icons.materialsymbols.outlined.Download
 import com.composables.icons.materialsymbols.outlined.Frame_bug
 import com.composables.icons.materialsymbols.outlined.Label
 import com.composables.icons.materialsymbols.outlined.License
-import com.composables.icons.materialsymbols.outlined.Lightbulb_2
 import com.composables.icons.materialsymbols.outlined.Notifications
 import com.composables.icons.materialsymbols.outlined.Palette
-import com.composables.icons.materialsymbols.outlined.Rule_settings
 import com.composables.icons.materialsymbols.outlined.Search
 import com.composables.icons.materialsymbols.outlined.Style
 import com.composables.icons.materialsymbols.outlined.Sync
 import com.composables.icons.materialsymbols.outlined.Update
 import com.composables.icons.materialsymbols.outlined.Upload
-import com.composables.icons.materialsymbols.outlined.Volunteer_activism
 import com.composables.icons.materialsymbols.outlined.Wallpaper
 import com.mikepenz.aboutlibraries.Libs
 import com.mikepenz.aboutlibraries.entity.Library
@@ -162,7 +158,7 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
             }
         }
 
-        // 调试
+        // 调试 (原「兼容」卡片已并入此处)
         item {
             MiuixSmallTitle(text = "调试", modifier = Modifier.padding(top = 12.dp))
             Card(modifier = Modifier.fillMaxWidth()) {
@@ -179,20 +175,6 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
                     icon = MaterialSymbols.Outlined.Notifications,
                 )
                 PrefSwitch(
-                    key = Preferences.MATCH_GENERIC_WXID_EXP,
-                    title = "清理消息内容微信 ID 前缀时允许非标准 ID",
-                    summary = "允许处理不带 'wxid_' 前缀的微信 ID, 可能导致误伤消息原始内容 (实验性)",
-                    icon = MaterialSymbols.Outlined.Rule_settings,
-                    default = true,
-                )
-            }
-        }
-
-        // 兼容
-        item {
-            MiuixSmallTitle(text = "兼容", modifier = Modifier.padding(top = 12.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
-                PrefSwitch(
                     key = Preferences.NO_DEX_RESOLVE,
                     title = "禁用版本适配",
                     summary = "不弹出 DEX 查找对话框，未适配功能将不会被加载",
@@ -203,12 +185,6 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
                     summary = "清除 DEX 缓存, 等待下次启动时重新适配",
                     icon = MaterialSymbols.Outlined.Build_circle,
                     onClick = { showResetAdapter = true },
-                )
-                PrefSwitch(
-                    key = Preferences.RESET_DEX_ON_HOT_UPDATE,
-                    title = "宿主热更新时重新适配",
-                    summary = "宿主热更新时是否重置 DEX 缓存, 可能导致频繁重新适配 (实验性)",
-                    icon = MaterialSymbols.Outlined.Auto_delete,
                 )
             }
         }

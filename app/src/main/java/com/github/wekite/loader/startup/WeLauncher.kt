@@ -1,9 +1,7 @@
 package com.github.wekite.loader.startup
 
 import android.content.Context
-import com.tencent.mm.boot.BuildConfig
 import com.github.wekite.constants.PackageNames
-import com.github.wekite.constants.Preferences
 import com.github.wekite.dexkit.cache.DexCacheManager
 import com.github.wekite.features.core.FeaturesLoader
 import com.github.wekite.loader.utils.ActivityProxy
@@ -21,10 +19,10 @@ object WeLauncher {
 
         ParcelableFixer.init()
 
-        DexCacheManager.init(
-            if (!Preferences.resetDexCacheOnHotUpdate) "${HostInfo.versionName}${HostInfo.versionCode}"
-            else "${BuildConfig.VERSION_NAME}${BuildConfig.VERSION_CODE}${BuildConfig.CLIENT_VERSION_ARM64}"
-        )
+        // DEX 缓存键固定为「模块版本号」。曾经由「兼容 → 宿主热更新时重新适配」开关控制是否改用
+        // 宿主版本号 (微信热更新时强制重新适配); 该开关已从设置界面移除, 行为固化为原来的默认值
+        // (不重置), 也就是这里唯一保留的表达式。
+        DexCacheManager.init("${HostInfo.versionName}${HostInfo.versionCode}")
 
         val appContext = context.applicationContext ?: context
         ResourcesInjector.injectModuleRes(appContext.resources)
