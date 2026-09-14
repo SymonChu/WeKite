@@ -90,16 +90,12 @@ object MonetEngine : ApiFeature() {
     private val drawableHits = AtomicInteger(0)
 
     /**
-     * Diagnostic (temporary, cheap): names of resources used as VIEW BACKGROUNDS whose resolved
-     * fill is opaque white — i.e. candidates for "the one rectangle that never changes colour".
+     * Diagnostic (temporary): names of resources used as VIEW BACKGROUNDS that are still unthemed —
+     * opaque neutral fills which are not in the palette. This is what turns "the top bar / the very
+     * bottom didn't change colour" into a concrete resource name.
      *
-     * This is the LOW-NOISE half of the earlier investigation and is kept only because it costs one
-     * set lookup per distinct background resource. It is the signal that identified the culprit
-     * (`drawable/bxm` → `GradientDrawable fill=#ffffffff`), which the palette could never reach.
-     * Remove together with [describeDrawable] once the 我 page is confirmed clean.
-     *
-     * Only `View.setBackgroundResource(id)` is used here because it unambiguously means "this id
-     * paints a background" — unlike `getColor`, which also serves text.
+     * Kept cheap on purpose: at most one log line per distinct background resource, behind a set
+     * lookup, and only for backgrounds (not every `getColor`, which is a hot path).
      */
     private val whiteBgResourceNames = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
 
@@ -456,8 +452,6 @@ object MonetEngine : ApiFeature() {
                     .getOrNull() ?: return@hookAfter
                 if (whiteBgResourceNames.size >= 40) return@hookAfter
                 if (!whiteBgResourceNames.add(name)) return@hookAfter
-                // Only report backgrounds that are actually OPAQUE WHITE — that is the whole point
-                // (the unthemed surface). Filtering here keeps this from becoming a per-call logger.
                 // Resolved by inspecting the DRAWABLE, not `resources.getColor(id)`: getColor throws
                 // for drawable resources, which is what made an earlier version report every drawable
                 // as "not white" and hide the real culprit.
@@ -467,9 +461,21 @@ object MonetEngine : ApiFeature() {
                     is ColorDrawable -> bg.color
                     is GradientDrawable -> bg.color?.defaultColor
                     else -> null
-                }
-                if (fill != WHITE_SURFACE) return@hookAfter
-                WeLogger.i(TAG, "DIAG WHITE BG name=$name drawable=${bg?.javaClass?.simpleName} ${describeDrawable(bg)}")
+                } ?: return@hookAfter
+                // Report OPAQUE NEUTRAL fills — i.e. surfaces that are still unthemed. The colour
+                // must be opaque (alpha 0xFF: a translucent overlay stacks over unknown content) and
+                // must NOT already be handled: either it is in the palette, or recolouring it would
+                // actually change something. Anything left over is a genuine gap.
+                //
+                // Why this signal: the user reports specific unthemed areas ("the 微信 title bar",
+                // "the very bottom") that all measure #EDEDED, but a grey value maps to MANY resource
+                // names (9 for #EDEDED alone) and only one of them is the surface actually used. This
+                // turns "which name is it" from a guess into a log line.
+                val alpha = fill ushr 24
+                if (alpha != 0xFF) return@hookAfter
+                if (fill != WHITE_SURFACE && recolorSurface(fill, 0.10f) == fill) return@hookAfter
+                if (paletteIds.contains(id) || surfaceIds.contains(id)) return@hookAfter
+                WeLogger.i(TAG, "DIAG UNTHEMED BG name=$name drawable=${bg?.javaClass?.simpleName} ${describeDrawable(bg)}")
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook View.setBackgroundResource", it)
