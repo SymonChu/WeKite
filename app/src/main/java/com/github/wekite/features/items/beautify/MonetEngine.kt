@@ -126,7 +126,15 @@ object MonetEngine : ApiFeature() {
      * Selectors are not `ColorDrawable`/`GradientDrawable` instances and would otherwise fall
      * through untouched, so the current state is unwrapped.
      */
-    private fun retargetBackground(drawable: Drawable, surfaceHits: AtomicInteger) {
+    private fun retargetBackground(drawable: Drawable?, surfaceHits: AtomicInteger) {
+        // ⚠️ MUST accept null. `View.setBackground(null)` is a legal call — Android's own
+        // `View.<init>` and `View.setBackgroundDrawable` forward a possibly-null background, and
+        // WeChat calls it on every inflate. Because the parameter is non-null in Kotlin, R8 can
+        // drop the emitted null-check, and a null then fell through to the `else ->` branch below
+        // and reached `drawable.javaClass` in [handlePatternDrawable] — a
+        // NullPointerException on 'Object.getClass()' that aborted the hook (measured
+        // 2026-09-14: 35 occurrences, all with `at ...View.<init>` under the stack).
+        if (drawable == null) return
         when (drawable) {
             is ColorDrawable -> handleColorDrawable(drawable, surfaceHits)
             is GradientDrawable -> handleGradientDrawable(drawable, surfaceHits)
@@ -160,8 +168,13 @@ object MonetEngine : ApiFeature() {
      *
      * Skipped for shapes that already carry an accent fill, and for a drawable that already has our
      * filter, so this cannot stack on every attach.
+     *
+     * ⚠️ [drawable] is nullable on purpose: this is the `else ->` arm for "not a colour drawable",
+     * and a null background is one of the things that lands here (see [retargetBackground]).
+     * Every use below must tolerate null.
      */
-    private fun handlePatternDrawable(drawable: Drawable, surfaceHits: AtomicInteger) {
+    private fun handlePatternDrawable(drawable: Drawable?, surfaceHits: AtomicInteger) {
+        if (drawable == null) return
         if (drawable is GradientDrawable && drawable.color != null) return   // plain fill: handled elsewhere
         val filter = drawable.colorFilter
         if (filter is PorterDuffColorFilter) return                          // already ours
@@ -359,7 +372,12 @@ object MonetEngine : ApiFeature() {
      */
     private val SURFACE_TINTS = mapOf(
         "color/BW_BG_19" to 0.18f, "color/BW_BG_20" to 0.16f, "color/BW_BG_30" to 0.14f,
-        "color/BW_BG_95" to 0.08f, "color/BW_BG_98" to 0.06f, "color/BW_BG_100" to 0.12f,
+        // ⚠️ 同一 literal 必须同一强度。以下 6 个值曾按资源名各配一档, 导致同一灰/白在
+        // 同屏染成两种颜色 (实测 2026-09-14: #EDEDED 0.08 vs 0.21 差 31 通道 /
+        // #F7F7F7 0.06 vs 0.13 差 17 / #FFFFFF 0.05 vs 0.12 差 18)。
+        // 统一到**较高档**, 让所有中性面之间的跨度最小 (白 0.12 → 灰 0.21 只差 31;
+        // 若白取 0.05 则差 55), 整屏才读得出"一个颜色"。
+        "color/BW_BG_95" to 0.21f, "color/BW_BG_98" to 0.13f, "color/BW_BG_100" to 0.12f,
         // Second neutral family (see PALETTE_RESOURCE_NAMES). These MUST be listed here: a name in
         // the palette list but absent from this map falls through to the value-based rule, and a
         // neutral white/grey can never match a green hue window — i.e. adding the name alone would
@@ -368,7 +386,7 @@ object MonetEngine : ApiFeature() {
         // the name looking "neutral": BW_85 / BW_90 / BW_90_K are deliberately absent because the
         // reference pins them to literals (#ffdadada, #10000000, #10000000) — i.e. they are scrims
         // and press states that must NOT follow the accent.
-        "color/BW_100" to 0.05f, "color/BW_97" to 0.06f, "color/BW_93" to 0.08f,
+        "color/BW_100" to 0.12f, "color/BW_97" to 0.13f, "color/BW_93" to 0.21f,
         "color/BW_0_Alpha_0_9_White_Mode" to 0.10f,
         "color/BW_30_Alpha_0_9" to 0.14f,
         // dark variants: same saturation reads as a subtler shift on dark greys, so a touch more
@@ -376,7 +394,7 @@ object MonetEngine : ApiFeature() {
         // These three share the literal 0xccffffff, so they MUST share one strength — otherwise the
         // same 80%-white scrim renders with two different hues depending on which resource a screen
         // happens to use. 0.10 is the middle of the three values previously in use.
-        "color/BW_0_Alpha_0_9_White_Mode" to 0.10f, "color/BW_0_Alpha_0_9_night_mode" to 0.10f,
+        "color/BW_0_Alpha_0_9_night_mode" to 0.10f,
         // themed neutrals from the second-batch set (same reasoning as above)
         "color/UN_BW_100_Alpha_0_8" to 0.10f, "color/UN_BW_93" to 0.21f,
         // Second batch (see PALETTE_RESOURCE_NAMES). Tint strength is chosen so that the SAME
@@ -390,8 +408,11 @@ object MonetEngine : ApiFeature() {
         "color/i" to 0.21f,
         // Same literal #EDEDED as `i` / `BW_93_Night_Mode`, so the same strength — otherwise the
         // banner would end up a visibly different hue than the area right below it.
-        "color/ae4" to 0.21f, "color/ae5" to 0.21f, "color/al8" to 0.21f,
+        "color/ae5" to 0.21f, "color/al8" to 0.21f,
         "color/ba2" to 0.21f, "color/ib" to 0.21f, "color/nw" to 0.21f,
+        // ⚠️ 待定: 实测 8.0.77 里 color/ae4 = #FF606060 (深灰), 不是注释里以为的 #EDEDED。
+        // 0.21 落在深灰上不会显得脏 (结果仍是深色), 故本轮不动; 但"按色值分级"才是根治。
+        "color/ae4" to 0.21f,
     )
 
     /** Resolves a `type/name` key to a resource id in the host package (0 when absent). */
@@ -597,7 +618,9 @@ object MonetEngine : ApiFeature() {
             val paintHits = AtomicInteger(0)
             setColor.hookBefore {
                 val call = paintCalls.incrementAndGet()
-                val color = args[0] as Int
+                // `as?` not `as`: a wrong-overload bind would otherwise throw here (see the NOTE
+                // above) and abort the hook instead of failing loudly-but-safely.
+                val color = args[0] as? Int ?: return@hookBefore
                 if (color != DEFAULT_COLOR) {
                     // If the hook is dispatching but this is the only line we ever see, the calls
                     // we care about never reach it (e.g. JIT-inlined callers on a bridge without
