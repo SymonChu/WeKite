@@ -419,9 +419,15 @@ object MonetEngine : ApiFeature() {
 
         // TypedArray is the highest-leverage target: it is how the framework reads every color
         // written as an XML attribute, so it covers screens that never call Resources.getColor.
-        // Args are (index, attr); `index` is not a resource id, so no id-based mapping here.
-        hookColorReturn("TypedArray", TypedArray::class.java, "getColor", -1, Int::class.java, Int::class.java)
-        hookStateListReturn("TypedArray", TypedArray::class.java, "getColorStateList", -1, Int::class.java)
+        // Args are (index, defValue); `index` is NOT a resource id — the id is recovered inside the
+        // hook via `getResourceId(index, 0)` (see [hookColorReturn]). Passing 0 keeps `args[0]` (the
+        // index) available for that lookup.
+        hookColorReturn("TypedArray", TypedArray::class.java, "getColor", 0, Int::class.java, Int::class.java)
+        hookStateListReturn("TypedArray", TypedArray::class.java, "getColorStateList", 0, Int::class.java)
+        // `android:background="@color/..."` is read through TypedArray.getDrawable during inflate —
+        // this is the missing entry point behind "the background never changes". Absent from the
+        // 8.0.77 observation set because only Resources.getDrawable was counted before.
+        hookDrawableReturn("TypedArray", TypedArray::class.java, "getDrawable", 0, Int::class.java)
 
         // WeChat ships its OWN Resources subclasses that override these methods. A hook on the base
         // class does not see calls that resolve to the override, so those classes are hooked too.
@@ -495,9 +501,31 @@ object MonetEngine : ApiFeature() {
             }
             WeLogger.i(TAG, "$label.$methodName hook bound to: ${method.self}")
             val isTypedArray = label == "TypedArray"
+            // TypedArray.getColor(int index, int defValue): `args[0]` is an INDEX into the array,
+            // NOT a resource id, so the id-based palette map can never fire on this path — which is
+            // exactly why XML-declared colours (textColor / background / tint) stayed unrecoloured
+            // even though the value-based rule handled everything read through getColor.
+            // `TypedArray.getResourceId(index, 0)` recovers the real id for resource-backed
+            // attributes (it returns 0 for literals, which then falls back to the value rule).
+            val typedArrayResourceId by lazy {
+                runCatching {
+                    TypedArray::class.reflekt().firstMethod {
+                        name = "getResourceId"
+                        parameters(Int::class, Int::class)
+                        returnType(Int::class)
+                    }
+                }.getOrNull()
+            }
             method.hookAfter {
                 val original = result as? Int ?: return@hookAfter
-                val resId = if (resIdParamIndex in args.indices) args[resIdParamIndex] as? Int ?: 0 else 0
+                val argIdx = if (resIdParamIndex in args.indices) args[resIdParamIndex] as? Int ?: 0 else 0
+                val resId = if (isTypedArray) {
+                    // Recover the real resource id; 0 keeps the value-based fallback behaviour.
+                    val ta = thisObject as? TypedArray ?: return@hookAfter
+                    runCatching { typedArrayResourceId?.invoke(ta, argIdx, 0) as? Int ?: 0 }.getOrDefault(0)
+                } else {
+                    argIdx
+                }
 
                 // Diagnostic (temporary): prove whether this entry point is reached at all, and
                 // capture which ids the framework actually passes (TypedArray args are an INDEX,
