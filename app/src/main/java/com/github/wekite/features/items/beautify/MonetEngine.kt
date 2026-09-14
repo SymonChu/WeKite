@@ -112,6 +112,28 @@ object MonetEngine : ApiFeature() {
      */
     private val whiteBgResourceNames = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
 
+    /**
+     * Diagnostic (temporary): one-line description of a resolved background drawable, so the log
+     * says whether a white rectangle is a `ColorDrawable`, a white-filled `GradientDrawable`
+     * (shape XML), a `StateListDrawable`, etc.
+     *
+     * The distinction matters: the recolouring hooks only ever touch `ColorDrawable`. A white
+     * *shape* is therefore invisible to them no matter how many resource ids are added to the
+     * palette — which is why the earlier attempts kept leaving a white rectangle behind.
+     */
+    private fun describeDrawable(d: Drawable?): String = when (d) {
+        null -> "(no background)"
+        is ColorDrawable -> "color=#${Integer.toHexString(d.color)}"
+        is GradientDrawable -> run {
+            val c = d.color
+            val fill = c?.defaultColor?.let { "#${Integer.toHexString(it)}" } ?: "null"
+            "fill=$fill alpha=${d.alpha} corner=${d.cornerRadius}"
+        }
+
+        is StateListDrawable -> "stateList current=${d.current?.javaClass?.simpleName}"
+        else -> ""
+    }
+
     private fun reportUnmappedWhite(resId: Int, color: Int, where: String) {
         if (resId == 0) return
         if (color != -1) return                      // not opaque white
@@ -416,19 +438,22 @@ object MonetEngine : ApiFeature() {
                 returnType(Void.TYPE)
             }
             WeLogger.i(TAG, "View.setBackgroundResource hook bound to: ${setBgRes.self}")
-            setBgRes.hookBefore {
-                val id = args[0] as? Int ?: return@hookBefore
-                if (id == 0) return@hookBefore
+            setBgRes.hookAfter {
+                val id = args[0] as? Int ?: return@hookAfter
+                if (id == 0) return@hookAfter
                 val name = runCatching { HostInfo.application.resources.getResourceName(id) }
-                    .getOrNull() ?: return@hookBefore
-                if (whiteBgResourceNames.size >= 40) return@hookBefore
-                if (!whiteBgResourceNames.add(name)) return@hookBefore
-                // Only report ids whose colour really is opaque white (a resource may be a
-                // selector/drawable, in which case getColor throws and we skip it).
-                val isWhite = runCatching {
-                    HostInfo.application.resources.getColor(id, null) == WHITE_SURFACE
-                }.getOrDefault(false)
-                WeLogger.i(TAG, "DIAG BG-RESOURCE name=$name white=$isWhite firstSeen")
+                    .getOrNull() ?: return@hookAfter
+                if (whiteBgResourceNames.size >= 40) return@hookAfter
+                if (!whiteBgResourceNames.add(name)) return@hookAfter
+                // NOTE: the previous version tested `resources.getColor(id) == white`, which is
+                // WRONG for drawable resources — getColor throws for them and the failure was
+                // swallowed as "not white", so 8/12 entries were reported white=false purely
+                // because they are drawables. Inspect the RESOLVED DRAWABLE instead: a white shape
+                // (GradientDrawable) is exactly the case the colour hooks can never see.
+                val view = thisObject as? View
+                val bg = view?.background
+                val detail = describeDrawable(bg)
+                WeLogger.i(TAG, "DIAG BG-RESOURCE name=$name drawable=${bg?.javaClass?.simpleName ?: "null"} $detail")
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook View.setBackgroundResource", it)
