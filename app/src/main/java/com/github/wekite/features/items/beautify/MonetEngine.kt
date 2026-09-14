@@ -105,6 +105,13 @@ object MonetEngine : ApiFeature() {
     private val backgroundSurfaceHits = AtomicInteger(0)
 
     /**
+     * Diagnostic (temporary): background drawable CLASSES seen at attach time that no colour rule can
+     * reach (not ColorDrawable / GradientDrawable / StateListDrawable / LayerDrawable). Tells us
+     * whether a stubborn surface is a bitmap, a nine-patch or a ripple instead of guessing.
+     */
+    private val attachUnhandled = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
+
+    /**
      * Retargets a background drawable in place. Shared by `setBackgroundDrawable` and
      * `setBackground` so both entry points behave identically.
      *
@@ -469,6 +476,53 @@ object MonetEngine : ApiFeature() {
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook Activity.onCreate for the window background", it)
+        }
+
+        // ── Belt-and-braces: fix backgrounds that were set BEFORE the hooks went in ────────────
+        // Measured 2026-09-14: the grey page background behind 设置 (full width, 18.6% of the
+        // screen, #EDEDED) is untouched even though every entry point is hooked and the
+        // by-value neutral rule is in place. The only consistent explanation is that its
+        // background was applied before [onEnable] ran — cached/pre-inflated by WeChat — so the
+        // `setBackground*` call was never observed and neither the id path nor the value path
+        // could fire. Re-running the mapping at attach time catches that case regardless of which
+        // mechanism was used, because attaching always happens after the hooks are installed.
+        runCatching {
+            val attached = View::class.reflekt().firstMethod {
+                name = "onAttachedToWindow"
+                returnType(Void.TYPE)
+            }
+            WeLogger.i(TAG, "View.onAttachedToWindow hook bound to: ${attached.self}")
+            val attachFixes = AtomicInteger(0)
+            attached.hookAfter {
+                val view = thisObject as? View ?: return@hookAfter
+                val bg = view.background ?: return@hookAfter
+                val before = when (bg) {
+                    is ColorDrawable -> bg.color
+                    is GradientDrawable -> bg.color?.defaultColor
+                    else -> null
+                }
+                // Report the drawable KIND once per distinct background class: if a surface is
+                // neither ColorDrawable nor GradientDrawable, no amount of colour mapping can reach
+                // it and we need to know what it actually is (a bitmap? a nine-patch? a ripple?).
+                if (before == null) {
+                    val cls = bg.javaClass.name
+                    if (attachUnhandled.size < 12 && attachUnhandled.add(cls)) {
+                        WeLogger.i(TAG, "DIAG ATTACH unhandled background class=$cls")
+                    }
+                    return@hookAfter
+                }
+                retargetBackground(bg, backgroundSurfaceHits)
+                val after = when (val b = view.background) {
+                    is ColorDrawable -> b.color
+                    is GradientDrawable -> b.color?.defaultColor
+                    else -> null
+                }
+                if (after != null && after != before && attachFixes.incrementAndGet() == 1) {
+                    WeLogger.i(TAG, "background fixed at attach time (was #${Integer.toHexString(before)})")
+                }
+            }
+        }.onFailure {
+            WeLogger.w(TAG, "failed to hook View.onAttachedToWindow", it)
         }
 
         // NOTE (diagnostic): on 8.0.72/8.0.77 this hook is expected to be a STRUCTURAL NO-OP —
