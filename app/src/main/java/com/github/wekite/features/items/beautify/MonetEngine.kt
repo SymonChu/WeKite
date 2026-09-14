@@ -101,7 +101,7 @@ object MonetEngine : ApiFeature() {
         "color/Brand_100_CARE", "color/Brand_120_CARE", "color/Brand_170_CARE",
         "color/Brand_K",
         // bare family aliases (reference RRO covers these; they resolve by name on 8.0.77)
-        "color/Brand", "color/LightGreen",
+        "color/Brand", "color/LightGreen", "color/Link", "color/Red",
         // brand surfaces
         "color/Brand_BG_90", "color/Brand_BG_100", "color/Brand_BG_110", "color/Brand_BG_130",
         "color/Brand_BG_90_CARE", "color/Brand_BG_100_CARE",
@@ -151,15 +151,17 @@ object MonetEngine : ApiFeature() {
         // the palette list but absent from this map falls through to the value-based rule, and a
         // neutral white/grey can never match a green hue window — i.e. adding the name alone would
         // be a silent no-op. Roughly ordered light→dark like the BW_BG_* block above.
+        // Membership is taken from the reference overlay being a *themed* REFERENCE there, not from
+        // the name looking "neutral": BW_85 / BW_90 / BW_90_K are deliberately absent because the
+        // reference pins them to literals (#ffdadada, #10000000, #10000000) — i.e. they are scrims
+        // and press states that must NOT follow the accent.
         "color/BW_100" to 0.05f, "color/BW_97" to 0.06f, "color/BW_93" to 0.08f,
-        "color/BW_90_K" to 0.08f, "color/BW_85" to 0.10f,
         "color/BW_0_Alpha_0_9_White_Mode" to 0.10f,
         "color/BW_30_Alpha_0_9" to 0.14f,
         // dark variants: same saturation reads as a subtler shift on dark greys, so a touch more
         "color/BW_93_Night_Mode" to 0.14f, "color/BW_0_Alpha_0_9_night_mode" to 0.14f,
-        // BW_90 is the 10%-alpha black scrim (#10000000). Alpha is preserved by recolorSurface,
-        // so a small tint only whispers the hue into an otherwise-black scrim.
-        "color/BW_90" to 0.05f,
+        // themed neutrals from the second-batch set (same reasoning as above)
+        "color/UN_BW_100_Alpha_0_8" to 0.08f, "color/UN_BW_93" to 0.08f,
     )
 
     /** Resolves a `type/name` key to a resource id in the host package (0 when absent). */
@@ -186,6 +188,20 @@ object MonetEngine : ApiFeature() {
     private val surfaceIds: Set<Int> by lazy {
         SURFACE_TINTS.keys.map(::hostResourceId).filter { it != 0 }.toSet()
     }
+
+    /**
+     * The only resource ids this feature can ever change a returned colour for: the palette plus
+     * the tinted surfaces. Every id-mapped hook call first tests membership here.
+     *
+     * Why this exists (perf): `recolor` runs an HSV round-trip and the surface path runs two more,
+     * on methods the framework calls thousands of times per second — measured 10 000 `getColor`
+     * calls within ~20 s of a single launch. The overwhelming majority of those ids are NOT in the
+     * palette, so without a cheap membership test every one of them paid a full HSV conversion to
+     * be told "unchanged", which is what the user felt as input lag. Returning early keeps the
+     * palette hits intact (they still fall through to [recolorResource]) while skipping the work
+     * for everything else.
+     */
+    private val mappedResourceIds: Set<Int> by lazy { paletteIds + surfaceIds }
 
     private val scheme by lazy {
         try {
@@ -453,7 +469,7 @@ object MonetEngine : ApiFeature() {
      * for colours read through code that carries no id.
      */
     private fun recolorResource(resId: Int, color: Int): Int {
-        if (resId == 0 || !paletteIds.contains(resId)) return recolor(color)
+        if (resId == 0 || resId !in mappedResourceIds) return recolor(color)
 
         val tint = paletteTintFor(resId)
         val key = paletteKeyFor(resId)
