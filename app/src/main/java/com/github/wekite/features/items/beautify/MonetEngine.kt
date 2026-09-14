@@ -1,5 +1,6 @@
 package com.github.wekite.features.items.beautify
 
+import android.app.Activity
 import android.content.res.ColorStateList
 import android.content.res.Resources
 import android.content.res.TypedArray
@@ -9,6 +10,7 @@ import android.util.SparseIntArray
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.Build
 import android.view.View
@@ -117,6 +119,13 @@ object MonetEngine : ApiFeature() {
                 is ColorDrawable -> handleColorDrawable(cur, surfaceHits)
                 is GradientDrawable -> handleGradientDrawable(cur, surfaceHits)
                 else -> Unit
+            }
+
+            // A LayerDrawable is used for compounded backgrounds (an input box, a bordered cell…),
+            // and its layers are NOT reachable through `current` — without recursing, the white
+            // plate of a chat input box stays white while every other surface follows the accent.
+            is LayerDrawable -> for (i in 0 until drawable.numberOfLayers) {
+                drawable.getDrawable(i)?.let { retargetBackground(it, surfaceHits) }
             }
         }
     }
@@ -420,6 +429,46 @@ object MonetEngine : ApiFeature() {
         } catch (e: Exception) {
             WeLogger.w(TAG, "monet color resolution failed, recoloring disabled", e)
             return
+        }
+
+        // ── Page / window background ────────────────────────────────────────────────────────────
+        // The grey block under 设置 is NOT a View background: measured full-width #EDEDED covering
+        // 18.6% of the screen and no hook fires for it. It is the WINDOW background, chosen once by
+        // the theme (windowBackground) and cached before the process hooks are in place. Re-tinting
+        // it here is the only way to reach that surface.
+        //
+        // Only an OPAQUE NEUTRAL is touched, so an accented or branded window background is left
+        // alone. The tinted colour is applied to the decor view (which is what carries that
+        // background) rather than re-creating a drawable, so the window's insets/decor are
+        // untouched.
+        runCatching {
+            val onCreate = Activity::class.reflekt().firstMethod {
+                name = "onCreate"
+                parameters(android.os.Bundle::class.java)
+                returnType(Void.TYPE)
+            }
+            WeLogger.i(TAG, "Activity.onCreate hook bound to: ${onCreate.self}")
+            val windowFixes = AtomicInteger(0)
+            onCreate.hookAfter {
+                val activity = thisObject as? Activity ?: return@hookAfter
+                val bg = runCatching { activity.window?.decorView?.background }.getOrNull()
+                val fill = when (bg) {
+                    is ColorDrawable -> bg.color
+                    is GradientDrawable -> bg.color?.defaultColor
+                    else -> null
+                } ?: return@hookAfter
+                if (!isOpaqueNeutral(fill)) return@hookAfter
+                val mapped = recolorSurface(fill, surfaceTintFor(fill))
+                if (mapped == fill) return@hookAfter
+                runCatching {
+                    activity.window.decorView.setBackgroundColor(mapped)
+                    if (windowFixes.incrementAndGet() == 1) {
+                        WeLogger.i(TAG, "window background neutral -> tinted (was #${Integer.toHexString(fill)})")
+                    }
+                }
+            }
+        }.onFailure {
+            WeLogger.w(TAG, "failed to hook Activity.onCreate for the window background", it)
         }
 
         // NOTE (diagnostic): on 8.0.72/8.0.77 this hook is expected to be a STRUCTURAL NO-OP —
