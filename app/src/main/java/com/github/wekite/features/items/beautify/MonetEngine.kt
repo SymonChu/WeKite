@@ -37,6 +37,18 @@ import com.github.wekite.utils.android.isDarkMode
  * WeKite UI uses ([SeedResolver.customSeed] → the wallpaper accent or the chosen seed color, run
  * through the selected palette style + color spec). Colors are resolved once per WeChat launch
  * (restart required for a change to apply).
+ *
+ * Two layers are needed to actually cover WeChat's UI, and both were established by measurement
+ * rather than assumption (2026-09-14, 8.0.77):
+ *
+ *  1. **Resource reads** — most colour is a `color` resource read at runtime, so the palette is
+ *     redirected by resource **id** (`Resources.getColor/getDrawable`, `TypedArray.*` with the
+ *     index recovered via `getResourceId`). Matching by colour value alone can never work for the
+ *     neutral surfaces: they are white/grey, not green.
+ *  2. **Programmatic backgrounds** — `View.setBackgroundColor/Resource` never goes through a colour
+ *     read, so it is invisible to layer 1. Both `ColorDrawable` and `GradientDrawable` (a white
+ *     *shape*) are handled there; the leftover white rectangle on the 我 page was a
+ *     `GradientDrawable fill=#ffffffff`, which is why palette entries alone kept missing it.
  */
 @Feature(name = "莫奈引擎", categories = ["API"], description = "根据模块设置的自定义配色为微信原生组件上色")
 object MonetEngine : ApiFeature() {
@@ -77,73 +89,31 @@ object MonetEngine : ApiFeature() {
     private val paletteHits = AtomicInteger(0)
     private val drawableHits = AtomicInteger(0)
 
-    // ── Diagnostic counters (temporary) ───────────────────────────────────────────────
-    // `paletteHits`/`drawableHits` are HIT counters, so a zero in the log cannot tell apart
-    // "the method is never called by WeChat" from "called, but the resId we resolve by name is
-    // not the id the framework passes". These counters count CALLS, and the two Sets record the
-    // first few ids seen on each side so the two id spaces can be compared directly from the log.
-    // Remove once the resource layer is confirmed working.
-    private val resGetColorCalls = AtomicInteger(0)
-    private val resGetDrawableCalls = AtomicInteger(0)
-    private val typArrGetColorCalls = AtomicInteger(0)
-    private val seenGetColorIds = java.util.Collections.synchronizedSet(LinkedHashSet<Int>())
-    private val seenGetDrawableIds = java.util.Collections.synchronizedSet(LinkedHashSet<Int>())
-
     /**
-     * Diagnostic (temporary): pin down resources that render as OPAQUE WHITE but are not in the
-     * palette — i.e. the "one rectangle that never changes colour" class of bug.
+     * Diagnostic (temporary, cheap): names of resources used as VIEW BACKGROUNDS whose resolved
+     * fill is opaque white — i.e. candidates for "the one rectangle that never changes colour".
      *
-     * Measured on 8.0.77: exactly ONE stable-named colour resource is opaque white
-     * (`BW_BG_100`, already covered); the other 36 are obfuscated names (`cc`, `cj`, `im`, …) that
-     * cannot be found by grepping source. So the id is resolved back to its NAME at runtime via
-     * `Resources.getResourceName(id)` — that turns a blind guess into a copy-pasteable entry.
-     * Capped so a long session cannot flood the log.
-     */
-    private val whiteReported = java.util.Collections.synchronizedSet(LinkedHashSet<Int>())
-
-    /**
-     * Diagnostic (temporary): names of resources that are used as VIEW BACKGROUNDS and resolve to
-     * opaque white.
+     * This is the LOW-NOISE half of the earlier investigation and is kept only because it costs one
+     * set lookup per distinct background resource. It is the signal that identified the culprit
+     * (`drawable/bxm` → `GradientDrawable fill=#ffffffff`), which the palette could never reach.
+     * Remove together with [describeDrawable] once the 我 page is confirmed clean.
      *
-     * Why a dedicated signal: [reportUnmappedWhite] cannot tell a white *surface* from white *text*
-     * (both come back as #FFFFFFFF), so adding those ids to the palette would risk tinting text.
-     * `View.setBackgroundResource(id)` is the one call path that unambiguously means "this id paints
-     * a background", so only ids seen here are safe candidates to tint.
+     * Only `View.setBackgroundResource(id)` is used here because it unambiguously means "this id
+     * paints a background" — unlike `getColor`, which also serves text.
      */
     private val whiteBgResourceNames = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
 
-    /**
-     * Diagnostic (temporary): one-line description of a resolved background drawable, so the log
-     * says whether a white rectangle is a `ColorDrawable`, a white-filled `GradientDrawable`
-     * (shape XML), a `StateListDrawable`, etc.
-     *
-     * The distinction matters: the recolouring hooks only ever touch `ColorDrawable`. A white
-     * *shape* is therefore invisible to them no matter how many resource ids are added to the
-     * palette — which is why the earlier attempts kept leaving a white rectangle behind.
-     */
+    /** Diagnostic (temporary): one-line description of a background drawable; used by the log above. */
     private fun describeDrawable(d: Drawable?): String = when (d) {
         null -> "(no background)"
         is ColorDrawable -> "color=#${Integer.toHexString(d.color)}"
         is GradientDrawable -> run {
-            val c = d.color
-            val fill = c?.defaultColor?.let { "#${Integer.toHexString(it)}" } ?: "null"
+            val fill = d.color?.defaultColor?.let { "#${Integer.toHexString(it)}" } ?: "null"
             "fill=$fill alpha=${d.alpha} corner=${d.cornerRadius}"
         }
 
         is StateListDrawable -> "stateList current=${d.current?.javaClass?.simpleName}"
         else -> ""
-    }
-
-    private fun reportUnmappedWhite(resId: Int, color: Int, where: String) {
-        if (resId == 0) return
-        if (color != -1) return                      // not opaque white
-        if (resId in mappedResourceIds) return        // already handled
-        if (whiteReported.size >= 24) return
-        if (!whiteReported.add(resId)) return
-        val name = runCatching {
-            HostInfo.application.resources.getResourceName(resId)
-        }.getOrNull() ?: "?"
-        WeLogger.i(TAG, "DIAG UNMAPPED WHITE via $where: resId=0x${Integer.toHexString(resId)} name=$name")
     }
 
     /** Name of the host package whose resources are being remapped (WeChat). */
@@ -249,10 +219,6 @@ object MonetEngine : ApiFeature() {
     private val paletteIds: Set<Int> by lazy {
         val resolved = PALETTE_RESOURCE_NAMES.associateWith(::hostResourceId).filterValues { it != 0 }
         WeLogger.i(TAG, "palette resources resolved: ${resolved.size}/${PALETTE_RESOURCE_NAMES.size}")
-        // Diagnostic (temporary): dump the id space we resolve by name, so it can be diffed from
-        // the log against the ids the framework actually passes to getColor/getDrawable. A mismatch
-        // there means the runtime ids belong to a different ResTable than getIdentifier sees.
-        WeLogger.i(TAG, "DIAG paletteIds: " + resolved.entries.joinToString(", ") { "${it.key}=0x${Integer.toHexString(it.value)}" })
         resolved.values.toSet()
     }
 
@@ -404,24 +370,42 @@ object MonetEngine : ApiFeature() {
         // This path also carries programmatic backgrounds (`setBackgroundColor` → `setBackground-
         // Drawable`), which never touch the resource hooks — so an opaque white here has to be
         // tinted explicitly or it renders as the one unthemed rectangle on the screen.
+        //
+        // GradientDrawable matters just as much: a white SHAPE (`android:shape="rectangle"
+        // <solid android:color="#FFFFFFFF"/>`) is what the leftover rectangle on the 我 page turned
+        // out to be — measured 2026-09-14: `setBackgroundResource` reported
+        // `drawable/bxm drawable=GradientDrawable fill=#ffffffff alpha=255 corner=21.0`, and no
+        // amount of palette entries could reach it because it is not a colour resource read.
         runCatching {
             val setBackground = View::class.reflekt().firstMethod { name = "setBackgroundDrawable" }
             WeLogger.i(TAG, "View.setBackgroundDrawable hook bound to: ${setBackground.self}")
             val whiteSurfaceHits = AtomicInteger(0)
             setBackground.hookBefore {
                 val drawable = args[0] as? Drawable? ?: return@hookBefore
-                if (drawable !is ColorDrawable) return@hookBefore
-                when (drawable.color) {
-                    DEFAULT_COLOR -> {
-                        WeLogger.i(TAG, "View.setBackgroundDrawable brand green -> primary")
-                        drawable.color = primaryColor
+                when (drawable) {
+                    is ColorDrawable -> when (drawable.color) {
+                        DEFAULT_COLOR -> {
+                            WeLogger.i(TAG, "View.setBackgroundDrawable brand green -> primary")
+                            drawable.color = primaryColor
+                        }
+
+                        WHITE_SURFACE -> {
+                            if (whiteSurfaceHits.incrementAndGet() == 1) {
+                                WeLogger.i(TAG, "View.setBackgroundDrawable opaque white -> tinted surface")
+                            }
+                            drawable.color = recolorSurface(WHITE_SURFACE, WHITE_SURFACE_TINT)
+                        }
                     }
 
-                    WHITE_SURFACE -> {
-                        if (whiteSurfaceHits.incrementAndGet() == 1) {
-                            WeLogger.i(TAG, "View.setBackgroundDrawable opaque white -> tinted surface")
+                    // A white shape: only the DEFAULT fill is retargeted, and only when it is opaque
+                    // white — a shape with its own accent colour keeps it.
+                    is GradientDrawable -> {
+                        if (drawable.color?.defaultColor == WHITE_SURFACE) {
+                            if (whiteSurfaceHits.incrementAndGet() == 1) {
+                                WeLogger.i(TAG, "View.setBackgroundDrawable white GradientDrawable -> tinted surface")
+                            }
+                            drawable.setColor(recolorSurface(WHITE_SURFACE, WHITE_SURFACE_TINT))
                         }
-                        drawable.color = recolorSurface(WHITE_SURFACE, WHITE_SURFACE_TINT)
                     }
                 }
             }
@@ -445,15 +429,20 @@ object MonetEngine : ApiFeature() {
                     .getOrNull() ?: return@hookAfter
                 if (whiteBgResourceNames.size >= 40) return@hookAfter
                 if (!whiteBgResourceNames.add(name)) return@hookAfter
-                // NOTE: the previous version tested `resources.getColor(id) == white`, which is
-                // WRONG for drawable resources — getColor throws for them and the failure was
-                // swallowed as "not white", so 8/12 entries were reported white=false purely
-                // because they are drawables. Inspect the RESOLVED DRAWABLE instead: a white shape
-                // (GradientDrawable) is exactly the case the colour hooks can never see.
+                // Only report backgrounds that are actually OPAQUE WHITE — that is the whole point
+                // (the unthemed surface). Filtering here keeps this from becoming a per-call logger.
+                // Resolved by inspecting the DRAWABLE, not `resources.getColor(id)`: getColor throws
+                // for drawable resources, which is what made an earlier version report every drawable
+                // as "not white" and hide the real culprit.
                 val view = thisObject as? View
                 val bg = view?.background
-                val detail = describeDrawable(bg)
-                WeLogger.i(TAG, "DIAG BG-RESOURCE name=$name drawable=${bg?.javaClass?.simpleName ?: "null"} $detail")
+                val fill = when (bg) {
+                    is ColorDrawable -> bg.color
+                    is GradientDrawable -> bg.color?.defaultColor
+                    else -> null
+                }
+                if (fill != WHITE_SURFACE) return@hookAfter
+                WeLogger.i(TAG, "DIAG WHITE BG name=$name drawable=${bg?.javaClass?.simpleName} ${describeDrawable(bg)}")
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook View.setBackgroundResource", it)
@@ -669,23 +658,7 @@ object MonetEngine : ApiFeature() {
                 val argIdx = if (resIdParamIndex in args.indices) args[resIdParamIndex] as? Int ?: 0 else 0
                 val resId = effectiveResId(thisObject, argIdx)
 
-                // Diagnostic (temporary): prove whether this entry point is reached at all, and
-                // capture which ids the framework actually passes (the TypedArray counter is kept
-                // separate because its raw arg is an index and only the recovered id is meaningful).
-                if (thisObject is TypedArray) {
-                    typArrGetColorCalls.incrementAndGet()
-                } else {
-                    val n = resGetColorCalls.incrementAndGet()
-                    if (resId != 0 && seenGetColorIds.size < 12) seenGetColorIds.add(resId)
-                    if (n == 1) {
-                        WeLogger.i(TAG, "DIAG $label.$methodName first call: resId=0x${Integer.toHexString(resId)} value=#${Integer.toHexString(original)} inPalette=${paletteIds.contains(resId)}")
-                    } else if (n % 2000 == 0) {
-                        WeLogger.i(TAG, "DIAG $label.$methodName calls=$n paletteIdsSeen=${seenGetColorIds.count { paletteIds.contains(it) }} of last ${seenGetColorIds.size}")
-                    }
-                }
-
                 val mapped = recolorResource(resId, original)
-                if (mapped == original) reportUnmappedWhite(resId, original, "$label.$methodName")
                 if (mapped != original) {
                     if (resourceColorHits.incrementAndGet() == 1) {
                         WeLogger.i(TAG, "resource color -> primary (first hit via $label.$methodName, was #${Integer.toHexString(original)})")
@@ -726,22 +699,9 @@ object MonetEngine : ApiFeature() {
                 // 2026-09-14: resId came back as 0x4, the index itself).
                 val resId = effectiveResId(thisObject, argIdx)
 
-                // Diagnostic (temporary): `drawableHits` only counts recoloured backgrounds, so a
-                // zero cannot distinguish "getDrawable never called" from "called with an id we do
-                // not know". Count calls and sample the RECOVERED ids — sampling `resId` before
-                // recovery would only ever collect TypedArray indices.
-                val n = resGetDrawableCalls.incrementAndGet()
-                if (resId != 0 && seenGetDrawableIds.size < 12) seenGetDrawableIds.add(resId)
-                if (n == 1) {
-                    WeLogger.i(TAG, "DIAG $label.$methodName first call: resId=0x${Integer.toHexString(resId)} inPalette=${paletteIds.contains(resId)}")
-                } else if (n % 500 == 0) {
-                    WeLogger.i(TAG, "DIAG $label.$methodName calls=$n paletteIdsSeen=${seenGetDrawableIds.count { paletteIds.contains(it) }} of last ${seenGetDrawableIds.size}")
-                }
-
                 val drawable = result as? ColorDrawable ?: return@hookAfter
                 val original = drawable.color
                 val mapped = recolorResource(resId, original)
-                if (mapped == original) reportUnmappedWhite(resId, original, "$label.$methodName")
                 if (mapped != original) {
                     if (drawableHits.incrementAndGet() == 1) {
                         WeLogger.i(TAG, "drawable background -> recoloured (first hit via $label.$methodName, was #${Integer.toHexString(original)})")
