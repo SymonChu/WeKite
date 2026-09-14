@@ -58,6 +58,84 @@ object MonetEngine : ApiFeature() {
 
     private val resourceColorHits = AtomicInteger(0)
     private val stateListFailureLogged = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val paletteHits = AtomicInteger(0)
+    private val drawableHits = AtomicInteger(0)
+
+    /** Name of the host package whose resources are being remapped (WeChat). */
+    private const val HOST_PACKAGE = "com.tencent.mm"
+
+    /** Memo for [paletteKeyFor]; [SparseIntArray] has no null, so misses are simply absent. */
+    private val paletteKeyCache = HashMap<Int, String>()
+
+    /**
+     * WeChat's NAMED colour palette, resolved once on 8.0.77. Remapping by resource **id** is what
+     * actually recolors the whole UI — matching by colour value alone can never work, because the
+     * background palette is neutral white/grey (`BW_BG_100` = `0xFFFFFFFF`), not green.
+     *
+     * The reference module (WeChatMonet Pro v26S4) overrides exactly these resources in an RRO
+     * overlay, which is what proves this is the right target set. It rewrites them to
+     * `TYPE_REFERENCE` entries pointing at its own monet colours — i.e. the whole named palette is
+     * redirected to the dynamic colour, not just the green.
+     *
+     * `Brand_K` (`0x7F0600A5`) is a duplicate of `Brand_100`. `Brand_110` / `Brand_130` do NOT exist
+     * on 8.0.77 (only `Brand_BG_110/130`) — that is why they are absent from this table, and it is
+     * why the id list is resolved by NAME at runtime instead of hardcoding fragile ids.
+     */
+    private val PALETTE_RESOURCE_NAMES = listOf(
+        // brand accent — the green family that we also catch by value
+        "color/Brand_80", "color/Brand_90", "color/Brand_100", "color/Brand_120", "color/Brand_170",
+        "color/Brand_80_CARE", "color/Brand_90_CARE",
+        "color/Brand_100_CARE", "color/Brand_120_CARE", "color/Brand_170_CARE",
+        "color/Brand_K",
+        // brand surfaces
+        "color/Brand_BG_90", "color/Brand_BG_100", "color/Brand_BG_110", "color/Brand_BG_130",
+        "color/Brand_BG_90_CARE", "color/Brand_BG_100_CARE",
+        "color/Brand_BG_110_CARE", "color/Brand_BG_130_CARE",
+        // light green accents
+        "color/LightGreen_80", "color/LightGreen_90", "color/LightGreen_100",
+        "color/LightGreen_80_CARE", "color/LightGreen_90_CARE", "color/LightGreen_100_CARE",
+        // neutral surfaces — see SURFACE_TINTS
+        "color/BW_BG_19", "color/BW_BG_20", "color/BW_BG_30",
+        "color/BW_BG_95", "color/BW_BG_98", "color/BW_BG_100",
+        // caution accents
+        "color/Yellow_90", "color/Yellow_100", "color/Yellow_BG_90", "color/Yellow_BG_100",
+    )
+
+    /**
+     * Tint strength per NEUTRAL surface resource — the `BW_BG_*` family, which is what the user
+     * means by "background". These are white/grey in WeChat, so the value-based rule can never see
+     * them; they are tinted toward the accent here instead.
+     *
+     * The number is how much of the accent's SATURATION to apply (0..1), **not** a lightness. It
+     * must stay small — the surface keeps its own lightness and only borrows a whisper of hue, so a
+     * white background becomes a barely-tinted light surface rather than a saturated block.
+     * Darker greys take slightly more, because the same saturation reads as a subtler shift there.
+     */
+    private val SURFACE_TINTS = mapOf(
+        "color/BW_BG_19" to 0.18f, "color/BW_BG_20" to 0.16f, "color/BW_BG_30" to 0.14f,
+        "color/BW_BG_95" to 0.08f, "color/BW_BG_98" to 0.06f, "color/BW_BG_100" to 0.05f,
+    )
+
+    /** Resolves a `type/name` key to a resource id in the host package (0 when absent). */
+    private fun hostResourceId(key: String): Int = try {
+        HostInfo.application.resources.getIdentifier(
+            key.substringAfter('/'), key.substringBefore('/'), HOST_PACKAGE,
+        )
+    } catch (t: Throwable) {
+        0
+    }
+
+    /** Resource ids of the palette, resolved once; missing entries are simply absent. */
+    private val paletteIds: Set<Int> by lazy {
+        val ids = PALETTE_RESOURCE_NAMES.map(::hostResourceId).filter { it != 0 }.toSet()
+        WeLogger.i(TAG, "palette resources resolved: ${ids.size}/${PALETTE_RESOURCE_NAMES.size}")
+        ids
+    }
+
+    /** Ids of the neutral surfaces, resolved once. */
+    private val surfaceIds: Set<Int> by lazy {
+        SURFACE_TINTS.keys.map(::hostResourceId).filter { it != 0 }.toSet()
+    }
 
     private val scheme by lazy {
         try {
@@ -95,6 +173,7 @@ object MonetEngine : ApiFeature() {
      * resolved once. Keyed by ARGB; absence is signalled by [SparseIntArray.indexOfKey] < 0.
      */
     private val colorCache = SparseIntArray()
+    private val surfaceCache = SparseIntArray()
 
     override fun onEnable() {
         if (!(ThemeSettings.applyToWechat && ThemeSettings.customColor)) {
@@ -268,21 +347,32 @@ object MonetEngine : ApiFeature() {
         // `Resources.getColor(id, theme)`, so the plain (int) overload alone would MISS every modern
         // call path. That is also why the (int, Theme) overload shows zero direct callsites in
         // WeChat's own dex while still being the busiest one in practice.
-        hookColorReturn("Resources", Resources::class.java, "getColor", Int::class.java)
+        hookColorReturn("Resources", Resources::class.java, "getColor", 0, Int::class.java)
         hookColorReturn(
-            "Resources", Resources::class.java, "getColor", Int::class.java,
+            "Resources", Resources::class.java, "getColor", 0, Int::class.java,
             Resources.Theme::class.java,
         )
-        hookStateListReturn("Resources", Resources::class.java, "getColorStateList", Int::class.java)
+        hookStateListReturn("Resources", Resources::class.java, "getColorStateList", 0, Int::class.java)
         hookStateListReturn(
-            "Resources", Resources::class.java, "getColorStateList", Int::class.java,
+            "Resources", Resources::class.java, "getColorStateList", 0, Int::class.java,
+            Resources.Theme::class.java,
+        )
+
+        // Backgrounds do NOT come through getColor: WeChat calls View.setBackgroundResource(id)
+        // (1858 callsites) which resolves via getDrawable and yields a ColorDrawable for colour
+        // resources. Without these two hooks the UI background stays white no matter how well the
+        // colour hooks work.
+        hookDrawableReturn("Resources", Resources::class.java, "getDrawable", 0, Int::class.java)
+        hookDrawableReturn(
+            "Resources", Resources::class.java, "getDrawable", 0, Int::class.java,
             Resources.Theme::class.java,
         )
 
         // TypedArray is the highest-leverage target: it is how the framework reads every color
         // written as an XML attribute, so it covers screens that never call Resources.getColor.
-        hookColorReturn("TypedArray", TypedArray::class.java, "getColor", Int::class.java, Int::class.java)
-        hookStateListReturn("TypedArray", TypedArray::class.java, "getColorStateList", Int::class.java)
+        // Args are (index, attr); `index` is not a resource id, so no id-based mapping here.
+        hookColorReturn("TypedArray", TypedArray::class.java, "getColor", -1, Int::class.java, Int::class.java)
+        hookStateListReturn("TypedArray", TypedArray::class.java, "getColorStateList", -1, Int::class.java)
 
         // WeChat ships its OWN Resources subclasses that override these methods. A hook on the base
         // class does not see calls that resolve to the override, so those classes are hooked too.
@@ -296,9 +386,44 @@ object MonetEngine : ApiFeature() {
                 WeLogger.i(TAG, "$className not present on this WeChat build (non-fatal, base hooks cover super)")
                 return@forEach
             }
-            hookColorReturn(className, sub, "getColor", Int::class.java)
-            hookStateListReturn(className, sub, "getColorStateList", Int::class.java)
+            hookColorReturn(className, sub, "getColor", 0, Int::class.java)
+            hookStateListReturn(className, sub, "getColorStateList", 0, Int::class.java)
         }
+    }
+
+    /**
+     * The single mapping entry point used by every resource-layer hook: decides by resId first
+     * (the only way to reach the neutral background palette) and falls back to the value-based rule
+     * for colours read through code that carries no id.
+     */
+    private fun recolorResource(resId: Int, color: Int): Int {
+        if (resId == 0 || !paletteIds.contains(resId)) return recolor(color)
+
+        val tint = paletteTintFor(resId)
+        val key = paletteKeyFor(resId)
+        val mapped = if (tint != null) recolorSurface(color, tint) else recolor(color)
+        if (mapped != color && paletteHits.incrementAndGet() == 1) {
+            WeLogger.i(TAG, "palette resource ($key) -> #${Integer.toHexString(mapped)} (from #${Integer.toHexString(color)})")
+        }
+        return mapped
+    }
+
+    /** Tint strength when [resId] is one of the neutral surfaces, else null. */
+    private fun paletteTintFor(resId: Int): Float? {
+        if (!surfaceIds.contains(resId)) return null
+        return SURFACE_TINTS[paletteKeyFor(resId)]
+    }
+
+    /** Reverse lookup of the palette key for a resolved resource id (only called on an id hit). */
+    private fun paletteKeyFor(resId: Int): String? {
+        paletteKeyCache[resId]?.let { return it }
+        for (key in PALETTE_RESOURCE_NAMES) {
+            if (hostResourceId(key) == resId) {
+                paletteKeyCache[resId] = key
+                return key
+            }
+        }
+        return null
     }
 
     /**
@@ -310,6 +435,7 @@ object MonetEngine : ApiFeature() {
         label: String,
         owner: Class<*>,
         methodName: String,
+        resIdParamIndex: Int,
         vararg params: Class<*>,
     ) {
         runCatching {
@@ -321,7 +447,8 @@ object MonetEngine : ApiFeature() {
             WeLogger.i(TAG, "$label.$methodName hook bound to: ${method.self}")
             method.hookAfter {
                 val original = result as? Int ?: return@hookAfter
-                val mapped = recolor(original)
+                val resId = if (resIdParamIndex in args.indices) args[resIdParamIndex] as? Int ?: 0 else 0
+                val mapped = recolorResource(resId, original)
                 if (mapped != original) {
                     if (resourceColorHits.incrementAndGet() == 1) {
                         WeLogger.i(TAG, "resource color -> primary (first hit via $label.$methodName, was #${Integer.toHexString(original)})")
@@ -334,11 +461,50 @@ object MonetEngine : ApiFeature() {
         }
     }
 
+    /**
+     * Hooks `getDrawable(int)` — this is how BACKGROUNDS are actually recoloured. WeChat calls
+     * `View.setBackgroundResource(id)` (1858 callsites on 8.0.77) which resolves through
+     * `getDrawable`, creating a `ColorDrawable` for colour resources; that path never touches
+     * `getColor`, which is why the background stayed white before this hook existed. Only
+     * `ColorDrawable` results are touched — real drawables (images, shape XML) are left alone.
+     */
+    private fun hookDrawableReturn(
+        label: String,
+        owner: Class<*>,
+        methodName: String,
+        resIdParamIndex: Int,
+        vararg params: Class<*>,
+    ) {
+        runCatching {
+            val method = owner.reflekt().firstMethod {
+                name = methodName
+                parameters(*params)
+                returnType(Drawable::class)
+            }
+            WeLogger.i(TAG, "$label.$methodName hook bound to: ${method.self}")
+            method.hookAfter {
+                val drawable = result as? ColorDrawable ?: return@hookAfter
+                val resId = if (resIdParamIndex in args.indices) args[resIdParamIndex] as? Int ?: 0 else 0
+                val original = drawable.color
+                val mapped = recolorResource(resId, original)
+                if (mapped != original) {
+                    if (drawableHits.incrementAndGet() == 1) {
+                        WeLogger.i(TAG, "drawable background -> recoloured (first hit via $label.$methodName, was #${Integer.toHexString(original)})")
+                    }
+                    drawable.color = mapped
+                }
+            }
+        }.onFailure {
+            WeLogger.w(TAG, "failed to hook $label.$methodName", it)
+        }
+    }
+
     /** Same as [hookColorReturn] for the [ColorStateList]-returning overloads. */
     private fun hookStateListReturn(
         label: String,
         owner: Class<*>,
         methodName: String,
+        resIdParamIndex: Int,
         vararg params: Class<*>,
     ) {
         runCatching {
@@ -350,7 +516,8 @@ object MonetEngine : ApiFeature() {
             WeLogger.i(TAG, "$label.$methodName hook bound to: ${method.self}")
             method.hookAfter {
                 val original = result as? ColorStateList ?: return@hookAfter
-                recolorStateList(original)?.let { result = it }
+                val resId = if (resIdParamIndex in args.indices) args[resIdParamIndex] as? Int ?: 0 else 0
+                recolorStateList(original, resId)?.let { result = it }
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook $label.$methodName", it)
@@ -362,7 +529,7 @@ object MonetEngine : ApiFeature() {
      * there is nothing to change (so callers can leave the original object in place — swapping in
      * an equivalent copy would invalidate cached drawables for no reason).
      */
-    private fun recolorStateList(list: ColorStateList): ColorStateList? {
+    private fun recolorStateList(list: ColorStateList, resId: Int = 0): ColorStateList? {
         return try {
             // `mStateSpecs` / `mColors` are the backing fields but are @hide, so the SDK stubs this
             // module compiles against do not expose them (nor any public getter). Reflection is the
@@ -378,7 +545,7 @@ object MonetEngine : ApiFeature() {
 
             var changed = false
             val mapped = IntArray(colors.size) { i ->
-                val m = recolor(colors[i])
+                val m = recolorResource(resId, colors[i])
                 if (m != colors[i]) changed = true
                 m
             }
@@ -389,6 +556,35 @@ object MonetEngine : ApiFeature() {
             }
             null
         }
+    }
+
+    /**
+     * Tints a NEUTRAL surface colour (WeChat's `BW_BG_*`: white/grey) toward the accent, so the
+     * background follows the user's colour instead of staying white.
+     *
+     * Kept separate from [recolor] because a neutral colour carries no usable hue — the hue must
+     * come entirely from the accent. The surface's own lightness is preserved as-is (no clamping:
+     * a dark grey must stay dark), and only a fraction [tint] of the accent's saturation is
+     * blended in, so a white background becomes a barely-tinted light surface, not a coloured block.
+     */
+    private fun recolorSurface(color: Int, tint: Float): Int {
+        if (tint <= 0f) return recolor(color)
+        val alpha = color ushr 24
+        if (alpha == 0) return color
+        val idx = surfaceCache.indexOfKey(color)
+        if (idx >= 0) return surfaceCache.valueAt(idx)
+
+        val dest = FloatArray(3)
+        Color.colorToHSV(primaryColor, dest)
+        val src = FloatArray(3)
+        Color.RGBToHSV((color shr 16) and 0xFF, (color shr 8) and 0xFF, color and 0xFF, src)
+
+        // Blend the accent's hue in only as far as `tint` allows, and never across a lightness
+        // boundary: the result keeps this surface's value and takes a small slice of accent chroma.
+        val saturation = (dest[1] * tint).coerceIn(0f, 1f)
+        val mapped = Color.HSVToColor(alpha, floatArrayOf(dest[0], saturation, src[2]))
+        surfaceCache.put(color, mapped)
+        return mapped
     }
 
     /**
