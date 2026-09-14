@@ -142,9 +142,16 @@ object MonetEngine : ApiFeature() {
     private fun isOpaqueNeutral(color: Int): Boolean =
         (color ushr 24) == 0xFF && isNeutral(color)
 
-    /** Tint strength for a programmatic neutral surface: white keeps the documented 0.05. */
+    /**
+     * Tint strength for a programmatic/value-resolved neutral surface.
+     *
+     * MUST stay in step with [SURFACE_TINTS]: the same colour reached through a resource id and
+     * through the value fallback has to render identically, otherwise a surface that is painted by
+     * two different code paths shows a visible seam. White keeps its dedicated constant; everything
+     * else uses the light-neutral strength (`#EDEDED` → 0.21 in [SURFACE_TINTS]).
+     */
     private fun surfaceTintFor(color: Int): Float =
-        if (color == WHITE_SURFACE) WHITE_SURFACE_TINT else 0.10f
+        if (color == WHITE_SURFACE) WHITE_SURFACE_TINT else 0.21f
 
     /**
      * Retargets one [ColorDrawable]: brand green → the accent, an opaque neutral → the tinted
@@ -723,17 +730,31 @@ object MonetEngine : ApiFeature() {
      * The single mapping entry point used by every resource-layer hook: decides by resId first
      * (the only way to reach the neutral background palette) and falls back to the value-based rule
      * for colours read through code that carries no id.
+     *
+     * The fallback is what makes this robust: WeChat ships a dozen-plus distinct resources that all
+     * resolve to the SAME light grey (`#EDEDED` — measured: the title bar, the "已登录其他设备"
+     * banner, the empty area under 设置, and more). Enumerating their names is whack-a-mole; the
+     * colour is what the screen actually shows, so the value rule catches whichever name a given
+     * screen happens to use. [recolorSurface] keeps the source's lightness, so a text grey stays a
+     * text grey and only borrows a little of the accent.
      */
     private fun recolorResource(resId: Int, color: Int): Int {
-        if (resId == 0 || resId !in mappedResourceIds) return recolor(color)
-
-        val tint = paletteTintFor(resId)
-        val key = paletteKeyFor(resId)
-        val mapped = if (tint != null) recolorSurface(color, tint) else recolor(color)
-        if (mapped != color && paletteHits.incrementAndGet() == 1) {
-            WeLogger.i(TAG, "palette resource ($key) -> #${Integer.toHexString(mapped)} (from #${Integer.toHexString(color)})")
+        val byId = if (resId != 0 && resId in mappedResourceIds) {
+            val tint = paletteTintFor(resId)
+            val key = paletteKeyFor(resId)
+            val mapped = if (tint != null) recolorSurface(color, tint) else recolor(color)
+            if (mapped != color && paletteHits.incrementAndGet() == 1) {
+                WeLogger.i(TAG, "palette resource ($key) -> #${Integer.toHexString(mapped)} (from #${Integer.toHexString(color)})")
+            }
+            mapped
+        } else {
+            color
         }
-        return mapped
+
+        if (byId != color) return byId
+        // Not covered by id: neutral surfaces are still handled by value.
+        if (isOpaqueNeutral(color)) return recolorSurface(color, surfaceTintFor(color))
+        return recolor(color)
     }
 
     /** Tint strength when [resId] is one of the neutral surfaces, else null. */
