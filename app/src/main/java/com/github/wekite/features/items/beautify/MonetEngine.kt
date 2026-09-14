@@ -112,25 +112,8 @@ object MonetEngine : ApiFeature() {
     private val paletteHits = AtomicInteger(0)
     private val drawableHits = AtomicInteger(0)
 
-    /**
-     * Diagnostic (temporary): names of resources used as VIEW BACKGROUNDS that are still unthemed —
-     * opaque neutral fills which are not in the palette. This is what turns "the top bar / the very
-     * bottom didn't change colour" into a concrete resource name.
-     *
-     * Kept cheap on purpose: at most one log line per distinct background resource, behind a set
-     * lookup, and only for backgrounds (not every `getColor`, which is a hot path).
-     */
-    private val whiteBgResourceNames = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
-
     /** Shared "already logged" counter for every background entry point (see [retargetBackground]). */
     private val backgroundSurfaceHits = AtomicInteger(0)
-
-    /**
-     * Diagnostic (temporary): background drawable CLASSES seen at attach time that no colour rule can
-     * reach (not ColorDrawable / GradientDrawable / StateListDrawable / LayerDrawable). Tells us
-     * whether a stubborn surface is a bitmap, a nine-patch or a ripple instead of guessing.
-     */
-    private val attachUnhandled = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
 
     /** Cache for [overlayColor]: the accent-derived overlay colour, keyed by the accent it came from. */
     private var overlaySource = 0
@@ -280,19 +263,6 @@ object MonetEngine : ApiFeature() {
             }
             drawable.setColor(mapped)
         }
-    }
-
-    /** Diagnostic (temporary): one-line description of a background drawable; used by the log above. */
-    private fun describeDrawable(d: Drawable?): String = when (d) {
-        null -> "(no background)"
-        is ColorDrawable -> "color=#${Integer.toHexString(d.color)}"
-        is GradientDrawable -> run {
-            val fill = d.color?.defaultColor?.let { "#${Integer.toHexString(it)}" } ?: "null"
-            "fill=$fill alpha=${d.alpha} corner=${d.cornerRadius}"
-        }
-
-        is StateListDrawable -> "stateList current=${d.current?.javaClass?.simpleName}"
-        else -> ""
     }
 
     /** Name of the host package whose resources are being remapped (WeChat). */
@@ -570,15 +540,6 @@ object MonetEngine : ApiFeature() {
             attached.hookAfter {
                 val view = thisObject as? View ?: return@hookAfter
                 val bg = view.background ?: return@hookAfter
-                // Report the drawable KIND once per class: a background that is neither ColorDrawable
-                // nor GradientDrawable has no colour value to rewrite, so it needs the overlay path
-                // (see handlePatternDrawable) rather than colour mapping.
-                if (bg !is ColorDrawable && bg !is GradientDrawable) {
-                    val cls = bg.javaClass.name
-                    if (attachUnhandled.size < 12 && attachUnhandled.add(cls)) {
-                        WeLogger.i(TAG, "DIAG ATTACH background class=$cls")
-                    }
-                }
                 retargetBackground(bg, backgroundSurfaceHits)
             }
         }.onFailure {
@@ -725,48 +686,6 @@ object MonetEngine : ApiFeature() {
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook View.setBackgroundColor", it)
-        }
-
-        // The decisive signal for "which resource is that white rectangle": only this call path
-        // means "id X paints a background", unlike getColor which also serves text.
-        runCatching {
-            val setBgRes = View::class.reflekt().firstMethod {
-                name = "setBackgroundResource"
-                parameters(Int::class.java)
-                returnType(Void.TYPE)
-            }
-            WeLogger.i(TAG, "View.setBackgroundResource hook bound to: ${setBgRes.self}")
-            setBgRes.hookAfter {
-                val id = args[0] as? Int ?: return@hookAfter
-                if (id == 0) return@hookAfter
-                val name = runCatching { HostInfo.application.resources.getResourceName(id) }
-                    .getOrNull() ?: return@hookAfter
-                if (whiteBgResourceNames.size >= 40) return@hookAfter
-                if (!whiteBgResourceNames.add(name)) return@hookAfter
-                // Resolved by inspecting the DRAWABLE, not `resources.getColor(id)`: getColor throws
-                // for drawable resources, which is what made an earlier version report every drawable
-                // as "not white" and hide the real culprit.
-                val view = thisObject as? View
-                val bg = view?.background
-                val fill = when (bg) {
-                    is ColorDrawable -> bg.color
-                    is GradientDrawable -> bg.color?.defaultColor
-                    else -> null
-                } ?: return@hookAfter
-                // Report OPAQUE NEUTRAL fills that are still unthemed — i.e. genuine gaps. The colour
-                // must be opaque (a translucent overlay stacks over unknown content) and neutral (an
-                // accent is not a surface), and must not already be handled by the palette.
-                //
-                // Why this signal: the user reports specific unthemed areas ("the 微信 title bar",
-                // "the very bottom") that all measure #EDEDED, but a grey value maps to MANY resource
-                // names (9 for #EDEDED alone) and only one of them is the surface actually used. This
-                // turns "which name is it" from a guess into a log line.
-                if (!isOpaqueNeutral(fill)) return@hookAfter
-                if (paletteIds.contains(id) || surfaceIds.contains(id)) return@hookAfter
-                WeLogger.i(TAG, "DIAG UNTHEMED BG name=$name drawable=${bg?.javaClass?.simpleName} ${describeDrawable(bg)}")
-            }
-        }.onFailure {
-            WeLogger.w(TAG, "failed to hook View.setBackgroundResource", it)
         }
 
         // Green (brand) buttons already get their background recolored to primary by the Paint /
@@ -1062,8 +981,6 @@ object MonetEngine : ApiFeature() {
                         WeLogger.i(TAG, "drawable background -> recoloured (was #${Integer.toHexString(original)})")
                     }
                     drawable.color = mapped
-                } else {
-                    reportUnthemedBackground(resId, drawable, original)
                 }
             }
 
@@ -1075,8 +992,6 @@ object MonetEngine : ApiFeature() {
                         WeLogger.i(TAG, "shape background -> recoloured (was #${Integer.toHexString(fill)})")
                     }
                     drawable.setColor(mapped)
-                } else {
-                    reportUnthemedBackground(resId, drawable, fill)
                 }
             }
 
@@ -1092,20 +1007,6 @@ object MonetEngine : ApiFeature() {
         if (resId != 0 && resId in mappedResourceIds) return recolorResource(resId, color)
         if (isOpaqueNeutral(color)) return recolorSurface(color, surfaceTintFor(color))
         return color
-    }
-
-    /**
-     * Diagnostic (temporary): record a background resource that is STILL unthemed — an opaque
-     * neutral whose id is not covered by the palette. Logged once per resource name.
-     */
-    private fun reportUnthemedBackground(resId: Int, drawable: Drawable, fill: Int) {
-        if (resId == 0 || resId in mappedResourceIds) return
-        if (!isOpaqueNeutral(fill)) return
-        val name = runCatching { HostInfo.application.resources.getResourceName(resId) }
-            .getOrNull() ?: return
-        if (whiteBgResourceNames.size >= 40) return
-        if (!whiteBgResourceNames.add(name)) return
-        WeLogger.i(TAG, "DIAG UNTHEMED BG name=$name drawable=${drawable.javaClass.simpleName} ${describeDrawable(drawable)}")
     }
 
     /** Same as [hookColorReturn] for the [ColorStateList]-returning overloads. */
