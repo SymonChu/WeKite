@@ -61,6 +61,18 @@ object MonetEngine : ApiFeature() {
     private val paletteHits = AtomicInteger(0)
     private val drawableHits = AtomicInteger(0)
 
+    // ── Diagnostic counters (temporary) ───────────────────────────────────────────────
+    // `paletteHits`/`drawableHits` are HIT counters, so a zero in the log cannot tell apart
+    // "the method is never called by WeChat" from "called, but the resId we resolve by name is
+    // not the id the framework passes". These counters count CALLS, and the two Sets record the
+    // first few ids seen on each side so the two id spaces can be compared directly from the log.
+    // Remove once the resource layer is confirmed working.
+    private val resGetColorCalls = AtomicInteger(0)
+    private val resGetDrawableCalls = AtomicInteger(0)
+    private val typArrGetColorCalls = AtomicInteger(0)
+    private val seenGetColorIds = java.util.Collections.synchronizedSet(LinkedHashSet<Int>())
+    private val seenGetDrawableIds = java.util.Collections.synchronizedSet(LinkedHashSet<Int>())
+
     /** Name of the host package whose resources are being remapped (WeChat). */
     private const val HOST_PACKAGE = "com.tencent.mm"
 
@@ -87,6 +99,8 @@ object MonetEngine : ApiFeature() {
         "color/Brand_80_CARE", "color/Brand_90_CARE",
         "color/Brand_100_CARE", "color/Brand_120_CARE", "color/Brand_170_CARE",
         "color/Brand_K",
+        // bare family aliases (reference RRO covers these; they resolve by name on 8.0.77)
+        "color/Brand", "color/LightGreen",
         // brand surfaces
         "color/Brand_BG_90", "color/Brand_BG_100", "color/Brand_BG_110", "color/Brand_BG_130",
         "color/Brand_BG_90_CARE", "color/Brand_BG_100_CARE",
@@ -97,8 +111,26 @@ object MonetEngine : ApiFeature() {
         // neutral surfaces — see SURFACE_TINTS
         "color/BW_BG_19", "color/BW_BG_20", "color/BW_BG_30",
         "color/BW_BG_95", "color/BW_BG_98", "color/BW_BG_100",
+        // neutral surfaces NOT in SURFACE_TINTS: the reference overlay rewrites these too, and
+        // they are what "the background" actually resolves to on several screens (BW_93 is the
+        // chat/contact list surface, BW_90 the 10% black scrim). Their RRO values are plain or
+        // reference-to-monet, not tinted, so they go through the same tint path as BW_BG_*.
+        "color/BW_0_Alpha_0_9_White_Mode", "color/BW_0_Alpha_0_9_night_mode",
+        "color/BW_100", "color/BW_30_Alpha_0_9", "color/BW_85", "color/BW_90", "color/BW_90_K",
+        "color/BW_93", "color/BW_93_Night_Mode", "color/BW_97",
         // caution accents
         "color/Yellow_90", "color/Yellow_100", "color/Yellow_BG_90", "color/Yellow_BG_100",
+        "color/Yellow_BG_100_CARE",
+        // link / caution accents the reference covers (named, stable)
+        "color/Link_100", "color/Link_100_CARE", "color/LinkFinder_100", "color/LinkFinder_100_CARE",
+        "color/Red_90", "color/Red_90_CARE", "color/Red_100",
+        // NOTE (deliberate omission): the reference overlay's remaining ~200 entries are WeChat's
+        // obfuscated names (a71, bb, m, aa4, ...). WeChat reshuffles those every release — that is
+        // exactly why the reference had to generate its map by diffing two APKs — so they are NOT
+        // hardcoded here. Enumerating them would rot on the next WeChat bump.
+        // Bubble/red-envelope colours are also left out on purpose: the reference recolours them,
+        // but the bubble architecture differs between Play (which the reference targets) and
+        // mainland builds, and this module only ever claims to follow the accent.
     )
 
     /**
@@ -114,6 +146,19 @@ object MonetEngine : ApiFeature() {
     private val SURFACE_TINTS = mapOf(
         "color/BW_BG_19" to 0.18f, "color/BW_BG_20" to 0.16f, "color/BW_BG_30" to 0.14f,
         "color/BW_BG_95" to 0.08f, "color/BW_BG_98" to 0.06f, "color/BW_BG_100" to 0.05f,
+        // Second neutral family (see PALETTE_RESOURCE_NAMES). These MUST be listed here: a name in
+        // the palette list but absent from this map falls through to the value-based rule, and a
+        // neutral white/grey can never match a green hue window — i.e. adding the name alone would
+        // be a silent no-op. Roughly ordered light→dark like the BW_BG_* block above.
+        "color/BW_100" to 0.05f, "color/BW_97" to 0.06f, "color/BW_93" to 0.08f,
+        "color/BW_90_K" to 0.08f, "color/BW_85" to 0.10f,
+        "color/BW_0_Alpha_0_9_White_Mode" to 0.10f,
+        "color/BW_30_Alpha_0_9" to 0.14f,
+        // dark variants: same saturation reads as a subtler shift on dark greys, so a touch more
+        "color/BW_93_Night_Mode" to 0.14f, "color/BW_0_Alpha_0_9_night_mode" to 0.14f,
+        // BW_90 is the 10%-alpha black scrim (#10000000). Alpha is preserved by recolorSurface,
+        // so a small tint only whispers the hue into an otherwise-black scrim.
+        "color/BW_90" to 0.05f,
     )
 
     /** Resolves a `type/name` key to a resource id in the host package (0 when absent). */
@@ -127,9 +172,13 @@ object MonetEngine : ApiFeature() {
 
     /** Resource ids of the palette, resolved once; missing entries are simply absent. */
     private val paletteIds: Set<Int> by lazy {
-        val ids = PALETTE_RESOURCE_NAMES.map(::hostResourceId).filter { it != 0 }.toSet()
-        WeLogger.i(TAG, "palette resources resolved: ${ids.size}/${PALETTE_RESOURCE_NAMES.size}")
-        ids
+        val resolved = PALETTE_RESOURCE_NAMES.associateWith(::hostResourceId).filterValues { it != 0 }
+        WeLogger.i(TAG, "palette resources resolved: ${resolved.size}/${PALETTE_RESOURCE_NAMES.size}")
+        // Diagnostic (temporary): dump the id space we resolve by name, so it can be diffed from
+        // the log against the ids the framework actually passes to getColor/getDrawable. A mismatch
+        // there means the runtime ids belong to a different ResTable than getIdentifier sees.
+        WeLogger.i(TAG, "DIAG paletteIds: " + resolved.entries.joinToString(", ") { "${it.key}=0x${Integer.toHexString(it.value)}" })
+        resolved.values.toSet()
     }
 
     /** Ids of the neutral surfaces, resolved once. */
@@ -445,9 +494,26 @@ object MonetEngine : ApiFeature() {
                 returnType(Int::class)
             }
             WeLogger.i(TAG, "$label.$methodName hook bound to: ${method.self}")
+            val isTypedArray = label == "TypedArray"
             method.hookAfter {
                 val original = result as? Int ?: return@hookAfter
                 val resId = if (resIdParamIndex in args.indices) args[resIdParamIndex] as? Int ?: 0 else 0
+
+                // Diagnostic (temporary): prove whether this entry point is reached at all, and
+                // capture which ids the framework actually passes (TypedArray args are an INDEX,
+                // not a resId, so its counter is kept separate).
+                if (isTypedArray) {
+                    typArrGetColorCalls.incrementAndGet()
+                } else {
+                    val n = resGetColorCalls.incrementAndGet()
+                    if (resId != 0 && seenGetColorIds.size < 12) seenGetColorIds.add(resId)
+                    if (n == 1) {
+                        WeLogger.i(TAG, "DIAG $label.$methodName first call: resId=0x${Integer.toHexString(resId)} value=#${Integer.toHexString(original)} inPalette=${paletteIds.contains(resId)}")
+                    } else if (n % 2000 == 0) {
+                        WeLogger.i(TAG, "DIAG $label.$methodName calls=$n paletteIdsSeen=${seenGetColorIds.count { paletteIds.contains(it) }} of last ${seenGetColorIds.size}")
+                    }
+                }
+
                 val mapped = recolorResource(resId, original)
                 if (mapped != original) {
                     if (resourceColorHits.incrementAndGet() == 1) {
@@ -483,8 +549,20 @@ object MonetEngine : ApiFeature() {
             }
             WeLogger.i(TAG, "$label.$methodName hook bound to: ${method.self}")
             method.hookAfter {
-                val drawable = result as? ColorDrawable ?: return@hookAfter
                 val resId = if (resIdParamIndex in args.indices) args[resIdParamIndex] as? Int ?: 0 else 0
+
+                // Diagnostic (temporary): `drawableHits` only counts recoloured backgrounds, so a
+                // zero cannot distinguish "getDrawable never called" from "called with an id we do
+                // not know". Count calls and sample the ids.
+                val n = resGetDrawableCalls.incrementAndGet()
+                if (resId != 0 && seenGetDrawableIds.size < 12) seenGetDrawableIds.add(resId)
+                if (n == 1) {
+                    WeLogger.i(TAG, "DIAG $label.$methodName first call: resId=0x${Integer.toHexString(resId)} inPalette=${paletteIds.contains(resId)}")
+                } else if (n % 500 == 0) {
+                    WeLogger.i(TAG, "DIAG $label.$methodName calls=$n paletteIdsSeen=${seenGetDrawableIds.count { paletteIds.contains(it) }} of last ${seenGetDrawableIds.size}")
+                }
+
+                val drawable = result as? ColorDrawable ?: return@hookAfter
                 val original = drawable.color
                 val mapped = recolorResource(resId, original)
                 if (mapped != original) {
