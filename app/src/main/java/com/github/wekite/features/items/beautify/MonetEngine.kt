@@ -161,6 +161,20 @@ object MonetEngine : ApiFeature() {
         "color/BW_0_Alpha_0_9_White_Mode", "color/BW_0_Alpha_0_9_night_mode",
         "color/BW_100", "color/BW_30_Alpha_0_9", "color/BW_85", "color/BW_90", "color/BW_90_K",
         "color/BW_93", "color/BW_93_Night_Mode", "color/BW_97",
+        // The two UN_BW_* names MUST be here as well as in SURFACE_TINTS. They were previously
+        // only in the tint map, which made the tint a silent no-op — the comment further down
+        // warns about the opposite direction (name without tint), but the failure mode is
+        // symmetrical: [recolorResource] only consults SURFACE_TINTS for ids that are already in
+        // [paletteIds], so a tint-only entry can never fire.
+        "color/UN_BW_100_Alpha_0_8", "color/UN_BW_93",
+        // Second batch of themed neutral surfaces found by diffing the reference overlay against
+        // this module's palette (2026-09-14). Each is: themed in the reference (so it IS meant to
+        // follow the accent), a neutral light grey, and still unthemed on screen — `color/i`
+        // (#EDEDED) is the flat grey page background on 我 / 通讯录 that the user reported.
+        // Opaque greys only; the semi-transparent whites (a2s, a8b, a_l, kj, s8, vk, vm, a24) are
+        // scrims and are deliberately left out — tinting a translucent overlay changes how it
+        // stacks over unknown content.
+        "color/i", "color/a25", "color/no", "color/on", "color/ak_",
         // caution accents
         "color/Yellow_90", "color/Yellow_100", "color/Yellow_BG_90", "color/Yellow_BG_100",
         "color/Yellow_BG_100_CARE",
@@ -201,9 +215,22 @@ object MonetEngine : ApiFeature() {
         "color/BW_0_Alpha_0_9_White_Mode" to 0.10f,
         "color/BW_30_Alpha_0_9" to 0.14f,
         // dark variants: same saturation reads as a subtler shift on dark greys, so a touch more
-        "color/BW_93_Night_Mode" to 0.14f, "color/BW_0_Alpha_0_9_night_mode" to 0.14f,
+        "color/BW_93_Night_Mode" to 0.14f,
+        // These three share the literal 0xccffffff, so they MUST share one strength — otherwise the
+        // same 80%-white scrim renders with two different hues depending on which resource a screen
+        // happens to use. 0.10 is the middle of the three values previously in use.
+        "color/BW_0_Alpha_0_9_White_Mode" to 0.10f, "color/BW_0_Alpha_0_9_night_mode" to 0.10f,
         // themed neutrals from the second-batch set (same reasoning as above)
-        "color/UN_BW_100_Alpha_0_8" to 0.08f, "color/UN_BW_93" to 0.08f,
+        "color/UN_BW_100_Alpha_0_8" to 0.10f, "color/UN_BW_93" to 0.14f,
+        // Second batch (see PALETTE_RESOURCE_NAMES). Tint strength is chosen so that the SAME
+        // literal value always gets the SAME strength — two identical greys on screen must not be
+        // tinted differently or the seam is visible:
+        //   #F7F7F7 -> 0.06 (same as BW_97)   #F5F5F5 -> 0.07
+        //   #F0F0F0 -> 0.10                   #EDEDED -> 0.14 (same as BW_93_Night_Mode)
+        "color/a25" to 0.06f,
+        "color/no" to 0.07f, "color/ak_" to 0.07f,
+        "color/on" to 0.10f,
+        "color/i" to 0.14f,
     )
 
     /** Resolves a `type/name` key to a resource id in the host package (0 when absent). */
