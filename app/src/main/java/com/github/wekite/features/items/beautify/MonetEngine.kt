@@ -6,6 +6,8 @@ import android.content.res.Resources
 import android.content.res.TypedArray
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.util.SparseIntArray
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
@@ -76,6 +78,13 @@ object MonetEngine : ApiFeature() {
     private const val WHITE_SURFACE_TINT = 0.12f
 
     /**
+     * Alpha of the accent overlay applied to drawables that carry no colour value (bitmaps,
+     * nine-patches, ripples). Kept low so the surface keeps its own structure and shading; at 0x2E
+     * the shifted hue sits in the same subtle range as [SURFACE_TINTS].
+     */
+    private const val SURFACE_OVERLAY_ALPHA = 0x2E
+
+    /**
      * WeChat's own `android.content.res.Resources` subclasses that override `getColor(int)`
      * (discovered on 8.0.77). Hooking only the framework base class would miss calls that dispatch
      * to these overrides. Names are obfuscated, hence version-specific.
@@ -125,7 +134,7 @@ object MonetEngine : ApiFeature() {
             is StateListDrawable -> when (val cur = drawable.current) {
                 is ColorDrawable -> handleColorDrawable(cur, surfaceHits)
                 is GradientDrawable -> handleGradientDrawable(cur, surfaceHits)
-                else -> Unit
+                else -> cur?.let { handlePatternDrawable(it, surfaceHits) }
             }
 
             // A LayerDrawable is used for compounded backgrounds (an input box, a bordered cell…),
@@ -134,6 +143,35 @@ object MonetEngine : ApiFeature() {
             is LayerDrawable -> for (i in 0 until drawable.numberOfLayers) {
                 drawable.getDrawable(i)?.let { retargetBackground(it, surfaceHits) }
             }
+
+            // Everything left is a NON-COLOUR drawable: a bitmap, a nine-patch, a vector shape or a
+            // ripple. There is no colour value to rewrite, so those surfaces used to stay untouched
+            // no matter how many entry points were hooked — measured 2026-09-14: the full-width grey
+            // page background and a chat voice-button circle are exactly this case.
+            // A translucent colour filter is the one lever that works for all of them, and because
+            // the overlay is mostly transparent it shifts the hue while keeping whatever structure
+            // the drawable has.
+            else -> handlePatternDrawable(drawable, surfaceHits)
+        }
+    }
+
+    /**
+     * Applies the accent as a translucent overlay to a drawable that has no colour value to rewrite
+     * (bitmap / nine-patch / ripple / vector shape).
+     *
+     * Skipped for shapes that already carry an accent fill, and for a drawable that already has our
+     * filter, so this cannot stack on every attach.
+     */
+    private fun handlePatternDrawable(drawable: Drawable, surfaceHits: AtomicInteger) {
+        if (drawable is GradientDrawable && drawable.color != null) return   // plain fill: handled elsewhere
+        val filter = drawable.colorFilter
+        if (filter is PorterDuffColorFilter) return                          // already ours
+        // A themed overlay: the accent at low alpha over SRC_ATOP keeps the source's shape and
+        // shading and only borrows the hue.
+        val overlay = (SURFACE_OVERLAY_ALPHA shl 24) or (primaryColor and 0x00FFFFFF)
+        drawable.colorFilter = PorterDuffColorFilter(overlay, PorterDuff.Mode.SRC_ATOP)
+        if (surfaceHits.incrementAndGet() == 1) {
+            WeLogger.i(TAG, "pattern background -> accent overlay (${drawable.javaClass.simpleName})")
         }
     }
 
@@ -492,34 +530,19 @@ object MonetEngine : ApiFeature() {
                 returnType(Void.TYPE)
             }
             WeLogger.i(TAG, "View.onAttachedToWindow hook bound to: ${attached.self}")
-            val attachFixes = AtomicInteger(0)
             attached.hookAfter {
                 val view = thisObject as? View ?: return@hookAfter
                 val bg = view.background ?: return@hookAfter
-                val before = when (bg) {
-                    is ColorDrawable -> bg.color
-                    is GradientDrawable -> bg.color?.defaultColor
-                    else -> null
-                }
-                // Report the drawable KIND once per distinct background class: if a surface is
-                // neither ColorDrawable nor GradientDrawable, no amount of colour mapping can reach
-                // it and we need to know what it actually is (a bitmap? a nine-patch? a ripple?).
-                if (before == null) {
+                // Report the drawable KIND once per class: a background that is neither ColorDrawable
+                // nor GradientDrawable has no colour value to rewrite, so it needs the overlay path
+                // (see handlePatternDrawable) rather than colour mapping.
+                if (bg !is ColorDrawable && bg !is GradientDrawable) {
                     val cls = bg.javaClass.name
                     if (attachUnhandled.size < 12 && attachUnhandled.add(cls)) {
-                        WeLogger.i(TAG, "DIAG ATTACH unhandled background class=$cls")
+                        WeLogger.i(TAG, "DIAG ATTACH background class=$cls")
                     }
-                    return@hookAfter
                 }
                 retargetBackground(bg, backgroundSurfaceHits)
-                val after = when (val b = view.background) {
-                    is ColorDrawable -> b.color
-                    is GradientDrawable -> b.color?.defaultColor
-                    else -> null
-                }
-                if (after != null && after != before && attachFixes.incrementAndGet() == 1) {
-                    WeLogger.i(TAG, "background fixed at attach time (was #${Integer.toHexString(before)})")
-                }
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook View.onAttachedToWindow", it)
