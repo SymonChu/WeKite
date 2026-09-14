@@ -326,11 +326,18 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
 
                         val isDark = isSystemInDarkTheme()
                         val backgroundColor = if (isDark) Color(0xFF191919) else Color(0xFFF7F7F7)
-                        // 强调色与模块设置页保持一致: 自定义颜色开启时跟随用户主题
-                        // (同 SeedResolver 逻辑), 否则用 miuix 默认蓝 (light 0xFF3482FF /
-                        // dark 0xFF277AF7)。不能直接用 MaterialTheme.colorScheme.primary —
-                        // 注入 UI 的 InjectedUiTheme 默认是微信绿, 与模块设置页的强调色不一致。
-                        val activeColor = if (ThemeSettings.customColor) {
+                        // Accent colour for the injected bar.
+                        //
+                        // The bar is part of WeChat's own UI, so it must obey the SAME gate as every
+                        // other injected surface: `applyToWechat && customColor`
+                        // (see InjectedUiTheme, MonetEngine, SeedResolver). Testing only
+                        // `customColor` made the floating bar follow the custom accent while the
+                        // rest of WeChat stayed untouched — i.e. the "同时对微信生效" switch looked
+                        // ignored. When the gate is off we use the miuix default blue, matching the
+                        // module's own palette rather than WeChat green (which InjectedUiTheme would
+                        // otherwise impose and which would clash with the settings page).
+                        val customIntoWechat = ThemeSettings.applyToWechat && ThemeSettings.customColor
+                        val activeColor = if (customIntoWechat) {
                             SeedResolver.materialScheme(SeedResolver.customSeed(activity, isDark), isDark).primary
                         } else {
                             if (isDark) Color(0xFF277AF7) else Color(0xFF3482FF)
