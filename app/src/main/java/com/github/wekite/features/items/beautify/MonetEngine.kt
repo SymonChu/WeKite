@@ -17,6 +17,7 @@ import android.widget.EditText
 import android.widget.TextView
 import androidx.compose.ui.graphics.toArgb
 import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.reflekt.reflected.ReflectedMethod
 import dev.ujhhgtg.reflekt.utils.toClass
 import java.util.concurrent.atomic.AtomicInteger
 import com.github.wekite.features.core.ApiFeature
@@ -482,6 +483,37 @@ object MonetEngine : ApiFeature() {
     }
 
     /**
+     * Recovers the real resource id behind a `TypedArray` accessor call.
+     *
+     * `TypedArray.getColor/getDrawable(index, …)`: `args[0]` is an INDEX into the array, NOT a
+     * resource id, so passing it straight to the id-based palette map silently degrades every
+     * XML-declared colour to the value-based rule — and a neutral white/grey can never match a
+     * green hue window. That is the whole reason `android:background="@color/BW_BG_100"` stayed
+     * white. `getResourceId(index, 0)` maps that index back to the attribute's resource id; it
+     * returns 0 for literal (non-resource) attributes, which correctly falls through to the value
+     * rule. Resolution is lazy+shared: one reflective lookup for every TypedArray hook.
+     */
+    private val typedArrayResourceId: ReflectedMethod<TypedArray>? by lazy {
+        runCatching {
+            TypedArray::class.reflekt().firstMethod {
+                name = "getResourceId"
+                parameters(Int::class, Int::class)
+                returnType(Int::class)
+            }
+        }.onFailure {
+            WeLogger.w(TAG, "TypedArray.getResourceId unavailable — XML colours cannot be id-mapped", it)
+        }.getOrNull()
+    }
+
+    /** Effective resId for a hook call: the argument for `Resources`, a lookup for `TypedArray`. */
+    private fun effectiveResId(target: Any?, arg: Int): Int =
+        if (target is TypedArray) {
+            runCatching { typedArrayResourceId?.invoke(target, arg, 0) as? Int ?: 0 }.getOrDefault(0)
+        } else {
+            arg
+        }
+
+    /**
      * Hooks a framework method that returns a color int and rewrites the returned value through
      * [recolor]. Failures are logged and swallowed — one missing interception point should degrade
      * the recoloring, not disable the whole feature.
@@ -500,37 +532,15 @@ object MonetEngine : ApiFeature() {
                 returnType(Int::class)
             }
             WeLogger.i(TAG, "$label.$methodName hook bound to: ${method.self}")
-            val isTypedArray = label == "TypedArray"
-            // TypedArray.getColor(int index, int defValue): `args[0]` is an INDEX into the array,
-            // NOT a resource id, so the id-based palette map can never fire on this path — which is
-            // exactly why XML-declared colours (textColor / background / tint) stayed unrecoloured
-            // even though the value-based rule handled everything read through getColor.
-            // `TypedArray.getResourceId(index, 0)` recovers the real id for resource-backed
-            // attributes (it returns 0 for literals, which then falls back to the value rule).
-            val typedArrayResourceId by lazy {
-                runCatching {
-                    TypedArray::class.reflekt().firstMethod {
-                        name = "getResourceId"
-                        parameters(Int::class, Int::class)
-                        returnType(Int::class)
-                    }
-                }.getOrNull()
-            }
             method.hookAfter {
                 val original = result as? Int ?: return@hookAfter
                 val argIdx = if (resIdParamIndex in args.indices) args[resIdParamIndex] as? Int ?: 0 else 0
-                val resId = if (isTypedArray) {
-                    // Recover the real resource id; 0 keeps the value-based fallback behaviour.
-                    val ta = thisObject as? TypedArray ?: return@hookAfter
-                    runCatching { typedArrayResourceId?.invoke(ta, argIdx, 0) as? Int ?: 0 }.getOrDefault(0)
-                } else {
-                    argIdx
-                }
+                val resId = effectiveResId(thisObject, argIdx)
 
                 // Diagnostic (temporary): prove whether this entry point is reached at all, and
-                // capture which ids the framework actually passes (TypedArray args are an INDEX,
-                // not a resId, so its counter is kept separate).
-                if (isTypedArray) {
+                // capture which ids the framework actually passes (the TypedArray counter is kept
+                // separate because its raw arg is an index and only the recovered id is meaningful).
+                if (thisObject is TypedArray) {
                     typArrGetColorCalls.incrementAndGet()
                 } else {
                     val n = resGetColorCalls.incrementAndGet()
@@ -577,11 +587,16 @@ object MonetEngine : ApiFeature() {
             }
             WeLogger.i(TAG, "$label.$methodName hook bound to: ${method.self}")
             method.hookAfter {
-                val resId = if (resIdParamIndex in args.indices) args[resIdParamIndex] as? Int ?: 0 else 0
+                val argIdx = if (resIdParamIndex in args.indices) args[resIdParamIndex] as? Int ?: 0 else 0
+                // Same index→id recovery as the colour hooks: on the TypedArray path `args[0]` is an
+                // index, so without this the palette map never fires for XML backgrounds (measured
+                // 2026-09-14: resId came back as 0x4, the index itself).
+                val resId = effectiveResId(thisObject, argIdx)
 
                 // Diagnostic (temporary): `drawableHits` only counts recoloured backgrounds, so a
                 // zero cannot distinguish "getDrawable never called" from "called with an id we do
-                // not know". Count calls and sample the ids.
+                // not know". Count calls and sample the RECOVERED ids — sampling `resId` before
+                // recovery would only ever collect TypedArray indices.
                 val n = resGetDrawableCalls.incrementAndGet()
                 if (resId != 0 && seenGetDrawableIds.size < 12) seenGetDrawableIds.add(resId)
                 if (n == 1) {
