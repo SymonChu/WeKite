@@ -99,6 +99,69 @@ object MonetEngine : ApiFeature() {
      */
     private val whiteBgResourceNames = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
 
+    /**
+     * True when [color] is a NEUTRAL (grey/white/black) — i.e. a surface, not an accent.
+     *
+     * This guard is mandatory before calling [recolorSurface] outside the palette path:
+     * `recolorSurface` does NOT inspect its input, it unconditionally returns the accent's hue with
+     * `tint` saturation and the source's value. Calling it on a saturated colour would therefore
+     * REPLACE that colour (a red badge would become a washed accent tint) instead of leaving it
+     * alone. Inside the palette path the input is already known-neutral by construction, which is
+     * why the check lives here rather than inside `recolorSurface`.
+     */
+    private fun isNeutral(color: Int): Boolean {
+        val r = (color shr 16) and 0xFF
+        val g = (color shr 8) and 0xFF
+        val b = color and 0xFF
+        return maxOf(r, g, b) - minOf(r, g, b) <= 12
+    }
+
+    /** True when [color] is an opaque neutral surface, i.e. safe to tint through [recolorSurface]. */
+    private fun isOpaqueNeutral(color: Int): Boolean =
+        (color ushr 24) == 0xFF && isNeutral(color)
+
+    /** Tint strength for a programmatic neutral surface: white keeps the documented 0.05. */
+    private fun surfaceTintFor(color: Int): Float =
+        if (color == WHITE_SURFACE) WHITE_SURFACE_TINT else 0.10f
+
+    /**
+     * Retargets one [ColorDrawable]: brand green → the accent, an opaque neutral → the tinted
+     * surface. Shared by the direct-background path and the selector path so both behave
+     * identically.
+     */
+    private fun handleColorDrawable(drawable: ColorDrawable, surfaceHits: AtomicInteger) {
+        val original = drawable.color
+        if (original == DEFAULT_COLOR) {
+            WeLogger.i(TAG, "View.setBackgroundDrawable brand green -> primary")
+            drawable.color = primaryColor
+            return
+        }
+        if (!isOpaqueNeutral(original)) return          // an accent/translucent colour: leave it
+        val mapped = recolorSurface(original, surfaceTintFor(original))
+        if (mapped != original) {
+            if (surfaceHits.incrementAndGet() == 1) {
+                WeLogger.i(TAG, "View.setBackgroundDrawable neutral ColorDrawable -> tinted surface")
+            }
+            drawable.color = mapped
+        }
+    }
+
+    /**
+     * Retargets an opaque neutral fill inside a [GradientDrawable] (a shape). A shape carrying its
+     * own accent colour is left untouched — see [isNeutral].
+     */
+    private fun handleGradientDrawable(drawable: GradientDrawable, surfaceHits: AtomicInteger) {
+        val fill = drawable.color?.defaultColor ?: return
+        if (!isOpaqueNeutral(fill)) return
+        val mapped = recolorSurface(fill, surfaceTintFor(fill))
+        if (mapped != fill) {
+            if (surfaceHits.incrementAndGet() == 1) {
+                WeLogger.i(TAG, "View.setBackgroundDrawable neutral GradientDrawable -> tinted surface")
+            }
+            drawable.setColor(mapped)
+        }
+    }
+
     /** Diagnostic (temporary): one-line description of a background drawable; used by the log above. */
     private fun describeDrawable(d: Drawable?): String = when (d) {
         null -> "(no background)"
@@ -406,34 +469,53 @@ object MonetEngine : ApiFeature() {
             setBackground.hookBefore {
                 val drawable = args[0] as? Drawable? ?: return@hookBefore
                 when (drawable) {
-                    is ColorDrawable -> when (drawable.color) {
-                        DEFAULT_COLOR -> {
-                            WeLogger.i(TAG, "View.setBackgroundDrawable brand green -> primary")
-                            drawable.color = primaryColor
-                        }
+                    is ColorDrawable -> handleColorDrawable(drawable, whiteSurfaceHits)
+                    is GradientDrawable -> handleGradientDrawable(drawable, whiteSurfaceHits)
 
-                        WHITE_SURFACE -> {
-                            if (whiteSurfaceHits.incrementAndGet() == 1) {
-                                WeLogger.i(TAG, "View.setBackgroundDrawable opaque white -> tinted surface")
-                            }
-                            drawable.color = recolorSurface(WHITE_SURFACE, WHITE_SURFACE_TINT)
-                        }
-                    }
-
-                    // A white shape: only the DEFAULT fill is retargeted, and only when it is opaque
-                    // white — a shape with its own accent colour keeps it.
-                    is GradientDrawable -> {
-                        if (drawable.color?.defaultColor == WHITE_SURFACE) {
-                            if (whiteSurfaceHits.incrementAndGet() == 1) {
-                                WeLogger.i(TAG, "View.setBackgroundDrawable white GradientDrawable -> tinted surface")
-                            }
-                            drawable.setColor(recolorSurface(WHITE_SURFACE, WHITE_SURFACE_TINT))
+                    // Selectors (buttons, states) are NOT ColorDrawable/GradientDrawable instances, so
+                    // they used to fall through untouched. Recurse into the current state so a themed
+                    // neutral inside a selector is recoloured too.
+                    is StateListDrawable -> {
+                        when (val cur = drawable.current) {
+                            is ColorDrawable -> handleColorDrawable(cur, whiteSurfaceHits)
+                            is GradientDrawable -> handleGradientDrawable(cur, whiteSurfaceHits)
+                            else -> Unit
                         }
                     }
                 }
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook View.setBackgroundDrawable", it)
+        }
+
+        // `View.setBackgroundColor(int)` (1354 callsites on 8.0.72) never goes through the drawable
+        // hook above, so a neutral surface set this way used to stay unthemed forever. Same palette
+        // rules as the drawable path, applied to the colour int before it becomes a ColorDrawable.
+        runCatching {
+            val setBgColor = View::class.reflekt().firstMethod {
+                name = "setBackgroundColor"
+                parameters(Int::class.java)
+                returnType(Void.TYPE)
+            }
+            WeLogger.i(TAG, "View.setBackgroundColor hook bound to: ${setBgColor.self}")
+            val colorSurfaceHits = AtomicInteger(0)
+            setBgColor.hookBefore {
+                val original = args[0] as? Int ?: return@hookBefore
+                if (original == DEFAULT_COLOR) {
+                    args[0] = primaryColor
+                    return@hookBefore
+                }
+                if (!isOpaqueNeutral(original)) return@hookBefore    // accents keep their own colour
+                val mapped = recolorSurface(original, surfaceTintFor(original))
+                if (mapped != original) {
+                    if (colorSurfaceHits.incrementAndGet() == 1) {
+                        WeLogger.i(TAG, "View.setBackgroundColor neutral surface -> tinted (was #${Integer.toHexString(original)})")
+                    }
+                    args[0] = mapped
+                }
+            }
+        }.onFailure {
+            WeLogger.w(TAG, "failed to hook View.setBackgroundColor", it)
         }
 
         // The decisive signal for "which resource is that white rectangle": only this call path
@@ -462,18 +544,15 @@ object MonetEngine : ApiFeature() {
                     is GradientDrawable -> bg.color?.defaultColor
                     else -> null
                 } ?: return@hookAfter
-                // Report OPAQUE NEUTRAL fills — i.e. surfaces that are still unthemed. The colour
-                // must be opaque (alpha 0xFF: a translucent overlay stacks over unknown content) and
-                // must NOT already be handled: either it is in the palette, or recolouring it would
-                // actually change something. Anything left over is a genuine gap.
+                // Report OPAQUE NEUTRAL fills that are still unthemed — i.e. genuine gaps. The colour
+                // must be opaque (a translucent overlay stacks over unknown content) and neutral (an
+                // accent is not a surface), and must not already be handled by the palette.
                 //
                 // Why this signal: the user reports specific unthemed areas ("the 微信 title bar",
                 // "the very bottom") that all measure #EDEDED, but a grey value maps to MANY resource
                 // names (9 for #EDEDED alone) and only one of them is the surface actually used. This
                 // turns "which name is it" from a guess into a log line.
-                val alpha = fill ushr 24
-                if (alpha != 0xFF) return@hookAfter
-                if (fill != WHITE_SURFACE && recolorSurface(fill, 0.10f) == fill) return@hookAfter
+                if (!isOpaqueNeutral(fill)) return@hookAfter
                 if (paletteIds.contains(id) || surfaceIds.contains(id)) return@hookAfter
                 WeLogger.i(TAG, "DIAG UNTHEMED BG name=$name drawable=${bg?.javaClass?.simpleName} ${describeDrawable(bg)}")
             }
