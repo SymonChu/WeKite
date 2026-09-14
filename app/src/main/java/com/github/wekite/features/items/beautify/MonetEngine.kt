@@ -47,6 +47,21 @@ object MonetEngine : ApiFeature() {
     private const val DEFAULT_COLOR = -16268960 // 0xFF07C160
 
     /**
+     * Surface tint used when a view is given an OPAQUE WHITE background programmatically.
+     *
+     * `View.setBackgroundColor/Resource` → `setBackgroundDrawable` bypasses the resource-read hooks
+     * entirely (the id is never seen again), so such a surface can never be matched by resource id.
+     * Measured 2026-09-14 on the 我 page: the rectangle right of 状态/刷新 stayed `#FFFFFFFF` — the
+     * untinted value of `BW_BG_100` — while every resource-derived surface around it had already
+     * been tinted to `#F8F9FE`. Scoping the match to exactly opaque white (not "any light colour")
+     * keeps this from becoming a blanket tint of every white surface.
+     */
+    private const val WHITE_SURFACE = -1 // 0xFFFFFFFF
+
+    /** Same tint strength the `BW_BG_100` resource uses, so both paths render identically. */
+    private const val WHITE_SURFACE_TINT = 0.05f
+
+    /**
      * WeChat's own `android.content.res.Resources` subclasses that override `getColor(int)`
      * (discovered on 8.0.77). Hooking only the framework base class would miss calls that dispatch
      * to these overrides. Names are obfuscated, hence version-specific.
@@ -73,6 +88,30 @@ object MonetEngine : ApiFeature() {
     private val typArrGetColorCalls = AtomicInteger(0)
     private val seenGetColorIds = java.util.Collections.synchronizedSet(LinkedHashSet<Int>())
     private val seenGetDrawableIds = java.util.Collections.synchronizedSet(LinkedHashSet<Int>())
+
+    /**
+     * Diagnostic (temporary): pin down resources that render as OPAQUE WHITE but are not in the
+     * palette — i.e. the "one rectangle that never changes colour" class of bug.
+     *
+     * Measured on 8.0.77: exactly ONE stable-named colour resource is opaque white
+     * (`BW_BG_100`, already covered); the other 36 are obfuscated names (`cc`, `cj`, `im`, …) that
+     * cannot be found by grepping source. So the id is resolved back to its NAME at runtime via
+     * `Resources.getResourceName(id)` — that turns a blind guess into a copy-pasteable entry.
+     * Capped so a long session cannot flood the log.
+     */
+    private val whiteReported = java.util.Collections.synchronizedSet(LinkedHashSet<Int>())
+
+    private fun reportUnmappedWhite(resId: Int, color: Int, where: String) {
+        if (resId == 0) return
+        if (color != -1) return                      // not opaque white
+        if (resId in mappedResourceIds) return        // already handled
+        if (whiteReported.size >= 24) return
+        if (!whiteReported.add(resId)) return
+        val name = runCatching {
+            HostInfo.application.resources.getResourceName(resId)
+        }.getOrNull() ?: "?"
+        WeLogger.i(TAG, "DIAG UNMAPPED WHITE via $where: resId=0x${Integer.toHexString(resId)} name=$name")
+    }
 
     /** Name of the host package whose resources are being remapped (WeChat). */
     private const val HOST_PACKAGE = "com.tencent.mm"
@@ -329,14 +368,28 @@ object MonetEngine : ApiFeature() {
         }
 
         // ColorDrawable draws via Canvas.drawColor (not Paint.setColor), so it needs its own swap.
+        // This path also carries programmatic backgrounds (`setBackgroundColor` → `setBackground-
+        // Drawable`), which never touch the resource hooks — so an opaque white here has to be
+        // tinted explicitly or it renders as the one unthemed rectangle on the screen.
         runCatching {
             val setBackground = View::class.reflekt().firstMethod { name = "setBackgroundDrawable" }
             WeLogger.i(TAG, "View.setBackgroundDrawable hook bound to: ${setBackground.self}")
+            val whiteSurfaceHits = AtomicInteger(0)
             setBackground.hookBefore {
                 val drawable = args[0] as? Drawable? ?: return@hookBefore
-                if (drawable is ColorDrawable && drawable.color == DEFAULT_COLOR) {
-                    WeLogger.i(TAG, "View.setBackgroundDrawable brand green -> primary")
-                    drawable.color = primaryColor
+                if (drawable !is ColorDrawable) return@hookBefore
+                when (drawable.color) {
+                    DEFAULT_COLOR -> {
+                        WeLogger.i(TAG, "View.setBackgroundDrawable brand green -> primary")
+                        drawable.color = primaryColor
+                    }
+
+                    WHITE_SURFACE -> {
+                        if (whiteSurfaceHits.incrementAndGet() == 1) {
+                            WeLogger.i(TAG, "View.setBackgroundDrawable opaque white -> tinted surface")
+                        }
+                        drawable.color = recolorSurface(WHITE_SURFACE, WHITE_SURFACE_TINT)
+                    }
                 }
             }
         }.onFailure {
@@ -569,6 +622,7 @@ object MonetEngine : ApiFeature() {
                 }
 
                 val mapped = recolorResource(resId, original)
+                if (mapped == original) reportUnmappedWhite(resId, original, "$label.$methodName")
                 if (mapped != original) {
                     if (resourceColorHits.incrementAndGet() == 1) {
                         WeLogger.i(TAG, "resource color -> primary (first hit via $label.$methodName, was #${Integer.toHexString(original)})")
@@ -624,6 +678,7 @@ object MonetEngine : ApiFeature() {
                 val drawable = result as? ColorDrawable ?: return@hookAfter
                 val original = drawable.color
                 val mapped = recolorResource(resId, original)
+                if (mapped == original) reportUnmappedWhite(resId, original, "$label.$methodName")
                 if (mapped != original) {
                     if (drawableHits.incrementAndGet() == 1) {
                         WeLogger.i(TAG, "drawable background -> recoloured (first hit via $label.$methodName, was #${Integer.toHexString(original)})")
