@@ -71,7 +71,7 @@ object MonetEngine : ApiFeature() {
     private const val WHITE_SURFACE = -1 // 0xFFFFFFFF
 
     /** Same tint strength the `BW_BG_100` resource uses, so both paths render identically. */
-    private const val WHITE_SURFACE_TINT = 0.05f
+    private const val WHITE_SURFACE_TINT = 0.12f
 
     /**
      * WeChat's own `android.content.res.Resources` subclasses that override `getColor(int)`
@@ -98,6 +98,28 @@ object MonetEngine : ApiFeature() {
      * lookup, and only for backgrounds (not every `getColor`, which is a hot path).
      */
     private val whiteBgResourceNames = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
+
+    /** Shared "already logged" counter for every background entry point (see [retargetBackground]). */
+    private val backgroundSurfaceHits = AtomicInteger(0)
+
+    /**
+     * Retargets a background drawable in place. Shared by `setBackgroundDrawable` and
+     * `setBackground` so both entry points behave identically.
+     *
+     * Selectors are not `ColorDrawable`/`GradientDrawable` instances and would otherwise fall
+     * through untouched, so the current state is unwrapped.
+     */
+    private fun retargetBackground(drawable: Drawable, surfaceHits: AtomicInteger) {
+        when (drawable) {
+            is ColorDrawable -> handleColorDrawable(drawable, surfaceHits)
+            is GradientDrawable -> handleGradientDrawable(drawable, surfaceHits)
+            is StateListDrawable -> when (val cur = drawable.current) {
+                is ColorDrawable -> handleColorDrawable(cur, surfaceHits)
+                is GradientDrawable -> handleGradientDrawable(cur, surfaceHits)
+                else -> Unit
+            }
+        }
+    }
 
     /**
      * True when [color] is a NEUTRAL (grey/white/black) — i.e. a surface, not an accent.
@@ -234,6 +256,14 @@ object MonetEngine : ApiFeature() {
         // scrims and are deliberately left out — tinting a translucent overlay changes how it
         // stacks over unknown content.
         "color/i", "color/a25", "color/no", "color/on", "color/ak_",
+        // Remaining resources whose literal value is #EDEDED on 8.0.77. Measured evidence: the
+        // "已登录其他设备" banner and the empty area under 设置 render as #EDEDED, full width, while
+        // everything around them is tinted. The value #EDEDED occurs in LIGHT mode only (the
+        // dark-mode counterpart is #191919), so tinting it cannot wash out dark mode.
+        // Listed by value rather than by name because a colour is what the screen shows; the
+        // reference overlay does not mention these, so the justification here is the pixel
+        // measurement, not the reference.
+        "color/ae4", "color/ae5", "color/al8", "color/ba2", "color/ib", "color/nw",
         // caution accents
         "color/Yellow_90", "color/Yellow_100", "color/Yellow_BG_90", "color/Yellow_BG_100",
         "color/Yellow_BG_100_CARE",
@@ -261,7 +291,7 @@ object MonetEngine : ApiFeature() {
      */
     private val SURFACE_TINTS = mapOf(
         "color/BW_BG_19" to 0.18f, "color/BW_BG_20" to 0.16f, "color/BW_BG_30" to 0.14f,
-        "color/BW_BG_95" to 0.08f, "color/BW_BG_98" to 0.06f, "color/BW_BG_100" to 0.05f,
+        "color/BW_BG_95" to 0.08f, "color/BW_BG_98" to 0.06f, "color/BW_BG_100" to 0.12f,
         // Second neutral family (see PALETTE_RESOURCE_NAMES). These MUST be listed here: a name in
         // the palette list but absent from this map falls through to the value-based rule, and a
         // neutral white/grey can never match a green hue window — i.e. adding the name alone would
@@ -274,22 +304,26 @@ object MonetEngine : ApiFeature() {
         "color/BW_0_Alpha_0_9_White_Mode" to 0.10f,
         "color/BW_30_Alpha_0_9" to 0.14f,
         // dark variants: same saturation reads as a subtler shift on dark greys, so a touch more
-        "color/BW_93_Night_Mode" to 0.14f,
+        "color/BW_93_Night_Mode" to 0.21f,
         // These three share the literal 0xccffffff, so they MUST share one strength — otherwise the
         // same 80%-white scrim renders with two different hues depending on which resource a screen
         // happens to use. 0.10 is the middle of the three values previously in use.
         "color/BW_0_Alpha_0_9_White_Mode" to 0.10f, "color/BW_0_Alpha_0_9_night_mode" to 0.10f,
         // themed neutrals from the second-batch set (same reasoning as above)
-        "color/UN_BW_100_Alpha_0_8" to 0.10f, "color/UN_BW_93" to 0.14f,
+        "color/UN_BW_100_Alpha_0_8" to 0.10f, "color/UN_BW_93" to 0.21f,
         // Second batch (see PALETTE_RESOURCE_NAMES). Tint strength is chosen so that the SAME
         // literal value always gets the SAME strength — two identical greys on screen must not be
         // tinted differently or the seam is visible:
-        //   #F7F7F7 -> 0.06 (same as BW_97)   #F5F5F5 -> 0.07
-        //   #F0F0F0 -> 0.10                   #EDEDED -> 0.14 (same as BW_93_Night_Mode)
-        "color/a25" to 0.06f,
-        "color/no" to 0.07f, "color/ak_" to 0.07f,
-        "color/on" to 0.10f,
-        "color/i" to 0.14f,
+        //   #F7F7F7 -> 0.13 (same as BW_97)   #F5F5F5 -> 0.14
+        //   #F0F0F0 -> 0.17                   #EDEDED -> 0.21 (same as BW_93_Night_Mode)
+        "color/a25" to 0.13f,
+        "color/no" to 0.14f, "color/ak_" to 0.14f,
+        "color/on" to 0.17f,
+        "color/i" to 0.21f,
+        // Same literal #EDEDED as `i` / `BW_93_Night_Mode`, so the same strength — otherwise the
+        // banner would end up a visibly different hue than the area right below it.
+        "color/ae4" to 0.21f, "color/ae5" to 0.21f, "color/al8" to 0.21f,
+        "color/ba2" to 0.21f, "color/ib" to 0.21f, "color/nw" to 0.21f,
     )
 
     /** Resolves a `type/name` key to a resource id in the host package (0 when absent). */
@@ -465,27 +499,32 @@ object MonetEngine : ApiFeature() {
         runCatching {
             val setBackground = View::class.reflekt().firstMethod { name = "setBackgroundDrawable" }
             WeLogger.i(TAG, "View.setBackgroundDrawable hook bound to: ${setBackground.self}")
-            val whiteSurfaceHits = AtomicInteger(0)
+            val whiteSurfaceHits = backgroundSurfaceHits
             setBackground.hookBefore {
                 val drawable = args[0] as? Drawable? ?: return@hookBefore
-                when (drawable) {
-                    is ColorDrawable -> handleColorDrawable(drawable, whiteSurfaceHits)
-                    is GradientDrawable -> handleGradientDrawable(drawable, whiteSurfaceHits)
-
-                    // Selectors (buttons, states) are NOT ColorDrawable/GradientDrawable instances, so
-                    // they used to fall through untouched. Recurse into the current state so a themed
-                    // neutral inside a selector is recoloured too.
-                    is StateListDrawable -> {
-                        when (val cur = drawable.current) {
-                            is ColorDrawable -> handleColorDrawable(cur, whiteSurfaceHits)
-                            is GradientDrawable -> handleGradientDrawable(cur, whiteSurfaceHits)
-                            else -> Unit
-                        }
-                    }
-                }
+                retargetBackground(drawable, whiteSurfaceHits)
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook View.setBackgroundDrawable", it)
+        }
+
+        // `View.setBackground(Drawable)` is a SEPARATE method from setBackgroundDrawable (the latter
+        // delegates to the former on modern Android) and is what a lot of WeChat's own code calls,
+        // so hooking only one of them leaves those backgrounds untouched — measured 2026-09-14: the
+        // banner and a settings block stayed unthemed while every hook was bound and firing.
+        runCatching {
+            val setBackgroundDirect = View::class.reflekt().firstMethod {
+                name = "setBackground"
+                parameters(Drawable::class.java)
+                returnType(Void.TYPE)
+            }
+            WeLogger.i(TAG, "View.setBackground hook bound to: ${setBackgroundDirect.self}")
+            setBackgroundDirect.hookBefore {
+                val drawable = args[0] as? Drawable? ?: return@hookBefore
+                retargetBackground(drawable, backgroundSurfaceHits)
+            }
+        }.onFailure {
+            WeLogger.w(TAG, "failed to hook View.setBackground", it)
         }
 
         // `View.setBackgroundColor(int)` (1354 callsites on 8.0.72) never goes through the drawable
@@ -785,10 +824,17 @@ object MonetEngine : ApiFeature() {
 
     /**
      * Hooks `getDrawable(int)` — this is how BACKGROUNDS are actually recoloured. WeChat calls
-     * `View.setBackgroundResource(id)` (1858 callsites on 8.0.77) which resolves through
-     * `getDrawable`, creating a `ColorDrawable` for colour resources; that path never touches
-     * `getColor`, which is why the background stayed white before this hook existed. Only
-     * `ColorDrawable` results are touched — real drawables (images, shape XML) are left alone.
+     * `View.setBackgroundResource(id)` which resolves through `getDrawable`.
+     *
+     * Three result shapes matter, and all three used to be missed except the first:
+     *  - `ColorDrawable` — a plain colour resource. Recoloured through the palette (id) or the
+     *    value rule.
+     *  - `GradientDrawable` — a colour resource declared as a *shape*, or a shape drawable. This is
+     *    the case that made "the banner / the settings block" stay grey even though its id was in
+     *    the palette: the old code bailed out on anything that was not a ColorDrawable.
+     *  - `StateListDrawable` — a selector; the current state is unwrapped so its inner drawable is
+     *    retargeted too.
+     * Real images/9-patch drawables are still left untouched.
      */
     private fun hookDrawableReturn(
         label: String,
@@ -810,20 +856,72 @@ object MonetEngine : ApiFeature() {
                 // index, so without this the palette map never fires for XML backgrounds (measured
                 // 2026-09-14: resId came back as 0x4, the index itself).
                 val resId = effectiveResId(thisObject, argIdx)
-
-                val drawable = result as? ColorDrawable ?: return@hookAfter
-                val original = drawable.color
-                val mapped = recolorResource(resId, original)
-                if (mapped != original) {
-                    if (drawableHits.incrementAndGet() == 1) {
-                        WeLogger.i(TAG, "drawable background -> recoloured (first hit via $label.$methodName, was #${Integer.toHexString(original)})")
-                    }
-                    drawable.color = mapped
-                }
+                val drawable = result as? Drawable ?: return@hookAfter
+                retargetResolvedDrawable(resId, drawable)
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook $label.$methodName", it)
         }
+    }
+
+    /**
+     * Retargets a drawable that came out of a resource read, where the originating [resId] is known
+     * (so the palette map can be consulted) — and, failing that, any opaque neutral surface.
+     */
+    private fun retargetResolvedDrawable(resId: Int, drawable: Drawable) {
+        when (drawable) {
+            is ColorDrawable -> {
+                val original = drawable.color
+                val mapped = recolorBackground(resId, original)
+                if (mapped != original) {
+                    if (drawableHits.incrementAndGet() == 1) {
+                        WeLogger.i(TAG, "drawable background -> recoloured (was #${Integer.toHexString(original)})")
+                    }
+                    drawable.color = mapped
+                } else {
+                    reportUnthemedBackground(resId, drawable, original)
+                }
+            }
+
+            is GradientDrawable -> {
+                val fill = drawable.color?.defaultColor ?: return
+                val mapped = recolorBackground(resId, fill)
+                if (mapped != fill) {
+                    if (drawableHits.incrementAndGet() == 1) {
+                        WeLogger.i(TAG, "shape background -> recoloured (was #${Integer.toHexString(fill)})")
+                    }
+                    drawable.setColor(mapped)
+                } else {
+                    reportUnthemedBackground(resId, drawable, fill)
+                }
+            }
+
+            is StateListDrawable -> {
+                val cur = drawable.current ?: return
+                retargetResolvedDrawable(resId, cur)
+            }
+        }
+    }
+
+    /** Id-aware background mapping: the palette wins, then any opaque neutral surface. */
+    private fun recolorBackground(resId: Int, color: Int): Int {
+        if (resId != 0 && resId in mappedResourceIds) return recolorResource(resId, color)
+        if (isOpaqueNeutral(color)) return recolorSurface(color, surfaceTintFor(color))
+        return color
+    }
+
+    /**
+     * Diagnostic (temporary): record a background resource that is STILL unthemed — an opaque
+     * neutral whose id is not covered by the palette. Logged once per resource name.
+     */
+    private fun reportUnthemedBackground(resId: Int, drawable: Drawable, fill: Int) {
+        if (resId == 0 || resId in mappedResourceIds) return
+        if (!isOpaqueNeutral(fill)) return
+        val name = runCatching { HostInfo.application.resources.getResourceName(resId) }
+            .getOrNull() ?: return
+        if (whiteBgResourceNames.size >= 40) return
+        if (!whiteBgResourceNames.add(name)) return
+        WeLogger.i(TAG, "DIAG UNTHEMED BG name=$name drawable=${drawable.javaClass.simpleName} ${describeDrawable(drawable)}")
     }
 
     /** Same as [hookColorReturn] for the [ColorStateList]-returning overloads. */
