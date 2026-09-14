@@ -101,6 +101,17 @@ object MonetEngine : ApiFeature() {
      */
     private val whiteReported = java.util.Collections.synchronizedSet(LinkedHashSet<Int>())
 
+    /**
+     * Diagnostic (temporary): names of resources that are used as VIEW BACKGROUNDS and resolve to
+     * opaque white.
+     *
+     * Why a dedicated signal: [reportUnmappedWhite] cannot tell a white *surface* from white *text*
+     * (both come back as #FFFFFFFF), so adding those ids to the palette would risk tinting text.
+     * `View.setBackgroundResource(id)` is the one call path that unambiguously means "this id paints
+     * a background", so only ids seen here are safe candidates to tint.
+     */
+    private val whiteBgResourceNames = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
+
     private fun reportUnmappedWhite(resId: Int, color: Int, where: String) {
         if (resId == 0) return
         if (color != -1) return                      // not opaque white
@@ -394,6 +405,33 @@ object MonetEngine : ApiFeature() {
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook View.setBackgroundDrawable", it)
+        }
+
+        // The decisive signal for "which resource is that white rectangle": only this call path
+        // means "id X paints a background", unlike getColor which also serves text.
+        runCatching {
+            val setBgRes = View::class.reflekt().firstMethod {
+                name = "setBackgroundResource"
+                parameters(Int::class.java)
+                returnType(Void.TYPE)
+            }
+            WeLogger.i(TAG, "View.setBackgroundResource hook bound to: ${setBgRes.self}")
+            setBgRes.hookBefore {
+                val id = args[0] as? Int ?: return@hookBefore
+                if (id == 0) return@hookBefore
+                val name = runCatching { HostInfo.application.resources.getResourceName(id) }
+                    .getOrNull() ?: return@hookBefore
+                if (whiteBgResourceNames.size >= 40) return@hookBefore
+                if (!whiteBgResourceNames.add(name)) return@hookBefore
+                // Only report ids whose colour really is opaque white (a resource may be a
+                // selector/drawable, in which case getColor throws and we skip it).
+                val isWhite = runCatching {
+                    HostInfo.application.resources.getColor(id, null) == WHITE_SURFACE
+                }.getOrDefault(false)
+                WeLogger.i(TAG, "DIAG BG-RESOURCE name=$name white=$isWhite firstSeen")
+            }
+        }.onFailure {
+            WeLogger.w(TAG, "failed to hook View.setBackgroundResource", it)
         }
 
         // Green (brand) buttons already get their background recolored to primary by the Paint /
