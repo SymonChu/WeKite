@@ -78,11 +78,23 @@ object MonetEngine : ApiFeature() {
     private const val WHITE_SURFACE_TINT = 0.12f
 
     /**
-     * Alpha of the accent overlay applied to drawables that carry no colour value (bitmaps,
-     * nine-patches, ripples). Kept low so the surface keeps its own structure and shading; at 0x2E
-     * the shifted hue sits in the same subtle range as [SURFACE_TINTS].
+     * Parameters for the accent overlay applied to drawables that carry no colour value (bitmaps,
+     * nine-patches, ripples, gradient shapes).
+     *
+     * The overlay must NOT simply paint the accent over the surface: the accent is darker than the
+     * surfaces it lands on (measured primary #43608A has value 0.54), so a straight `SRC_ATOP` of the
+     * accent DARKENED the background — the filtered areas came out (206,210,219) while the
+     * resource-tinted areas right next to them were (239,246,255), i.e. a visible mismatch.
+     *
+     * Instead the overlay uses a HIGH-VALUE, low-saturation version of the accent, solved so that
+     * compositing over white reproduces exactly what the resource path produces for the same surface:
+     *   accent HSV(215.5°, 0.514, 0.541)
+     *   → filter colour HSV(215.5°, 0.514*0.40, 1.0) = #CBE0FF, composited at alpha 0x4D over white
+     *   → (239,245,255), identical to `recolorSurface(#FFFFFF, 0.12)` (error 0 per channel).
+     * That keeps filtered and resource-tinted surfaces in the same lightness family.
      */
-    private const val SURFACE_OVERLAY_ALPHA = 0x2E
+    private const val SURFACE_OVERLAY_TINT = 0.40f
+    private const val SURFACE_OVERLAY_ALPHA = 0x4D
 
     /**
      * WeChat's own `android.content.res.Resources` subclasses that override `getColor(int)`
@@ -119,6 +131,10 @@ object MonetEngine : ApiFeature() {
      * whether a stubborn surface is a bitmap, a nine-patch or a ripple instead of guessing.
      */
     private val attachUnhandled = java.util.Collections.synchronizedSet(LinkedHashSet<String>())
+
+    /** Cache for [overlayColor]: the accent-derived overlay colour, keyed by the accent it came from. */
+    private var overlaySource = 0
+    private var overlayCache = 0
 
     /**
      * Retargets a background drawable in place. Shared by `setBackgroundDrawable` and
@@ -166,13 +182,34 @@ object MonetEngine : ApiFeature() {
         if (drawable is GradientDrawable && drawable.color != null) return   // plain fill: handled elsewhere
         val filter = drawable.colorFilter
         if (filter is PorterDuffColorFilter) return                          // already ours
-        // A themed overlay: the accent at low alpha over SRC_ATOP keeps the source's shape and
-        // shading and only borrows the hue.
-        val overlay = (SURFACE_OVERLAY_ALPHA shl 24) or (primaryColor and 0x00FFFFFF)
+        // A HIGH-VALUE, low-saturation version of the accent (see SURFACE_OVERLAY_*): this keeps the
+        // surface's lightness instead of dimming it the way the raw accent would.
+        val overlay = overlayColor()
         drawable.colorFilter = PorterDuffColorFilter(overlay, PorterDuff.Mode.SRC_ATOP)
         if (surfaceHits.incrementAndGet() == 1) {
             WeLogger.i(TAG, "pattern background -> accent overlay (${drawable.javaClass.simpleName})")
         }
+    }
+
+    /**
+     * The colour used for the pattern overlay: the accent's hue, its saturation reduced by
+     * [SURFACE_OVERLAY_TINT], and full value. Cached because it is derived from [primaryColor].
+     */
+    private fun overlayColor(): Int {
+        if (primaryColor != overlaySource) {
+            val src = FloatArray(3)
+            Color.RGBToHSV(
+                (primaryColor shr 16) and 0xFF,
+                (primaryColor shr 8) and 0xFF,
+                primaryColor and 0xFF,
+                src,
+            )
+            overlayCache = Color.HSVToColor(
+                floatArrayOf(src[0], (src[1] * SURFACE_OVERLAY_TINT).coerceIn(0f, 1f), 1f),
+            )
+            overlaySource = primaryColor
+        }
+        return (SURFACE_OVERLAY_ALPHA shl 24) or (overlayCache and 0x00FFFFFF)
     }
 
     /**
