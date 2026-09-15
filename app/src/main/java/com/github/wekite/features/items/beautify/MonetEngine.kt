@@ -79,22 +79,61 @@ object MonetEngine : ApiFeature() {
 
     /**
      * Parameters for the accent overlay applied to drawables that carry no colour value (bitmaps,
-     * nine-patches, ripples, gradient shapes).
+     * nine-patches, ripples, gradient shapes), in DARK mode.
      *
      * The overlay must NOT simply paint the accent over the surface: the accent is darker than the
      * surfaces it lands on (measured primary #43608A has value 0.54), so a straight `SRC_ATOP` of the
      * accent DARKENED the background — the filtered areas came out (206,210,219) while the
      * resource-tinted areas right next to them were (239,246,255), i.e. a visible mismatch.
      *
-     * Instead the overlay uses a HIGH-VALUE, low-saturation version of the accent, solved so that
-     * compositing over white reproduces exactly what the resource path produces for the same surface:
-     *   accent HSV(215.5°, 0.514, 0.541)
-     *   → filter colour HSV(215.5°, 0.514*0.40, 1.0) = #CBE0FF, composited at alpha 0x4D over white
-     *   → (239,245,255), identical to `recolorSurface(#FFFFFF, 0.12)` (error 0 per channel).
-     * That keeps filtered and resource-tinted surfaces in the same lightness family.
+     * Hence a HIGH-VALUE, low-saturation version of the accent. `SURFACE_OVERLAY_TINT` is the DARK
+     * factor; the two modes deliberately use different ones — see
+     * [SURFACE_OVERLAY_LIGHT_TINT] for why the light overlay is the grey surface colour, not white.
      */
     private const val SURFACE_OVERLAY_TINT = 0.40f
     private const val SURFACE_OVERLAY_ALPHA = 0x4D
+
+    /**
+     * Saturation factor for the LIGHT-mode overlay colour: the accent's own light neutral surface,
+     * i.e. the colour [recolorSurface] yields for the `#EDEDED` family (`color/i` / `BW_93_Night_Mode`
+     * — WeChat's flat grey page background). `0.21` is the same strength [SURFACE_TINTS] gives that
+     * literal, and it is expressed as a factor of the accent's saturation so the overlay follows the
+     * user's colour instead of being a literal that rots when the accent changes.
+     *
+     * Why GREY and not white — the filter lands mostly on grey tiles. The 「已登录 N 台其他设备」
+     * banner paints `res/k/al.9.png` (pure white, alpha 77 = 0x4D) over the page, so it composites to
+     * `0.302 · overlay + 0.698 · page`. Compositing two colours that share a hue and a value yields a
+     * colour with that same hue and value, and a saturation of `0.302·S_overlay + 0.698·S_page` —
+     * equal to the page's own saturation only when `S_overlay == S_page`. So the exact fix for "the
+     * banner looks different from what it sits on" is `overlay == page colour`, and it is unique.
+     *
+     * The previous value was `V = 1.0`, solved so that compositing over WHITE reproduces the resource
+     * path for white. That is right for a white surface and wrong for every grey one — measured
+     * 2026-09-15 with primary `#186584`, the banner rendered (189,226,242) against a (197,225,237)
+     * page: R −8, a visible seam in LIGHT mode. Dark mode showed only ≤1 because
+     * [SURFACE_OVERLAY_DARK_VALUE] parks the overlay in the same band as the dark surfaces.
+     *
+     * Cost, stated plainly: compositing this overlay onto a colourless WHITE surface yields (230,241,245)
+     * instead of the (230,248,255) the resource path gives white — the scheme no longer matches the
+     * resource path for white, which is exactly what the old `V = 1.0` bought. On the 2026-09-15 light
+     * screenshot no such region exists: its large white areas measure (230,248,255), i.e. they take the
+     * resource path (24% of the screen), while the filter path carries the grey tiles — so in practice
+     * the change moves the tiles and leaves the white surfaces alone.
+     */
+    private const val SURFACE_OVERLAY_LIGHT_TINT = 0.21f
+
+    /**
+     * Value (HSV brightness) of the overlay colour in LIGHT mode: `237/255`, the `#EDEDED` literal the
+     * light neutral surfaces use. Paired with [SURFACE_OVERLAY_LIGHT_TINT] it makes the overlay
+     * IDENTICAL to `recolorSurface(#EDEDED, 0.21)` — which is the whole point: compositing the overlay
+     * onto a surface of that colour is an identity, so the surface stops looking like a separate tile.
+     *
+     * Leaving the value at `1.0` (as the first attempt at this fix did) is not enough: only the
+     * saturation was matched, the overlay stayed a bright `(211,242,255)`, and the banner still came
+     * out (201,230,242) against a (197,225,237) page — a residual (4,5,5). Stated as a rule: two
+     * colours composite to the base only when they are equal, so both H/S/V have to line up.
+     */
+    private const val SURFACE_OVERLAY_LIGHT_VALUE = 237f / 255f
 
     /**
      * Value (HSV brightness) of the overlay colour when the host is in DARK mode.
@@ -238,11 +277,12 @@ object MonetEngine : ApiFeature() {
     }
 
     /**
-     * The colour used for the pattern overlay: the accent's hue, its saturation reduced by
-     * [SURFACE_OVERLAY_TINT], and a value taken from the host's mode — `1.0` in light mode (so that
-     * compositing over white reproduces the resource path exactly) and [SURFACE_OVERLAY_DARK_VALUE]
-     * in dark mode (so the overlay adds no lightness to dark surfaces). Cached because it is derived
-     * from [primaryColor] and the mode.
+     * The colour used for the pattern overlay: the accent's hue, its saturation taken down to the
+     * neutral surface's own (light mode: [SURFACE_OVERLAY_LIGHT_TINT], dark mode: [SURFACE_OVERLAY_TINT]),
+     * and a value taken from the host's mode (light mode: [SURFACE_OVERLAY_LIGHT_VALUE], so that
+     * compositing over the grey page background is an identity; dark mode: [SURFACE_OVERLAY_DARK_VALUE],
+     * so the overlay adds no lightness to dark surfaces). Cached because it is derived from
+     * [primaryColor] and the mode.
      */
     private fun overlayColor(): Int {
         val dark = HostInfo.application.isDarkMode
@@ -257,8 +297,9 @@ object MonetEngine : ApiFeature() {
             overlayCache = Color.HSVToColor(
                 floatArrayOf(
                     src[0],
-                    (src[1] * SURFACE_OVERLAY_TINT).coerceIn(0f, 1f),
-                    if (dark) SURFACE_OVERLAY_DARK_VALUE else 1f,
+                    (src[1] * if (dark) SURFACE_OVERLAY_TINT else SURFACE_OVERLAY_LIGHT_TINT)
+                        .coerceIn(0f, 1f),
+                    if (dark) SURFACE_OVERLAY_DARK_VALUE else SURFACE_OVERLAY_LIGHT_VALUE,
                 ),
             )
             overlaySource = primaryColor
