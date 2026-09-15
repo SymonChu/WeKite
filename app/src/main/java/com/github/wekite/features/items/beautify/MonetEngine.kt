@@ -97,6 +97,37 @@ object MonetEngine : ApiFeature() {
     private const val SURFACE_OVERLAY_ALPHA = 0x4D
 
     /**
+     * Value (HSV brightness) of the overlay colour when the host is in DARK mode.
+     *
+     * [SURFACE_OVERLAY_ALPHA] is a constant, so a fixed filter colour cannot be right for a light
+     * and a dark surface family at once: compositing is `0.698 · surface + 0.302 · filter`, i.e. the
+     * filter's own lightness IS the offset applied to every surface it lands on.
+     *
+     *   light-mode value 1.0 → #D5F0FF: over a white surface this reproduces exactly what the
+     *   resource path yields for white, which is why it was solved that way (see [SURFACE_OVERLAY_TINT]).
+     *
+     * Over a DARK surface family that same filter is a white glow. Measured on the 2026-09-15
+     * screenshot (dark + custom colour + apply-to-WeChat, primary #ff8ecff2): the voice-button halo
+     * around the chat input's mic measured (92,99,105) against a (39,41,40) field — 0.698·39 +
+     * 0.302·213 = 92, a per-channel +53 that reads as a ring of light.
+     *
+     * Dark surfaces sit in roughly #11…#2F, so the offset is zeroed by putting the filter in that
+     * same band: value 0.16 → #22 26 29, i.e. `0.698·39 + 0.302·34 = 37` — within ~2 levels of the
+     * surface, below perception. The value is deliberately a single constant rather than a
+     * per-surface read: a colour filter cannot sample the surface it is composited onto.
+     *
+     * Cost, stated plainly: a BRIGHT bitmap background in dark mode is pulled toward the dark band
+     * (white 255 → ~188). WeChat's dark backgrounds are nine-patches/bitmaps in the #11…#2F band,
+     * which is what this constant is solved for.
+     *
+     * Scope note: this path only runs for drawables with NO colour value (bitmap / nine-patch /
+     * ripple). Surfaces that resolve to a colour — including the title bar, whose #242424 came out
+     * as the measured (34,35,37), i.e. `recolorSurface(#242424, 0.21)` = (33,35,36) — go through
+     * [recolorSurface] and are NOT affected by this constant.
+     */
+    private const val SURFACE_OVERLAY_DARK_VALUE = 0.16f
+
+    /**
      * WeChat's own `android.content.res.Resources` subclasses that override `getColor(int)`
      * (discovered on 8.0.77). Hooking only the framework base class would miss calls that dispatch
      * to these overrides. Names are obfuscated, hence version-specific.
@@ -115,8 +146,13 @@ object MonetEngine : ApiFeature() {
     /** Shared "already logged" counter for every background entry point (see [retargetBackground]). */
     private val backgroundSurfaceHits = AtomicInteger(0)
 
-    /** Cache for [overlayColor]: the accent-derived overlay colour, keyed by the accent it came from. */
+    /**
+     * Cache for [overlayColor]: the accent-derived overlay colour, keyed by the accent it came from
+     * plus the dark/light mode it was solved for (the two have different values, see
+     * [SURFACE_OVERLAY_DARK_VALUE]).
+     */
     private var overlaySource = 0
+    private var overlayDark = false
     private var overlayCache = 0
 
     /**
@@ -138,10 +174,24 @@ object MonetEngine : ApiFeature() {
         when (drawable) {
             is ColorDrawable -> handleColorDrawable(drawable, surfaceHits)
             is GradientDrawable -> handleGradientDrawable(drawable, surfaceHits)
-            is StateListDrawable -> when (val cur = drawable.current) {
-                is ColorDrawable -> handleColorDrawable(cur, surfaceHits)
-                is GradientDrawable -> handleGradientDrawable(cur, surfaceHits)
-                else -> cur?.let { handlePatternDrawable(it, surfaceHits) }
+            // ⚠️ `getCurrent()` is null until the selector's state has been applied at least once
+            // (`mCurrDrawable` is unset on a freshly inflated selector — exactly the
+            // `setBackgroundResource` → new-selector path). Keep the guard as a REAL branch: with
+            // `when (val cur = drawable.current)` the compiler assumed the platform value was
+            // non-null and lowered its check to `cur.getClass()`, which threw
+            // `NullPointerException: ... 'java.lang.Object.getClass()' on a null object reference`
+            // inside this method and aborted the hook. That is the residual 12×/session
+            // `failed to execute hook of 莫奈引擎` in the 2026-09-15 log (hosts `View.<init>`,
+            // `View.setBackground`, `ImageView.onAttachedToWindow`) — the 2026-09-14 fix only
+            // covered a null *background*, not a null *selector state*.
+            is StateListDrawable -> {
+                val cur: Drawable? = drawable.current
+                if (cur == null) return
+                when (cur) {
+                    is ColorDrawable -> handleColorDrawable(cur, surfaceHits)
+                    is GradientDrawable -> handleGradientDrawable(cur, surfaceHits)
+                    else -> handlePatternDrawable(cur, surfaceHits)
+                }
             }
 
             // A LayerDrawable is used for compounded backgrounds (an input box, a bordered cell…),
@@ -189,10 +239,14 @@ object MonetEngine : ApiFeature() {
 
     /**
      * The colour used for the pattern overlay: the accent's hue, its saturation reduced by
-     * [SURFACE_OVERLAY_TINT], and full value. Cached because it is derived from [primaryColor].
+     * [SURFACE_OVERLAY_TINT], and a value taken from the host's mode — `1.0` in light mode (so that
+     * compositing over white reproduces the resource path exactly) and [SURFACE_OVERLAY_DARK_VALUE]
+     * in dark mode (so the overlay adds no lightness to dark surfaces). Cached because it is derived
+     * from [primaryColor] and the mode.
      */
     private fun overlayColor(): Int {
-        if (primaryColor != overlaySource) {
+        val dark = HostInfo.application.isDarkMode
+        if (primaryColor != overlaySource || dark != overlayDark) {
             val src = FloatArray(3)
             Color.RGBToHSV(
                 (primaryColor shr 16) and 0xFF,
@@ -201,9 +255,14 @@ object MonetEngine : ApiFeature() {
                 src,
             )
             overlayCache = Color.HSVToColor(
-                floatArrayOf(src[0], (src[1] * SURFACE_OVERLAY_TINT).coerceIn(0f, 1f), 1f),
+                floatArrayOf(
+                    src[0],
+                    (src[1] * SURFACE_OVERLAY_TINT).coerceIn(0f, 1f),
+                    if (dark) SURFACE_OVERLAY_DARK_VALUE else 1f,
+                ),
             )
             overlaySource = primaryColor
+            overlayDark = dark
         }
         return (SURFACE_OVERLAY_ALPHA shl 24) or (overlayCache and 0x00FFFFFF)
     }
@@ -1019,7 +1078,14 @@ object MonetEngine : ApiFeature() {
             }
 
             is StateListDrawable -> {
-                val cur = drawable.current ?: return
+                // ⚠️ Assigning to an explicitly-nullable local is REQUIRED here. `drawable.current`
+                // is a platform type, so Kotlin treats it as non-null and both `?: return` and a
+                // `when (x)` subject lower the null check into `x.getClass()` — the exact
+                // NullPointerException being fixed in [retargetBackground] (the compiler flagged
+                // this as "Elvis operator (?:) always returns the left operand of non-nullable
+                // type 'Drawable'", i.e. the guard was dead code).
+                val cur: Drawable? = drawable.current
+                if (cur == null) return
                 retargetResolvedDrawable(resId, cur)
             }
         }
