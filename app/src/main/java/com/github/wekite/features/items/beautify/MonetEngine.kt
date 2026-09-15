@@ -10,6 +10,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
 import android.util.SparseIntArray
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
@@ -136,6 +137,51 @@ object MonetEngine : ApiFeature() {
     private const val SURFACE_OVERLAY_LIGHT_VALUE = 237f / 255f
 
     /**
+     * Saturation factor for the overlay when it lands on an OPAQUE BRIGHT bitmap — the input-box
+     * voice-button plate, and any other bitmap the filter cannot see through.
+     *
+     * Why a bitmap needs its OWN pair of overlay parameters, i.e. why one overlay cannot serve both
+     * kinds (measured 2026-09-15, primary `#008AC1`, both values verified against the day screenshots):
+     *
+     *   filter path result = `0.302 · overlay + 0.698 · underlying`
+     *
+     * Compositing is a fixed-weight blend, so the overlay only disappears against a background when it
+     * EQUALS that background's colour. The two drawable kinds sit on different backgrounds:
+     *
+     *   - the 「已登录 N 台其他设备」 banner is a TRANSLUCENT white nine-patch (alpha 0x4D) over the
+     *     GREY page `#EDEDED` → its overlay must be the page colour
+     *     ([SURFACE_OVERLAY_LIGHT_TINT] / [SURFACE_OVERLAY_LIGHT_VALUE]);
+     *   - a bitmap carries OPAQUE pixels, and WeChat paints the input-box voice button as a white
+     *     plate over the pure-WHITE input box plate (both `recolorSurface(#FFFFFF, 0.12)`) → its
+     *     overlay must be the solution for white, i.e. `V = 1.0` ([SURFACE_OVERLAY_BITMAP_VALUE]).
+     *
+     * One constant cannot be 0 for both, which is exactly the ping-pong of v3.9 ↔ v3.10: v3.9 solved
+     * for white and the banner read (−13,0,5) against the page; v3.10 solved for the page and the
+     * voice-button plate read (10,−1,−5) against the input box. Splitting by drawable kind is the
+     * only way to make BOTH read 0.
+     *
+     * `0.40` is not arbitrary either — it is the factor that makes the composited bitmap match the
+     * plate it sits on. Solving `0.302 · (k · S_primary) = 0.12 · S_primary` (the white plate's own
+     * weight is `0.12`, [WHITE_SURFACE_TINT]) gives `k = 0.12 / 0.302 = 0.397 ≈ 0.40`. Using `0.12`
+     * here instead (the naive "same as the surface" reading) leaves the plate at `(246,252,255)`
+     * against a `(224,246,255)` input box — a residual of +22 in red, i.e. the very artefact this
+     * constant exists to remove.
+     */
+    private const val SURFACE_OVERLAY_BITMAP_TINT = 0.40f
+
+    /**
+     * Value (HSV brightness) of the overlay for an OPAQUE BRIGHT bitmap (see
+     * [SURFACE_OVERLAY_BITMAP_TINT]).
+     *
+     * `1.0` is the solution, not a taste: `(H, S·k, 1.0)` composited at alpha [SURFACE_OVERLAY_ALPHA]
+     * onto pure white reproduces `recolorSurface(#FFFFFF, k)` per channel — the same colour the
+     * resource path gives the white plate the bitmap sits on, so the bitmap turns invisible against
+     * it. Measured: RGB path white = `(224,246,255)`, compositing this overlay over white =
+     * `(224,246,255)`, error 0.
+     */
+    private const val SURFACE_OVERLAY_BITMAP_VALUE = 1f
+
+    /**
      * Value (HSV brightness) of the overlay colour when the host is in DARK mode.
      *
      * [SURFACE_OVERLAY_ALPHA] is a constant, so a fixed filter colour cannot be right for a light
@@ -186,12 +232,20 @@ object MonetEngine : ApiFeature() {
     private val backgroundSurfaceHits = AtomicInteger(0)
 
     /**
+     * Drawable classes already reported by the `pattern overlay kind` line, so the diagnostic stays
+     * bounded to one line per class per session (see [handlePatternDrawable]).
+     */
+    private val patternKindLogged = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /**
      * Cache for [overlayColor]: the accent-derived overlay colour, keyed by the accent it came from
      * plus the dark/light mode it was solved for (the two have different values, see
      * [SURFACE_OVERLAY_DARK_VALUE]).
      */
     private var overlaySource = 0
     private var overlayDark = false
+    /** Whether [overlayCache] was solved for an opaque bright bitmap (see [overlayColor]). */
+    private var overlayBitmap = false
     private var overlayCache = 0
 
     /**
@@ -267,26 +321,46 @@ object MonetEngine : ApiFeature() {
         if (drawable is GradientDrawable && drawable.color != null) return   // plain fill: handled elsewhere
         val filter = drawable.colorFilter
         if (filter is PorterDuffColorFilter) return                          // already ours
-        // A HIGH-VALUE, low-saturation version of the accent (see SURFACE_OVERLAY_*): this keeps the
-        // surface's lightness instead of dimming it the way the raw accent would.
-        val overlay = overlayColor()
+        // Bright OPAQUE bitmaps get their own overlay (see SURFACE_OVERLAY_BITMAP_TINT): an unsee-through
+        // bitmap has no semi-transparent pixels, so the overlay has to match the white plate underneath
+        // it — solving it for the grey page instead turned the input-box voice button into a pale
+        // block (v3.10 regression). A NINE-PATCH is a translucent pattern (the banner ships at
+        // alpha 0x4D), so it keeps the page/neutral solution: compositing the page colour into it is
+        // what makes the banner disappear.
+        val bitmapKind = drawable is BitmapDrawable
+        val overlay = overlayColor(brightBitmap = bitmapKind)
         drawable.colorFilter = PorterDuffColorFilter(overlay, PorterDuff.Mode.SRC_ATOP)
         if (surfaceHits.incrementAndGet() == 1) {
             WeLogger.i(TAG, "pattern background -> accent overlay (${drawable.javaClass.simpleName})")
+        }
+        // Diagnostic (2026-09-15): log the FIRST hit of each drawable class, and which overlay branch
+        // it took. The bitmap/page split rests on the class being right, and the previous log only
+        // printed a single first-hit line, which cannot prove WHICH surface that was. Bounded to one
+        // line per class so this stays ~a handful of lines per session.
+        val klass = drawable.javaClass.simpleName
+        if (patternKindLogged.add(klass)) {
+            WeLogger.i(TAG, "pattern overlay kind: $klass -> ${if (bitmapKind) "bitmap(white)" else "page(neutral)"}")
         }
     }
 
     /**
      * The colour used for the pattern overlay: the accent's hue, its saturation taken down to the
-     * neutral surface's own (light mode: [SURFACE_OVERLAY_LIGHT_TINT], dark mode: [SURFACE_OVERLAY_TINT]),
-     * and a value taken from the host's mode (light mode: [SURFACE_OVERLAY_LIGHT_VALUE], so that
-     * compositing over the grey page background is an identity; dark mode: [SURFACE_OVERLAY_DARK_VALUE],
-     * so the overlay adds no lightness to dark surfaces). Cached because it is derived from
-     * [primaryColor] and the mode.
+     * target surface's own, and a value taken from the host's mode.
+     *
+     * [brightBitmap] selects the pair of parameters: `true` for an OPAQUE BRIGHT bitmap (the input-box
+     * voice-button plate), which needs the white-surface solution ([SURFACE_OVERLAY_BITMAP_TINT] /
+     * [SURFACE_OVERLAY_BITMAP_VALUE]); `false` for a translucent pattern over the page
+     * ([SURFACE_OVERLAY_LIGHT_TINT] / [SURFACE_OVERLAY_LIGHT_VALUE] in light mode,
+     * [SURFACE_OVERLAY_TINT] / [SURFACE_OVERLAY_DARK_VALUE] in dark mode).
+     *
+     * Dark mode keeps a single value on purpose: [SURFACE_OVERLAY_DARK_VALUE] already parks the
+     * overlay in the same band as every dark surface, so the two kinds measure ≤1 apart there and the
+     * split would only add a way to be wrong.
      */
-    private fun overlayColor(): Int {
+    private fun overlayColor(brightBitmap: Boolean = false): Int {
         val dark = HostInfo.application.isDarkMode
-        if (primaryColor != overlaySource || dark != overlayDark) {
+        val bitmap = brightBitmap && !dark
+        if (primaryColor != overlaySource || dark != overlayDark || bitmap != overlayBitmap) {
             val src = FloatArray(3)
             Color.RGBToHSV(
                 (primaryColor shr 16) and 0xFF,
@@ -297,13 +371,21 @@ object MonetEngine : ApiFeature() {
             overlayCache = Color.HSVToColor(
                 floatArrayOf(
                     src[0],
-                    (src[1] * if (dark) SURFACE_OVERLAY_TINT else SURFACE_OVERLAY_LIGHT_TINT)
-                        .coerceIn(0f, 1f),
-                    if (dark) SURFACE_OVERLAY_DARK_VALUE else SURFACE_OVERLAY_LIGHT_VALUE,
+                    (src[1] * when {
+                        bitmap -> SURFACE_OVERLAY_BITMAP_TINT
+                        dark -> SURFACE_OVERLAY_TINT
+                        else -> SURFACE_OVERLAY_LIGHT_TINT
+                    }).coerceIn(0f, 1f),
+                    when {
+                        bitmap -> SURFACE_OVERLAY_BITMAP_VALUE
+                        dark -> SURFACE_OVERLAY_DARK_VALUE
+                        else -> SURFACE_OVERLAY_LIGHT_VALUE
+                    },
                 ),
             )
             overlaySource = primaryColor
             overlayDark = dark
+            overlayBitmap = bitmap
         }
         return (SURFACE_OVERLAY_ALPHA shl 24) or (overlayCache and 0x00FFFFFF)
     }
