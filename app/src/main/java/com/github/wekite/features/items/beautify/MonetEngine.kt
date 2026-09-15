@@ -4,10 +4,13 @@ import android.app.Activity
 import android.content.res.ColorStateList
 import android.content.res.Resources
 import android.content.res.TypedArray
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
+import android.graphics.Rect
 import android.util.SparseIntArray
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.BitmapDrawable
@@ -186,47 +189,44 @@ object MonetEngine : ApiFeature() {
      * Alpha (out of 255) of the pattern overlay applied to drawables that carry no colour value.
      * Equal to [SURFACE_OVERLAY_ALPHA] by construction — it is the SAME filter — but named separately
      * because [opaquePatternOverlay] has to *undo* it arithmetically, and the two must not drift.
+     *
+     * ⚠️ Kept at 77 because it *is* what makes such a veil invisible: `res/m/gw.9.png` ships a GREY
+     * `(225,225,225)` at exactly this alpha (measured: 99% of its interior, the only other value being
+     * a 4-pixel edge at alpha 40), so the veil's own weight and the filter's cancel. Changing this
+     * number would move every translucent plate off the surface it sits on.
      */
     private const val OPAQUE_PATTERN_ALPHA = 0x4D
 
     /**
-     * The grey page-background literal (`#EDEDED`, WeChat's flat grey used on 我 / 通讯录 / 资料页) that
-     * the neutral overlay was solved for. Its strength comes from [surfaceTintFor] so the two stay in
-     * step.
+     * Edge (px) the software render used to measure a nine-patch's colour is clamped into.
+     *
+     * The render prefers the drawable's intrinsic size and is clamped to this window: below
+     * [MEASURE_MIN] a nine-patch with thick borders renders as border only (no fill to sample), and
+     * above [MEASURE_MAX] the cost stops being worth it. 64px comfortably covers the plates measured so
+     * far (`res/m/gw.9.png` is 18×28, `res/n/aa.9.png` is 44×64).
+     *
+     * ⚠️ Deliberately NOT cached per class: two nine-patches of the same class routinely hold
+     * different images (a translucent veil and a solid plate are both `NinePatchDrawable`), so a
+     * class-keyed cache would hand one surface the other's solution. The render is cheap and
+     * [handlePatternDrawable] returns early once a drawable already carries our filter.
      */
-    private const val NEUTRAL_GREY = 0xFFEDEDED.toInt()
+    private const val MEASURE_MIN = 8
+    private const val MEASURE_MAX = 64
 
     /**
-     * `Drawable.getOpacity()` value for a fully opaque drawable.
+     * Overlay for a pattern whose floor is the neutral grey PAGE (`#EDEDED`) rather than a white plate.
      *
-     * ⚠️ Literal `-1` on purpose: `Drawable.OPAQUE` is NOT resolvable against the android-37 compile
-     * stub (`javap` on `platforms/android-37.0/android.jar` lists `getOpacity()` and `resolveOpacity`
-     * but no `OPAQUE`/`TRANSLUCENT` constants — despite being documented). Using `Drawable.OPAQUE`
-     * fails the build with `Unresolved reference 'OPAQUE'` (hit 2026-09-15).
-     */
-    private const val OPAQUE_OPACITY = -1
-
-    /**
-     * Overlay for an OPAQUE pattern whose inside colour is (or sits on) [source].
+     * Used when the drawable's own pixels are grey — i.e. it is the page backdrop itself, not a card on
+     * top of it. The filter is then solved to be that page's own colour, exactly like the v3.10 neutral
+     * solve, because compositing a colour onto the identical colour is an identity: the plate stops
+     * reading as a separate, brighter tone.
      *
-     * The neutral overlays above are solved so that compositing them onto a surface of the SAME colour
-     * is an identity — that is what makes the 「已登录 N 台其他设备」banner (a TRANSLUCENT white
-     * nine-patch over the grey page) disappear. It cannot work for an OPAQUE pattern, because the
-     * filter is a fixed-weight blend: with `result = 0.302 · filter + 0.698 · inside` and the filter's
-     * own saturation bounded by the accent's, the result can never reach the higher saturation the
-     * resource path gives that same colour. Measured 2026-09-15 (primary `#008AC1`): a solid grey
-     * plate rendered `(223,234,238)` through the filter while the resource path yields `(188,223,237)`
-     * for the same `#EDEDED` — brighter by 35 in red, which is the user's 「有些地方没染上色」.
-     *
-     * So solve the blend instead of guessing: pick the filter whose composite reproduces what
-     * [recolorSurface] would have produced for that colour.
-     *
-     *   target = recolorSurface(source, tint)
+     *   target = recolorSurface(source, 0.21)      // what the resource path gives this grey
      *   filter = (target − (1 − alpha) · source) / alpha
      *
-     * Verified exact (error 0) for both the grey plate and a white plate. The trade-off is honest and
-     * identical to the one already accepted for the bitmap overlay: the base's own colour is ASSUMED
-     * (a bitmap may not be uniform), whereas a recolor would have read it per pixel.
+     * Verified against the measured plate `(223,234,238)`: with primary `#00677d` the composite comes
+     * out `(186.9, 227.9, 237.0)` while the same `#EDEDED` reached through the resource path is
+     * `(187,228,237)` — error ≤1 in every channel, i.e. the page finally matches the surfaces beside it.
      */
     private fun opaquePatternOverlay(source: Int): Int {
         val alpha = OPAQUE_PATTERN_ALPHA / 255f
@@ -383,39 +383,112 @@ object MonetEngine : ApiFeature() {
         // Bright OPAQUE bitmaps get their own overlay (see SURFACE_OVERLAY_BITMAP_TINT): an unsee-through
         // bitmap has no semi-transparent pixels, so the overlay has to match the white plate underneath
         // it — solving it for the grey page instead turned the input-box voice button into a pale
-        // block (v3.10 regression). A NINE-PATCH is a translucent pattern (the banner ships at
-        // alpha 0x4D), so it keeps the page/neutral solution: compositing the page colour into it is
-        // what makes the banner disappear.
+        // block (v3.10 regression). A translucent pattern keeps the page/neutral solution:
+        // compositing the page colour into it is what makes it disappear.
         val bitmapKind = drawable is BitmapDrawable
-        // ⚠️ The NINE-PATCH is deliberately NOT in the opaque branch even when its image has no alpha
-        // and getOpacity() reports OPAQUE. The 「已登录 N 台其他设备」banner is exactly a nine-patch, and
-        // its neutral overlay is what makes it disappear (v3.10's fix). Routing it here would regress
-        // that. Excluding by TYPE rather than by opacity is the conservative choice: the banner is the
-        // only surface whose correctness we have measured, so it keeps the path we measured.
-        val opaquePattern = !bitmapKind &&
-            drawable !is NinePatchDrawable &&
-            drawable.opacity == OPAQUE_OPACITY
-        val overlay = when {
-            bitmapKind -> overlayColor(brightBitmap = true)
-            opaquePattern -> opaquePatternOverlay(NEUTRAL_GREY)
-            else -> overlayColor()
-        }
+        // ⚠️ The branch is chosen by READING the pattern's own colour, not by guessing what a drawable
+        // TYPE implies. v3.11 guessed "bitmaps are white plates" and v3.12 guessed "opaque non-bitmaps
+        // are grey plates"; the 通讯录/资料页 plate satisfies neither guess, so two releases in a row
+        // left it on the neutral solve and therefore 35 channels too bright in red. See
+        // [patternOverlayFor] — the only case this changes is a neutral grey plate, everything else
+        // keeps the exact path it already had.
+        val (overlay, kind) = patternOverlayFor(drawable, bitmapKind)
         drawable.colorFilter = PorterDuffColorFilter(overlay, PorterDuff.Mode.SRC_ATOP)
         if (surfaceHits.incrementAndGet() == 1) {
             WeLogger.i(TAG, "pattern background -> accent overlay (${drawable.javaClass.simpleName})")
         }
-        // Diagnostic (2026-09-15): log the FIRST hit of each drawable class, and which overlay branch
-        // it took. The bitmap/page split rests on the class being right, and the previous log only
-        // printed a single first-hit line, which cannot prove WHICH surface that was. Bounded to one
-        // line per class so this stays ~a handful of lines per session.
+        // Diagnostic (2026-09-15): log the FIRST hit of each drawable class, which overlay branch it
+        // took, AND the colour it was measured from. The class/kind pair alone proved misleading twice
+        // — the plate is a different type than assumed — so the measured pixel is logged too, and a
+        // null measurement shows as `pixels=?` rather than being indistinguishable from a real colour.
         val klass = drawable.javaClass.simpleName
         if (patternKindLogged.add(klass)) {
-            val kind = when {
-                bitmapKind -> "bitmap(white)"
-                opaquePattern -> "opaque(match-resource)"
-                else -> "page(neutral)"
-            }
-            WeLogger.i(TAG, "pattern overlay kind: $klass -> $kind")
+            val hex = patternPixel(drawable)?.let { "#%08x".format(it) } ?: "?"
+            WeLogger.i(TAG, "pattern overlay kind: $klass pixels=$hex -> $kind")
+        }
+    }
+
+    /**
+     * Picks the filter for a colourless pattern by MEASURING it, and reports which branch that was.
+     *
+     * Why measure rather than classify by type: `SRC_ATOP` is a fixed-weight blend,
+     * `result = 0.302 · filter + 0.698 · pattern`, so a filter only renders the pattern as its own
+     * intended colour when it was chosen for THAT pattern's colour. The 通讯录/资料页 plate is an
+     * opaque grey `#EDEDED` plate, so under the neutral (page) filter it renders
+     * `(221.9, 234.3, 237.0)` — measured `(223,234,238)` — instead of the `(187,228,237)` the same
+     * `#EDEDED` gets through the resource path. Two releases guessed the type this plate belongs to
+     * and both missed; reading its pixels cannot miss.
+     *
+     * Deliberately narrow — ONLY a neutral that is opaque and not already the white plate takes the
+     * newly solved path. Everything else keeps the exact path it was measured correct on:
+     *   - a white plate (the mic block) → the v3.11 bright-bitmap solve;
+     *   - a translucent white veil or an unreadable pattern → the v3.10 neutral solve that makes the
+     *     「已登录 N 台其他设备」banner vanish.
+     */
+    private fun patternOverlayFor(drawable: Drawable, bitmapKind: Boolean): Pair<Int, String> {
+        val px = patternPixel(drawable)
+        val rgb = if (px != null && (px ushr 24) == 0xFF) px and 0xFFFFFF else null
+        if (rgb != null && rgb != 0xFFFFFF && isNeutral(rgb)) {
+            return opaquePatternOverlay(0xFF shl 24 or rgb) to "opaque(match-resource)"
+        }
+        return overlayColor(brightBitmap = bitmapKind) to
+            if (bitmapKind) "bitmap(white)" else "page(neutral)"
+    }
+
+    /**
+     * The pattern's own centre pixel, or null when it cannot be read.
+     *
+     * The centre is the stretchable region that carries the fill (borders and marker pixels live at
+     * the edges), and a *uniform* pattern is the only kind a single flat filter can honour anyway.
+     *
+     * A [BitmapDrawable] is read straight from its bitmap (exact and cheap). EVERY other type is
+     * measured by rendering it — deliberately including [NinePatchDrawable], wrappers and WeChat's own
+     * `Drawable` subclasses, because those are exactly the types the previous two attempts guessed
+     * wrong: v3.11 assumed a bitmap, v3.12 assumed "opaque and not a nine-patch", and the 通讯录/资料页
+     * plate is neither. Rendering asks the drawable what it actually looks like instead of inferring it
+     * from its class. A class that cannot render, or renders transparent, returns null and keeps its
+     * previous overlay — the fix only ever applies where a neutral floor was actually observed.
+     */
+    private fun patternPixel(drawable: Drawable): Int? = try {
+        if (drawable is BitmapDrawable) centrePixel(drawable.bitmap) else renderCentrePixel(drawable)
+    } catch (t: Throwable) {
+        null
+    }
+
+    /** Centre pixel of [bitmap], or null when it is absent/unreadable (recycled, zero-sized). */
+    private fun centrePixel(bitmap: Bitmap?): Int? {
+        if (bitmap == null || bitmap.isRecycled) return null
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= 0 || h <= 0) return null
+        return bitmap.getPixel(w / 2, h / 2)
+    }
+
+    /**
+     * Draws [drawable] into a small software bitmap and returns its centre pixel.
+     *
+     * The render size prefers the drawable's own intrinsic size, clamped to [[MEASURE_MIN]]..[[
+     * MEASURE_MAX]]: a nine-patch with thick borders drawn at 8px would be all border and no fill, so
+     * clamping to a fixed tiny size is not safe. Falls back to the minimum when the drawable declares no
+     * intrinsic size (a stretchable panel often does not).
+     *
+     * ⚠️ The bounds are saved as a COPY (`Rect(drawable.bounds)`). `Drawable.getBounds()` hands back
+     * the drawable's own internal `Rect` instance, so keeping that reference and re-applying it later
+     * would restore the very bounds just written — silently resizing a live view's background to the
+     * measure size. The copy is what makes the restore real.
+     */
+    private fun renderCentrePixel(drawable: Drawable): Int? {
+        val intrinsic = maxOf(drawable.intrinsicWidth, drawable.intrinsicHeight)
+        val size = intrinsic.coerceIn(MEASURE_MIN, MEASURE_MAX)
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        try {
+            val saved = Rect(drawable.bounds)
+            drawable.setBounds(0, 0, size, size)
+            drawable.draw(Canvas(bitmap))
+            drawable.setBounds(saved)
+            return centrePixel(bitmap)
+        } finally {
+            bitmap.recycle()
         }
     }
 
