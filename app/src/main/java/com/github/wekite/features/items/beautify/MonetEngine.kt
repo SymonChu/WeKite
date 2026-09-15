@@ -14,6 +14,7 @@ import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
+import android.graphics.drawable.NinePatchDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.Build
 import android.view.View
@@ -182,6 +183,64 @@ object MonetEngine : ApiFeature() {
     private const val SURFACE_OVERLAY_BITMAP_VALUE = 1f
 
     /**
+     * Alpha (out of 255) of the pattern overlay applied to drawables that carry no colour value.
+     * Equal to [SURFACE_OVERLAY_ALPHA] by construction — it is the SAME filter — but named separately
+     * because [opaquePatternOverlay] has to *undo* it arithmetically, and the two must not drift.
+     */
+    private const val OPAQUE_PATTERN_ALPHA = 0x4D
+
+    /**
+     * The grey page-background literal (`#EDEDED`, WeChat's flat grey used on 我 / 通讯录 / 资料页) that
+     * the neutral overlay was solved for. Its strength comes from [surfaceTintFor] so the two stay in
+     * step.
+     */
+    private const val NEUTRAL_GREY = 0xFFEDEDED.toInt()
+
+    /**
+     * `Drawable.getOpacity()` value for a fully opaque drawable.
+     *
+     * ⚠️ Literal `-1` on purpose: `Drawable.OPAQUE` is NOT resolvable against the android-37 compile
+     * stub (`javap` on `platforms/android-37.0/android.jar` lists `getOpacity()` and `resolveOpacity`
+     * but no `OPAQUE`/`TRANSLUCENT` constants — despite being documented). Using `Drawable.OPAQUE`
+     * fails the build with `Unresolved reference 'OPAQUE'` (hit 2026-09-15).
+     */
+    private const val OPAQUE_OPACITY = -1
+
+    /**
+     * Overlay for an OPAQUE pattern whose inside colour is (or sits on) [source].
+     *
+     * The neutral overlays above are solved so that compositing them onto a surface of the SAME colour
+     * is an identity — that is what makes the 「已登录 N 台其他设备」banner (a TRANSLUCENT white
+     * nine-patch over the grey page) disappear. It cannot work for an OPAQUE pattern, because the
+     * filter is a fixed-weight blend: with `result = 0.302 · filter + 0.698 · inside` and the filter's
+     * own saturation bounded by the accent's, the result can never reach the higher saturation the
+     * resource path gives that same colour. Measured 2026-09-15 (primary `#008AC1`): a solid grey
+     * plate rendered `(223,234,238)` through the filter while the resource path yields `(188,223,237)`
+     * for the same `#EDEDED` — brighter by 35 in red, which is the user's 「有些地方没染上色」.
+     *
+     * So solve the blend instead of guessing: pick the filter whose composite reproduces what
+     * [recolorSurface] would have produced for that colour.
+     *
+     *   target = recolorSurface(source, tint)
+     *   filter = (target − (1 − alpha) · source) / alpha
+     *
+     * Verified exact (error 0) for both the grey plate and a white plate. The trade-off is honest and
+     * identical to the one already accepted for the bitmap overlay: the base's own colour is ASSUMED
+     * (a bitmap may not be uniform), whereas a recolor would have read it per pixel.
+     */
+    private fun opaquePatternOverlay(source: Int): Int {
+        val alpha = OPAQUE_PATTERN_ALPHA / 255f
+        val keep = 1f - alpha
+        val target = recolorSurface(source, surfaceTintFor(source))
+        val channels = intArrayOf((target shr 16) and 0xFF, (target shr 8) and 0xFF, target and 0xFF)
+        val base = intArrayOf((source shr 16) and 0xFF, (source shr 8) and 0xFF, source and 0xFF)
+        for (i in channels.indices) {
+            channels[i] = ((channels[i] - keep * base[i]) / alpha).toInt().coerceIn(0, 255)
+        }
+        return (SURFACE_OVERLAY_ALPHA shl 24) or (channels[0] shl 16) or (channels[1] shl 8) or channels[2]
+    }
+
+    /**
      * Value (HSV brightness) of the overlay colour when the host is in DARK mode.
      *
      * [SURFACE_OVERLAY_ALPHA] is a constant, so a fixed filter colour cannot be right for a light
@@ -328,7 +387,19 @@ object MonetEngine : ApiFeature() {
         // alpha 0x4D), so it keeps the page/neutral solution: compositing the page colour into it is
         // what makes the banner disappear.
         val bitmapKind = drawable is BitmapDrawable
-        val overlay = overlayColor(brightBitmap = bitmapKind)
+        // ⚠️ The NINE-PATCH is deliberately NOT in the opaque branch even when its image has no alpha
+        // and getOpacity() reports OPAQUE. The 「已登录 N 台其他设备」banner is exactly a nine-patch, and
+        // its neutral overlay is what makes it disappear (v3.10's fix). Routing it here would regress
+        // that. Excluding by TYPE rather than by opacity is the conservative choice: the banner is the
+        // only surface whose correctness we have measured, so it keeps the path we measured.
+        val opaquePattern = !bitmapKind &&
+            drawable !is NinePatchDrawable &&
+            drawable.opacity == OPAQUE_OPACITY
+        val overlay = when {
+            bitmapKind -> overlayColor(brightBitmap = true)
+            opaquePattern -> opaquePatternOverlay(NEUTRAL_GREY)
+            else -> overlayColor()
+        }
         drawable.colorFilter = PorterDuffColorFilter(overlay, PorterDuff.Mode.SRC_ATOP)
         if (surfaceHits.incrementAndGet() == 1) {
             WeLogger.i(TAG, "pattern background -> accent overlay (${drawable.javaClass.simpleName})")
@@ -339,7 +410,12 @@ object MonetEngine : ApiFeature() {
         // line per class so this stays ~a handful of lines per session.
         val klass = drawable.javaClass.simpleName
         if (patternKindLogged.add(klass)) {
-            WeLogger.i(TAG, "pattern overlay kind: $klass -> ${if (bitmapKind) "bitmap(white)" else "page(neutral)"}")
+            val kind = when {
+                bitmapKind -> "bitmap(white)"
+                opaquePattern -> "opaque(match-resource)"
+                else -> "page(neutral)"
+            }
+            WeLogger.i(TAG, "pattern overlay kind: $klass -> $kind")
         }
     }
 
