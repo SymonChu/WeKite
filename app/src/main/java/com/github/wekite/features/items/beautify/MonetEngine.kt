@@ -214,6 +214,29 @@ object MonetEngine : ApiFeature() {
     private const val MEASURE_MAX = 64
 
     /**
+     * Edge (px) used to measure a drawable that declares NO intrinsic size.
+     *
+     * A wrapper such as `InsetDrawable` reports `-1` for both intrinsic axes, so the old
+     * `maxOf(w,h).coerceIn(MEASURE_MIN, MEASURE_MAX)` collapsed it to the [MEASURE_MIN] floor — 8px —
+     * and a wrapper's insets are routinely larger than 4px, so the inner drawable was laid out
+     * entirely outside the render and the measurement came back transparent. Every such drawable then
+     * fell through to the old neutral solve, which is why the 通讯录/资料页 plate survived two
+     * releases: the code could not see it. Measured 2026-09-15 (`pixels=#00000000` on `InsetDrawable`,
+     * `NinePatchDrawable` and an obfuscated wrapper).
+     */
+    private const val MEASURE_FALLBACK = 128
+
+    /**
+     * Edge (px) of the second attempt when the first render's centre is not painted.
+     *
+     * A single flat filter can only honour a *uniform* pattern, and the centre is the region that
+     * carries the fill — so a transparent centre means "the render was too small to contain any
+     * interior" (thick nine-patch borders, large insets), not "this pattern has no colour". Retrying
+     * once at a size well above any observed border is what makes the measurement honest.
+     */
+    private const val MEASURE_RETRY = 256
+
+    /**
      * Overlay for a pattern whose floor is the neutral grey PAGE (`#EDEDED`) rather than a white plate.
      *
      * Used when the drawable's own pixels are grey — i.e. it is the page backdrop itself, not a card on
@@ -291,8 +314,11 @@ object MonetEngine : ApiFeature() {
     private val backgroundSurfaceHits = AtomicInteger(0)
 
     /**
-     * Drawable classes already reported by the `pattern overlay kind` line, so the diagnostic stays
-     * bounded to one line per class per session (see [handlePatternDrawable]).
+     * `class/kind` pairs already reported by the `pattern overlay kind` line, so the diagnostic stays
+     * bounded. Keyed on class AND kind, not class alone (2026-09-15): one drawable class routinely
+     * carries several different images (a translucent veil and a solid grey plate are both
+     * `NinePatchDrawable`), so a class-only key suppressed the second — and diagnostic — line, which
+     * is exactly the line needed to prove whether the plate switched branch.
      */
     private val patternKindLogged = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
@@ -392,24 +418,27 @@ object MonetEngine : ApiFeature() {
         // left it on the neutral solve and therefore 35 channels too bright in red. See
         // [patternOverlayFor] — the only case this changes is a neutral grey plate, everything else
         // keeps the exact path it already had.
-        val (overlay, kind) = patternOverlayFor(drawable, bitmapKind)
+        val (overlay, kind, measured) = patternOverlayFor(drawable, bitmapKind)
         drawable.colorFilter = PorterDuffColorFilter(overlay, PorterDuff.Mode.SRC_ATOP)
         if (surfaceHits.incrementAndGet() == 1) {
             WeLogger.i(TAG, "pattern background -> accent overlay (${drawable.javaClass.simpleName})")
         }
-        // Diagnostic (2026-09-15): log the FIRST hit of each drawable class, which overlay branch it
+        // Diagnostic (2026-09-15): log the FIRST hit of each class/kind pair, which overlay branch it
         // took, AND the colour it was measured from. The class/kind pair alone proved misleading twice
         // — the plate is a different type than assumed — so the measured pixel is logged too, and a
         // null measurement shows as `pixels=?` rather than being indistinguishable from a real colour.
+        // The pixel is REUSED from the branch decision rather than measured again: measuring renders
+        // the drawable up to three times, and doing that twice per drawable is pure waste.
         val klass = drawable.javaClass.simpleName
-        if (patternKindLogged.add(klass)) {
-            val hex = patternPixel(drawable)?.let { "#%08x".format(it) } ?: "?"
+        if (patternKindLogged.add("$klass/$kind")) {
+            val hex = measured?.let { "#%08x".format(it) } ?: "?"
             WeLogger.i(TAG, "pattern overlay kind: $klass pixels=$hex -> $kind")
         }
     }
 
     /**
-     * Picks the filter for a colourless pattern by MEASURING it, and reports which branch that was.
+     * Picks the filter for a colourless pattern by MEASURING it, and reports which branch that was
+     * along with the measured pixel (so the caller can log it without measuring a second time).
      *
      * Why measure rather than classify by type: `SRC_ATOP` is a fixed-weight blend,
      * `result = 0.302 · filter + 0.698 · pattern`, so a filter only renders the pattern as its own
@@ -425,14 +454,14 @@ object MonetEngine : ApiFeature() {
      *   - a translucent white veil or an unreadable pattern → the v3.10 neutral solve that makes the
      *     「已登录 N 台其他设备」banner vanish.
      */
-    private fun patternOverlayFor(drawable: Drawable, bitmapKind: Boolean): Pair<Int, String> {
+    private fun patternOverlayFor(drawable: Drawable, bitmapKind: Boolean): Triple<Int, String, Int?> {
         val px = patternPixel(drawable)
         val rgb = if (px != null && (px ushr 24) == 0xFF) px and 0xFFFFFF else null
         if (rgb != null && rgb != 0xFFFFFF && isNeutral(rgb)) {
-            return opaquePatternOverlay(0xFF shl 24 or rgb) to "opaque(match-resource)"
+            return Triple(opaquePatternOverlay(0xFF shl 24 or rgb), "opaque(match-resource)", px)
         }
-        return overlayColor(brightBitmap = bitmapKind) to
-            if (bitmapKind) "bitmap(white)" else "page(neutral)"
+        val kind = if (bitmapKind) "bitmap(white)" else "page(neutral)"
+        return Triple(overlayColor(brightBitmap = bitmapKind), kind, px)
     }
 
     /**
@@ -448,6 +477,14 @@ object MonetEngine : ApiFeature() {
      * plate is neither. Rendering asks the drawable what it actually looks like instead of inferring it
      * from its class. A class that cannot render, or renders transparent, returns null and keeps its
      * previous overlay — the fix only ever applies where a neutral floor was actually observed.
+     *
+     * ⚠️ A transparent centre is NOT an answer (2026-09-15). It means the render was too small to
+     * contain any interior — a wrapper's insets or a nine-patch's borders consumed the whole render —
+     * not that the pattern has no colour. The shipped v3.13 log shows exactly this: the 通讯录/资料页
+     * plate's class measured `pixels=#00000000`, so it fell through to the old neutral solve and stayed
+     * ~35 channels too bright in red. Two larger renders are attempted before giving up; rendering is
+     * side-effect free (bounds are restored) and runs at most once per drawable per session, because
+     * [handlePatternDrawable] returns early once a drawable already carries our filter.
      */
     private fun patternPixel(drawable: Drawable): Int? = try {
         if (drawable is BitmapDrawable) centrePixel(drawable.bitmap) else renderCentrePixel(drawable)
@@ -469,8 +506,16 @@ object MonetEngine : ApiFeature() {
      *
      * The render size prefers the drawable's own intrinsic size, clamped to [[MEASURE_MIN]]..[[
      * MEASURE_MAX]]: a nine-patch with thick borders drawn at 8px would be all border and no fill, so
-     * clamping to a fixed tiny size is not safe. Falls back to the minimum when the drawable declares no
-     * intrinsic size (a stretchable panel often does not).
+     * clamping to a fixed tiny size is not safe. Falls back to [MEASURE_FALLBACK] when the drawable
+     * declares no intrinsic size (a stretchable panel often does not) — NOT to [MEASURE_MIN], because
+     * a drawable with no intrinsic size is exactly the wrapper case whose insets exceed a few pixels,
+     * which is what made the plate measure transparent instead of grey.
+     *
+     * ⚠️ A transparent centre is NOT an answer. It means the render was too small to contain any
+     * interior (the insets/borders consumed it all), so one retry at [MEASURE_RETRY] is attempted
+     * before giving up. Rendering a live drawable is side-effect free (bounds are restored) and this
+     * runs at most once per drawable per session, since [handlePatternDrawable] returns early once a
+     * drawable carries our filter.
      *
      * ⚠️ The bounds are saved as a COPY (`Rect(drawable.bounds)`). `Drawable.getBounds()` hands back
      * the drawable's own internal `Rect` instance, so keeping that reference and re-applying it later
@@ -478,8 +523,33 @@ object MonetEngine : ApiFeature() {
      * measure size. The copy is what makes the restore real.
      */
     private fun renderCentrePixel(drawable: Drawable): Int? {
+        // Attempt 1 — unchanged from before: the drawable's own intrinsic size, clamped. When this
+        // yields a painted pixel the old behaviour is preserved exactly, so nothing that already
+        // measured correctly can move.
         val intrinsic = maxOf(drawable.intrinsicWidth, drawable.intrinsicHeight)
-        val size = intrinsic.coerceIn(MEASURE_MIN, MEASURE_MAX)
+        if (intrinsic > 0) {
+            renderAt(drawable, intrinsic.coerceIn(MEASURE_MIN, MEASURE_MAX))
+                ?.let { if ((it ushr 24) != 0) return it }
+        }
+        // Attempt 2/3 — sizes guaranteed to contain interior even under thick insets or borders.
+        // Reached only when attempt 1 was impossible (no intrinsic size) or came back transparent,
+        // i.e. exactly the cases the old code gave up on and silently left on the neutral solve.
+        for (size in intArrayOf(MEASURE_FALLBACK, MEASURE_RETRY)) {
+            renderAt(drawable, size)?.let {
+                if ((it ushr 24) != 0) {
+                    // Diagnostic: proves the retry path ran and at what size. Without it, a drawable
+                    // that only measures at a larger render is indistinguishable from one that
+                    // cannot be measured at all — the ambiguity that cost v3.13 a release.
+                    WeLogger.i(TAG, "pattern measure retry: ${drawable.javaClass.simpleName} at ${size}px")
+                    return it
+                }
+            }
+        }
+        return null
+    }
+
+    /** Renders [drawable] into a `size × size` bitmap and returns the centre pixel (bounds restored). */
+    private fun renderAt(drawable: Drawable, size: Int): Int? {
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         try {
             val saved = Rect(drawable.bounds)
