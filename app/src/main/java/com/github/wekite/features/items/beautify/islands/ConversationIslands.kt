@@ -6,9 +6,7 @@ import android.widget.BaseAdapter
 import android.widget.ListView
 import com.github.wekite.features.api.core.WeConversationApi
 import com.github.wekite.features.items.beautify.ListIslands
-import com.github.wekite.ui.utils.IslandPreset
 import com.github.wekite.ui.utils.IslandRowPosition
-import com.github.wekite.ui.utils.isGrouped
 import com.github.wekite.ui.utils.restoreIslandRow
 import com.github.wekite.ui.utils.styleIslandRow
 import com.github.wekite.utils.WeLogger
@@ -25,6 +23,9 @@ private val usernameFailures = ConcurrentHashMap.newKeySet<Class<*>>()
 /**
  * 主页会话列表绑定一行时调用。
  *
+ * 分组维度开启时，按「置顶 / 非置顶」把相邻行拼成两个岛：
+ * 顶部置顶区一个岛、下面普通区一个岛，这是用户最初点名的效果。
+ *
  * @param adapter `getView` 的 thisObject（会话适配器）
  * @param args    `getView` 的参数，args[0] 是 position
  */
@@ -34,30 +35,32 @@ fun applyConversationBind(
     adapter: Any?,
     args: Array<Any?>,
 ) {
-    if (!feature.isConversationEnabled) return
-    val preset = feature.preset
-    if (preset == IslandPreset.NO_LAYOUT) {
+    if (!feature.isConversationEnabled) {
         restoreIslandRow(row)
         return
     }
 
+    val shape = feature.shape
+    val grouped = feature.groupingEnabled
+
     val position = args.getOrNull(0) as? Int ?: return
     val talker = talkerAt(adapter, position)
-    val grouped = preset.isGrouped && talker != null
+    // 拿不到会话标识时无法判断置顶边界，这一行退化为独立卡片（不静默出错但也不误拼）。
+    val canGroup = grouped && talker != null
 
-    val pinned = if (grouped) WeConversationApi.isPinned(talker!!) else false
-    val previousPinned = if (grouped) {
+    val pinned = if (canGroup) WeConversationApi.isPinned(talker!!) else false
+    val previousPinned = if (canGroup) {
         talkerAt(adapter, position - 1)?.let { WeConversationApi.isPinned(it) }
     } else {
         null
     }
-    val nextPinned = if (grouped) {
+    val nextPinned = if (canGroup) {
         talkerAt(adapter, position + 1)?.let { WeConversationApi.isPinned(it) }
     } else {
         null
     }
 
-    val rowPosition = if (!grouped) {
+    val rowPosition = if (!canGroup) {
         IslandRowPosition.SINGLE
     } else {
         when {
@@ -70,10 +73,10 @@ fun applyConversationBind(
 
     val unread = feature.isUnreadHighlightEnabled && isUnread(adapter, position)
 
-    // 岛模式下隐藏行内原生分隔线（含置顶区与普通区的交界处）。
+    // 分组开时隐藏行内原生分隔线（含置顶区与普通区的交界处）。
     if (feature.suppressConversationDividers) hideInlineDividers(row)
 
-    styleIslandRow(row, preset, rowPosition, unread)
+    styleIslandRow(row, shape, canGroup, rowPosition, unread)
 }
 
 /**
@@ -119,7 +122,7 @@ private fun usernameOf(conversation: Any): String? {
             }
             { _: Any -> null }
         } else {
-            // Class<*> 上取到的字段是带 out 投影的泛型，直接调用 get 不被允许，按上游做法显式强转。
+            // Class<*> 上取到的字段是带 out 投影的泛型，直接调用 get 不被允许，显式强转。
             @Suppress("UNCHECKED_CAST")
             val typed = field as ReflectedField<Any>
             { instance: Any -> runCatching { typed.get(instance) as? String }.getOrNull() }
@@ -128,9 +131,7 @@ private fun usernameOf(conversation: Any): String? {
     return accessor(conversation)
 }
 
-private fun isUnread(adapter: Any?, position: Int): Boolean = unreadOf(adapter, position)
-
-private fun unreadOf(adapter: Any?, position: Int): Boolean {
+private fun isUnread(adapter: Any?, position: Int): Boolean {
     if (adapter == null || position < 0) return false
     val base = unwrapAdapter(adapter) as? BaseAdapter ?: return false
     val raw = position - headerCount(adapter)
@@ -153,8 +154,7 @@ private fun hideInlineDividers(row: View) {
     val listWidth = (row.parent as? ListView)?.width ?: row.rootView.width
     if (listWidth <= 0) return
     val maxHeight = (6f * row.resources.displayMetrics.density).toInt()
-    val candidates = collectDividers(row, row, maxHeight, listWidth)
-    candidates.forEach { it.visibility = View.GONE }
+    collectDividers(row, row, maxHeight, listWidth).forEach { it.visibility = View.GONE }
 }
 
 private fun collectDividers(
