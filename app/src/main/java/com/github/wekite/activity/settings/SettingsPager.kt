@@ -214,10 +214,11 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
             }
         }
 
-        // 更新
+        // 关于 (v3.19: 「检查更新」原为独立分区, 按用户要求并入此处)
         item {
-            MiuixSmallTitle(text = "更新", modifier = Modifier.padding(top = 12.dp))
+            MiuixSmallTitle(text = "关于", modifier = Modifier.padding(top = 12.dp))
             Card(modifier = Modifier.fillMaxWidth()) {
+                PrefArrow(title = "版本", summary = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", icon = MaterialSymbols.Outlined.Label)
                 PrefArrow(
                     title = "检查更新",
                     summary = "立即检查模块是否有新版本并自动下载",
@@ -229,14 +230,6 @@ fun SettingsPager(onOpenLicense: () -> Unit) {
                         )
                     },
                 )
-            }
-        }
-
-        // 关于
-        item {
-            MiuixSmallTitle(text = "关于", modifier = Modifier.padding(top = 12.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
-                PrefArrow(title = "版本", summary = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", icon = MaterialSymbols.Outlined.Label)
                 PrefArrow(title = "构建提交时间", summary = formatEpoch(BuildConfig.BUILD_TIMESTAMP, true), icon = MaterialSymbols.Outlined.Build_circle)
                 PrefArrow(
                     title = "开放源代码许可",

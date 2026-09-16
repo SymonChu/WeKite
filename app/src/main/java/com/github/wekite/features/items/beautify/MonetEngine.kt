@@ -272,9 +272,7 @@ object MonetEngine : ApiFeature() {
     private val solvedPatterns =
         java.util.Collections.synchronizedMap(java.util.WeakHashMap<Drawable, Boolean>())
 
-    /** Activity classes already probed by the `window bg probe` line (one line per activity class). */
-    private val windowBgProbed = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-
+    
     /**
      * Cache for [overlayColor]: the accent-derived overlay colour, keyed by the accent it came from
      * plus the dark/light mode it was solved for (the two have different values, see
@@ -855,22 +853,10 @@ object MonetEngine : ApiFeature() {
                     is GradientDrawable -> bg.color?.defaultColor
                     else -> null
                 }
-                // Diagnostic only (2026-09-16): this whole branch has reported ZERO `window ... tinted`
-                // lines in every log since it was written, which means the grey page plate it was
-                // written for is NOT reaching the `fill` above. The old code returned silently here,
-                // so "the window background is a bitmap/nine-patch/InsetDrawable" and "it is a colour
-                // but not a neutral" were indistinguishable. One line per activity class, and only
-                // when the branch does not fire, separates them without touching behaviour.
-                if (fill == null || !isOpaqueNeutral(fill)) {
-                    if (bg != null && windowBgProbed.add(activity.javaClass.name)) {
-                        val hex = fill?.let { "#%08x".format(it) } ?: "not-a-colour"
-                        WeLogger.i(
-                            TAG,
-                            "window bg probe: ${activity.javaClass.name} bg=${bg.javaClass.simpleName} fill=$hex",
-                        )
-                    }
-                    return@hookAfter
-                }
+                // Only an OPAQUE NEUTRAL window background is touched: an accented or branded one must
+                // keep its own colour. (v3.19 cleanup removed the `window bg probe` diagnostic that used
+                // to sit in this branch — the guard itself is NOT a diagnostic and must stay.)
+                if (fill == null || !isOpaqueNeutral(fill)) return@hookAfter
                 val mapped = recolorSurface(fill, surfaceTintFor(fill))
                 if (mapped == fill) return@hookAfter
                 runCatching {
@@ -961,15 +947,10 @@ object MonetEngine : ApiFeature() {
                 // `as?` not `as`: a wrong-overload bind would otherwise throw here (see the NOTE
                 // above) and abort the hook instead of failing loudly-but-safely.
                 val color = args[0] as? Int ?: return@hookBefore
-                if (color != DEFAULT_COLOR) {
-                    // If the hook is dispatching but this is the only line we ever see, the calls
-                    // we care about never reach it (e.g. JIT-inlined callers on a bridge without
-                    // deoptimization support).
-                    if (call == 1) {
-                        WeLogger.i(TAG, "Paint.setColor dispatched (first call #${Integer.toHexString(color)}), brand green not seen yet")
-                    }
-                    return@hookBefore
-                }
+                // ⚠️ Only the BRAND GREEN is replaced. This guard is load-bearing (v3.19 cleanup:
+                // a careless edit removed it together with the diagnostic that used to live here,
+                // which would have repainted EVERY Paint.setColor call with the accent).
+                if (color != DEFAULT_COLOR) return@hookBefore
                 val hits = paintHits.incrementAndGet()
                 if (hits == 1) {
                     WeLogger.i(TAG, "Paint.setColor brand green -> primary (first hit at call #$call)")
