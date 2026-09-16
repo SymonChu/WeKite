@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
+import android.graphics.Rect
 import android.util.SparseIntArray
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.BitmapDrawable
@@ -17,7 +18,6 @@ import android.graphics.drawable.LayerDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.Build
 import android.view.View
-import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -26,6 +26,7 @@ import dev.ujhhgtg.reflekt.reflekt
 import dev.ujhhgtg.reflekt.reflected.ReflectedMethod
 import dev.ujhhgtg.reflekt.utils.toClass
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.roundToInt
 import com.github.wekite.features.core.ApiFeature
 import com.github.wekite.features.core.Feature
 import com.github.wekite.ui.utils.theme.SeedResolver
@@ -67,17 +68,16 @@ object MonetEngine : ApiFeature() {
      * backgrounds (a row icon, a divider, a button) WITHOUT rejecting the plate itself.
      * Measured on the 1280x2800 device: the offending band is 1280 x 646 px = 100% x 23%.
      */
-    private const val PLATE_MIN_WIDTH_PERCENT = 0.9f
-    private const val PLATE_MIN_HEIGHT_PERCENT = 0.12f
 
     /** Max whole-plate reports per page (a page has ONE plate; two is slack for re-layout). */
-    private const val PLATE_PER_PAGE_MAX = 2
+
+    /** Size the source-pixel probe renders a pattern at (see [patternSourcePixel]). */
+    private const val PATTERN_MEASURE_PX = 64
+    private const val PATTERN_MEASURE_MIN = 8
 
     /** Upper bound on views the once-per-page plate sweep may visit (ANR guard). */
-    private const val PLATE_SWEEP_MAX_VIEWS = 4000
 
     /** Upper bound on lines the sweep may print per page (a long list has many full-width rows). */
-    private const val PLATE_SWEEP_MAX_LINES = 12
 
     /** WeChat's hardcoded brand green — the pixels we replace. */
     private const val DEFAULT_COLOR = -16268960 // 0xFF07C160
@@ -256,124 +256,24 @@ object MonetEngine : ApiFeature() {
      */
     private val patternKindLogged = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
-    /**
-     * Whole-plate reports already emitted for the CURRENT page, reset on every Activity.onCreate.
-     *
-     * ⚠️ Deliberately NOT deduped by class across pages. The v3.16 diagnostic deduped on the
-     * drawable/view class, so the page that happened to render those classes FIRST consumed the
-     * budget and every later page — including the one with the plate — printed nothing. Scoping the
-     * budget per page instead keeps the line count bounded (<= PLATE_PER_PAGE_MAX per page) while
-     * making it impossible for one page to silence another.
-     */
-    private val platePerPage = AtomicInteger(0)
 
+    /** `class:pixel` pairs already reported by the opaque-neutral replacement line (noise limit). */
+    private val patternNeutralFixed = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /**
+     * Pattern drawables already given the solved opaque-neutral filter.
+     *
+     * Bounds the cost of the pixel probe to ONCE PER DRAWABLE INSTANCE. That matters because this runs
+     * on the UI thread path (`onAttachedToWindow` fires per row while a list scrolls), and rendering a
+     * 64x64 bitmap per attach would be pure GC pressure. Rows share their drawables from the resource
+     * cache, so keying on the instance collapses that to one probe per distinct drawable. A WeakHashMap
+     * so a recycled drawable is not kept alive.
+     */
+    private val solvedPatterns =
+        java.util.Collections.synchronizedMap(java.util.WeakHashMap<Drawable, Boolean>())
 
     /** Activity classes already probed by the `window bg probe` line (one line per activity class). */
     private val windowBgProbed = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-
-    /**
-     * Diagnostic only: walks the FINAL layout once per page and reports every background whose shape
-     * could be the plate (full-width band). See the call site for why a settled-tree walk is needed
-     * rather than only hooking where a background is set.
-     *
-     * Read-only: touches no colour, no drawable, no layout. Capped at [PLATE_SWEEP_MAX_VIEWS] so a
-     * pathological tree cannot turn this into an ANR.
-     */
-    private fun sweepForPlate(activity: Activity, root: ViewGroup) {
-        val decor = activity.window?.decorView
-        val winW = decor?.width ?: 0
-        val winH = decor?.height ?: 0
-        if (winW <= 0 || winH <= 0) return
-        var lines = 0
-        val queue = ArrayDeque<View>()
-        queue.addLast(root)
-        var visited = 0
-        while (queue.isNotEmpty() && visited < PLATE_SWEEP_MAX_VIEWS) {
-            val v = queue.removeFirst()
-            visited++
-            val d = v.background
-            if (d != null) {
-                val b = d.bounds
-                val w = b.width()
-                val h = b.height()
-                if (w >= winW * PLATE_MIN_WIDTH_PERCENT && h >= winH * PLATE_MIN_HEIGHT_PERCENT &&
-                    v.javaClass.name.startsWith("com.tencent.mm")
-                ) {
-                    val idName = runCatching {
-                        if (v.id == View.NO_ID) "noid"
-                        else HostInfo.application.resources.getResourceEntryName(v.id)
-                    }.getOrDefault("noid")
-                    if (lines++ < PLATE_SWEEP_MAX_LINES) {
-                        WeLogger.i(
-                            TAG,
-                            "plate sweep: view=${v.javaClass.name}#$idName drawable=${d.javaClass.name} " +
-                                "bounds=${w}x$h win=${winW}x$winH " +
-                                "intrinsic=${d.intrinsicWidth}x${d.intrinsicHeight} opacity=${d.opacity}",
-                        )
-                    }
-                }
-            }
-            if (v is ViewGroup) {
-                for (i in 0 until v.childCount) queue.addLast(v.getChildAt(i))
-            }
-        }
-        // The window's own background is the other place a page-filling grey can live and it is NOT
-        // any View's `background`, so the tree walk above cannot see it. Report it here instead.
-        val windowBg = decor?.background
-        if (windowBg != null && lines < PLATE_SWEEP_MAX_LINES) {
-            WeLogger.i(
-                TAG,
-                "plate sweep: WINDOW bg drawable=${windowBg.javaClass.name} " +
-                    "win=${winW}x$winH intrinsic=${windowBg.intrinsicWidth}x${windowBg.intrinsicHeight} " +
-                    "opacity=${windowBg.opacity}",
-            )
-        }
-    }
-
-    /**
-     * Reports a background that could plausibly BE the contacts/profile "plate": the full-width grey
-     * band the user reports as too bright (v3.10 onward).
-     *
-     * ⚠️ What this replaced, and why (2026-09-16 — the same wrong lesson twice). The previous
-     * `bg identity` line keyed on `(view class#id, drawable class, size)` with a FLAT 60-line
-     * per-SESSION budget. On the device log that budget was spent within 2 s of cold start almost
-     * entirely on `bounds=0x0` rows, i.e. views that are not on screen and cannot be the plate; so
-     * when the user LATER opened the page, nothing was printed at all. Because the budget never
-     * refills inside a process, clearing the log and then swiping the page produced an EMPTY log
-     * (2026-09-16 09:23 — 5 lines). A budget that can only be spent is not a diagnostic.
-     *
-     * Fix: FILTER to the plate's shape, and SCOPE the budget per page.
-     * Rejected: `bounds` with zero width/height; narrower than [PLATE_MIN_WIDTH_PERCENT] of the
-     * window; shorter than [PLATE_MIN_HEIGHT_PERCENT] of the window; anything not drawn by WeChat
-     * (the module's own injected UI must never be recoloured anyway).
-     */
-    private fun logPlateCandidate(view: View?, drawable: Drawable?) {
-        if (view == null || drawable == null) return
-        if (platePerPage.get() >= PLATE_PER_PAGE_MAX) return
-        val bounds = drawable.bounds
-        val w = bounds.width()
-        val h = bounds.height()
-        if (w <= 0 || h <= 0) return
-        val activity = view.context as? Activity ?: return
-        val decor = activity.window?.decorView ?: return
-        val winW = decor.width
-        val winH = decor.height
-        if (winW <= 0 || winH <= 0) return
-        if (w < winW * PLATE_MIN_WIDTH_PERCENT) return
-        if (h < winH * PLATE_MIN_HEIGHT_PERCENT) return
-        if (!view.javaClass.name.startsWith("com.tencent.mm")) return
-        val idName = runCatching {
-            if (view.id == View.NO_ID) "noid" else HostInfo.application.resources.getResourceEntryName(view.id)
-        }.getOrDefault("noid")
-        if (platePerPage.incrementAndGet() > PLATE_PER_PAGE_MAX) return
-        WeLogger.i(
-            TAG,
-            "plate candidate: view=${view.javaClass.name}#$idName drawable=${drawable.javaClass.name} " +
-                "bounds=${w}x$h win=${winW}x$winH " +
-                "intrinsic=${drawable.intrinsicWidth}x${drawable.intrinsicHeight} " +
-                "opacity=${drawable.opacity}",
-        )
-    }
 
     /**
      * Cache for [overlayColor]: the accent-derived overlay colour, keyed by the accent it came from
@@ -394,7 +294,6 @@ object MonetEngine : ApiFeature() {
      * through untouched, so the current state is unwrapped.
      */
     private fun retargetBackground(drawable: Drawable?, surfaceHits: AtomicInteger, owner: View? = null) {
-        logPlateCandidate(owner, drawable)
         // ⚠️ MUST accept null. `View.setBackground(null)` is a legal call — Android's own
         // `View.<init>` and `View.setBackgroundDrawable` forward a possibly-null background, and
         // WeChat calls it on every inflate. Because the parameter is non-null in Kotlin, R8 can
@@ -459,6 +358,47 @@ object MonetEngine : ApiFeature() {
         if (drawable == null) return
         if (drawable is GradientDrawable && drawable.color != null) return   // plain fill: handled elsewhere
         val filter = drawable.colorFilter
+        val klass = drawable.javaClass.simpleName
+
+        // ── v3.18: an OPAQUE NEUTRAL pattern must be COLOUR-REPLACED, not overlaid ────────────────
+        // Measured on the profile page (2026-09-16, primary #00677E), four bands of the SAME screen:
+        //
+        //   band                  measured          model                                        err
+        //   white page            (224,249,254)     recolorSurface(#FFFFFF, 0.12)   = (224,249,255)  1
+        //   grey divider bands    (188,228,236)     recolorSurface(#EDEDED, 0.21)   = (187,228,237)  1
+        //   "we are not friends"  (236,247,251)     0.302*overlay + 0.698*#FFFFFF    = (234,247,250)  2
+        //   bottom plate          (223,234,238)     0.302*overlay + 0.698*#EDEDED    = (222,234,237)  1
+        //
+        // The last two are the reported defects, and BOTH are explained by ONE thing: their base
+        // colour was never replaced — only a 30.2% translucent overlay was laid on top, so the
+        // result decays back toward the ORIGINAL white/grey. (The overlay is harmless where the base
+        // was already recoloured, because the overlay colour equals the recoloured grey.)
+        //
+        // This is also why four releases of "measure better / tune the threshold" changed nothing:
+        // the hue was never wrong, the BASE was never replaced. And why the earlier measurement
+        // attempts could not even see these objects: the `already ours` bail-out above returns before
+        // any new code runs, so whatever is re-recoloured must be handled BEFORE that line.
+        if (!bitmapKindDeferred(drawable)) {
+            if (solvedPatterns.containsKey(drawable)) return   // already solved, keep our filter
+            val pixel = patternSourcePixel(drawable)
+            if (pixel != null && isOpaqueNeutral(pixel)) {
+                val target = recolorSurface(pixel, surfaceTintFor(pixel))
+                val solved = solveOverlayFor(target, pixel)
+                if (solved != null) {
+                    solvedPatterns[drawable] = true
+                    drawable.colorFilter = PorterDuffColorFilter(solved, PorterDuff.Mode.SRC_ATOP)
+                    if (patternNeutralFixed.add("$klass:${Integer.toHexString(pixel)}")) {
+                        WeLogger.i(
+                            TAG,
+                            "pattern opaque-neutral -> replaced: $klass src=#${Integer.toHexString(pixel)} " +
+                                "target=#${Integer.toHexString(target)} filter=#${Integer.toHexString(solved)}",
+                        )
+                    }
+                    return
+                }
+            }
+        }
+
         if (filter is PorterDuffColorFilter) return                          // already ours
         // Bright OPAQUE bitmaps get their own overlay (see SURFACE_OVERLAY_BITMAP_TINT): an unsee-through
         // bitmap has no semi-transparent pixels, so the overlay has to match the white plate underneath
@@ -476,10 +416,74 @@ object MonetEngine : ApiFeature() {
         // it took. The bitmap/page split rests on the class being right, and the previous log only
         // printed a single first-hit line, which cannot prove WHICH surface that was. Bounded to one
         // line per class so this stays ~a handful of lines per session.
-        val klass = drawable.javaClass.simpleName
         if (patternKindLogged.add(klass)) {
             WeLogger.i(TAG, "pattern overlay kind: $klass -> ${if (bitmapKind) "bitmap(white)" else "page(neutral)"}")
         }
+    }
+
+    /**
+     * True for drawables the colour-replacement path above must NOT take over.
+     *
+     * `BitmapDrawable` keeps the v3.11 white-surface overlay on purpose: the chat input bar's voice
+     * button is an OPAQUE WHITE bitmap whose base is a WHITE plate, so the overlay solution measured
+     * correct there (Δ0) and re-solving it for the grey page was the v3.10 regression. Half of a
+     * zero-delta measurement is not evidence, so that path is left untouched.
+     */
+    private fun bitmapKindDeferred(drawable: Drawable): Boolean = drawable is BitmapDrawable
+
+    /**
+     * Renders [drawable] small and returns its most common pixel — the pattern's own colour, or null
+     * when it cannot be read (no pixels drawn / fully transparent).
+     *
+     * The MODE is used rather than the centre pixel because these are 9-patches with insets: at 64px
+     * the centre of a bordered plate is its FILL, while a centre sample of a thin bordered shape could
+     * land on the border. The mode is also stable across instances, which is exactly what the earlier
+     * centre-pixel sampling was not (two `LayerDrawable`s measured (254,237,237) and (233,234,237),
+     * a 17-channel spread that made any threshold-based judgement unreliable).
+     *
+     * Bounds are saved and restored because `Drawable.setBounds` keeps the instance it is given.
+     */
+    private fun patternSourcePixel(drawable: Drawable): Int? = runCatching {
+        val intrinsic = maxOf(drawable.intrinsicWidth, drawable.intrinsicHeight)
+        val size = (if (intrinsic > 0) intrinsic else PATTERN_MEASURE_PX)
+            .coerceIn(PATTERN_MEASURE_MIN, PATTERN_MEASURE_PX)
+        val saved = Rect(drawable.bounds)
+        val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+        drawable.setBounds(0, 0, size, size)
+        drawable.draw(canvas)
+        drawable.bounds = saved
+        val pixels = IntArray(size * size)
+        bitmap.getPixels(pixels, 0, size, 0, 0, size, size)
+        bitmap.recycle()
+        val opaque = pixels.filter { (it ushr 24) == 0xFF }
+        if (opaque.isEmpty()) return@runCatching null
+        opaque.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
+    }.getOrNull()
+
+    /**
+     * Solves the filter colour that makes `[alpha]·filter + (1-[alpha])·[source]` equal [target].
+     *
+     * `SRC_ATOP` composites the filter over the source, so the source's own opaque pixel p becomes
+     * `0.302·f + 0.698·p` — solving for f is arithmetic, not tuning. Returns null when the solution
+     * would leave the 8-bit range (0..255), which means the source is too dark for this surface
+     * strength; the caller then keeps the existing overlay rather than inventing a colour.
+     */
+    private fun solveOverlayFor(target: Int, source: Int): Int? {
+        val a = (SURFACE_OVERLAY_ALPHA and 0xFF) / 255f
+        val inv = 1f - a
+        val out = IntArray(3)
+        for ((i, shift) in intArrayOf(16, 8, 0).withIndex()) {
+            val t = (target shr shift) and 0xFF
+            val s = (source shr shift) and 0xFF
+            val v = (t - inv * s) / a
+            // ⚠️ Tolerance, not a strict 0..255 test. A WHITE source solves to exactly 255.004 on the
+            // blue channel (t=255, s=255), because `inv` is 0.69804 rather than 0.698 — a strict test
+            // rejected it and silently skipped one of the two surfaces this release exists to fix.
+            if (v < -0.5f || v > 255.5f) return null
+            out[i] = v.roundToInt().coerceIn(0, 255)
+        }
+        return (SURFACE_OVERLAY_ALPHA shl 24) or (out[0] shl 16) or (out[1] shl 8) or out[2]
     }
 
     /**
@@ -845,31 +849,6 @@ object MonetEngine : ApiFeature() {
             val windowFixes = AtomicInteger(0)
             onCreate.hookAfter {
                 val activity = thisObject as? Activity ?: return@hookAfter
-                // New PAGE: the plate budget is per page, never per session (see logPlateCandidate).
-                platePerPage.set(0)
-                // ── Guaranteed page sweep (diagnostic only) ───────────────────────────────
-                // The `plate candidate` line can only fire where a background is SET or re-attached.
-                // On the 8.0.94 device the plate produced ZERO lines, because a page's backgrounds are
-                // applied during inflation — so the walk never reached it. Walk the FINAL layout once
-                // per page instead: after the first layout pass, visit every view and report any
-                // background matching the plate's shape. This does not depend on when (or whether) the
-                // background was set, which is the whole point — three releases all measured something
-                // that was not the plate.
-                val content = activity.findViewById<ViewGroup>(android.R.id.content)
-                if (content != null) {
-                    // ⚠️ NOT `content.post { }`: onCreate runs BEFORE the first layout traversal, so a
-                    // plain post can execute while decorView is still 0x0 — the sweep would then bail on
-                    // its own size guard and print nothing, which is exactly the failure mode this
-                    // release exists to fix. onGlobalLayout fires AFTER layout, so sizes are real.
-                    val observer = content.viewTreeObserver
-                    observer.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
-                        override fun onGlobalLayout() {
-                            val o = content.viewTreeObserver
-                            if (o.isAlive) o.removeOnGlobalLayoutListener(this)
-                            runCatching { sweepForPlate(activity, content) }
-                        }
-                    })
-                }
                 val bg = runCatching { activity.window?.decorView?.background }.getOrNull()
                 val fill = when (bg) {
                     is ColorDrawable -> bg.color
