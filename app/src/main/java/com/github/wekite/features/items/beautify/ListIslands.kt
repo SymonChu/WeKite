@@ -119,11 +119,16 @@ object ListIslands : ClickableFeature(), IResolveDex {
         }
     }
 
-    // 通讯录：内部 Fragment 的根视图（真列表 WxRecyclerView 在其中）
-    private val methodAddressFragmentLayoutView by dexMethod(allowFailure = true) {
+    // 通讯录：内部 Fragment 初始化列表的方法。
+    // ⚠️ 不能挂 getLayoutView() —— 它只返回 inflate 出来的布局，那一刻列表字段仍是 null
+    //（真机日志实证 `address RecyclerView not found under fragment root`）。
+    // 字节码实测 `l0(Bundle)` 才执行 findViewById->WxRecyclerView 赋值 + setAdapter +
+    // setLayoutManager + addView，是整条链上第一个「列表已存在」的时点。
+    private val methodAddressFragmentInitList by dexMethod(allowFailure = true) {
         matcher {
             declaredClass = "com.tencent.mm.ui.contact.address.MvvmAddressUIFragment"
-            name = "getLayoutView"
+            name = "l0"
+            paramTypes("android.os.Bundle")
         }
     }
 
@@ -153,14 +158,16 @@ object ListIslands : ClickableFeature(), IResolveDex {
             armed++
         }
 
-        if (!methodAddressFragmentLayoutView.isPlaceholder) {
-            methodAddressFragmentLayoutView.hookAfter {
-                applyAddressIslands(this@ListIslands, result as? View)
+        if (!methodAddressFragmentInitList.isPlaceholder) {
+            methodAddressFragmentInitList.hookAfter {
+                // thisObject 是 Fragment 实例：按类型直接读它那个 WxRecyclerView 字段，
+                // 比在视图树里搜索可靠（v3.20/v3.21 两次失败同源于时序与层级假设）。
+                applyAddressIslands(this@ListIslands, thisObject)
             }
             armed++
         } else {
             // 明确记录「没挂上」，供真机日志一眼区分「挂钩失效」与「挂上了但分组判断不对」。
-            WeLogger.w(TAG, "address fragment hook unavailable (getLayoutView not matched)")
+            WeLogger.w(TAG, "address fragment hook unavailable (l0(Bundle) not matched)")
         }
 
         WeLogger.i(TAG, "list islands armed: $armed hook(s)")

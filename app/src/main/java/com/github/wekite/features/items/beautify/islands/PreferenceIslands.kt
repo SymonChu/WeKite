@@ -7,8 +7,12 @@ import com.github.wekite.ui.utils.IslandRowPosition
 import com.github.wekite.ui.utils.restoreIslandRow
 import com.github.wekite.ui.utils.styleIslandRow
 import com.github.wekite.utils.WeLogger
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "PreferenceIslands"
+
+/** 一次性诊断开关（避免每行都打日志刷屏）。 */
+private val diagnosed = AtomicBoolean(false)
 
 /**
  * 「发现」与「我」页的圆角岛实现。
@@ -37,6 +41,17 @@ fun applyPreferenceRow(feature: ListIslands, row: View, adapter: Any?, position:
     if (!feature.isDiscoverMeEnabled) {
         restoreIslandRow(row)
         return
+    }
+
+    // 一次性诊断：让真机日志能判断「发现/我页到底处理了多少行」，而不用靠肉眼猜。
+    // 只在首次调用时打印，避免刷屏。
+    if (diagnosed.compareAndSet(false, true)) {
+        val count = runCatching { (adapter as? BaseAdapter)?.count }.getOrNull() ?: -1
+        WeLogger.i(
+            TAG,
+            "preference islands active: rows=$count firstPosition=$position " +
+                "isCategory=${isCategoryAt(adapter, position)}",
+        )
     }
 
     val shape = feature.shape

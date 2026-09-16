@@ -21,48 +21,85 @@ private val installedRecyclers = Collections.synchronizedSet(
 /**
  * 通讯录页的圆角岛实现。
  *
- * ⚠️ v3.21 重写（v3.20 用户实测「通讯录不生效」）：
- * v3.20 挂在外层 Activity `AddressUI.onCreate`，那时内部 Fragment 的列表尚未建立。
- * 离线核验 8.0.77：真列表是 `MvvmAddressUIFragment` 内的 `WxRecyclerView`
- * （该类中仅 `l0(Bundle)` 与 `D0(I)` 触碰它）。现在由该 Fragment 的根视图向下找，
- * 与真列表同源。
+ * ## 挂钩时机（两次踩坑后定案，2026-09-16 离线实测）
+ * - v3.20 挂外层 Activity `AddressUI.onCreate` —— 更早，列表根本没建
+ * - v3.21 挂 `MvvmAddressUIFragment.getLayoutView()` —— **只返回 inflate 出来的布局**，
+ *   那一刻列表字段仍是 null。真机日志实证：
+ *   `address RecyclerView not found under fragment root; contacts islands skipped`
+ * - **v3.22 起挂 `MvvmAddressUIFragment.l0(Bundle)`** —— 字节码实测这里才执行
+ *   `findViewById(...) -> WxRecyclerView` 赋值给字段、随后 `setAdapter` / `setLayoutManager` /
+ *   `addView`。是整条链上**第一个列表已存在**的时点。
  *
- * 分组规则（用户明确指定）：
- *  1. 「新的朋友」→「服务号」为**一块**（微信这批固定入口条目之间没有分组标题）
- *  2. 「我的企业 及 企业联系人」为**一块**
- *  3. 下面联系人按 **A / B / C / D …** 每个字母**各自一块**
+ * ## 取列表的方式
+ * 优先**按类型直接读该 Fragment 的字段**（那个字段就是 `WxRecyclerView`），
+ * 而不是在视图树里递归搜索 —— 后者会受时序与层级变化影响，是前两次失败的同源原因。
+ * 字段名是混淆的（当前为 `p`），所以按**类型**而非名字匹配，换版本不受名字变化影响。
  */
-fun applyAddressIslands(feature: ListIslands, fragmentRoot: View?) {
+fun applyAddressIslands(feature: ListIslands, fragment: Any?) {
     if (!feature.isContactsEnabled) return
-    val recycler = fragmentRoot?.let { findRecyclerView(it) }
-    if (recycler == null) {
-        WeLogger.w(TAG, "address RecyclerView not found under fragment root; contacts islands skipped")
+    if (fragment == null) {
+        WeLogger.w(TAG, "address fragment is null; contacts islands skipped")
         return
     }
-    styleVisibleChildren(feature, recycler)
 
-    if (installedRecyclers.add(recycler)) {
-        recycler.addOnChildAttachStateChangeListener(
-            object : RecyclerView.OnChildAttachStateChangeListener {
-                override fun onChildViewAttachedToWindow(view: View) {
-                    styleVisibleChildren(feature, recycler)
-                }
-
-                override fun onChildViewDetachedFromWindow(view: View) = Unit
-            },
-        )
-        recycler.addOnScrollListener(
-            object : RecyclerView.OnScrollListener() {
-                override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
-                    styleVisibleChildren(feature, recycler)
-                }
-            },
-        )
-        recycler.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            styleVisibleChildren(feature, recycler)
-        }
-        WeLogger.i(TAG, "address islands attached to RecyclerView")
+    val recycler = recyclerOfFragment(fragment)
+    if (recycler == null) {
+        WeLogger.w(TAG, "address WxRecyclerView field not found on fragment; contacts islands skipped")
+        return
     }
+    attach(feature, recycler)
+}
+
+/** 从 Fragment 实例上按类型取那个 `WxRecyclerView` 字段（含父类链）。 */
+private fun recyclerOfFragment(fragment: Any): RecyclerView? {
+    var cls: Class<*>? = fragment.javaClass
+    while (cls != null) {
+        for (field in cls.declaredFields) {
+            if (!RecyclerView::class.java.isAssignableFrom(field.type)) continue
+            val value = runCatching {
+                field.isAccessible = true
+                field.get(fragment)
+            }.getOrNull()
+            if (value is RecyclerView) return value
+        }
+        cls = cls.superclass
+    }
+    // 退化路径：字段取不到时，再从其 View 树里找一次（l0 已 addView，此时应已存在）。
+    val root = runCatching {
+        fragment.javaClass.getMethod("getView").invoke(fragment) as? View
+    }.getOrNull()
+    return root?.let { findRecyclerView(it) }
+}
+
+private fun attach(feature: ListIslands, recycler: RecyclerView) {
+    styleVisibleChildren(feature, recycler)
+    if (!installedRecyclers.add(recycler)) return
+
+    recycler.addOnChildAttachStateChangeListener(
+        object : RecyclerView.OnChildAttachStateChangeListener {
+            override fun onChildViewAttachedToWindow(view: View) {
+                styleVisibleChildren(feature, recycler)
+            }
+
+            override fun onChildViewDetachedFromWindow(view: View) = Unit
+        },
+    )
+    recycler.addOnScrollListener(
+        object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
+                styleVisibleChildren(feature, recycler)
+            }
+        },
+    )
+    recycler.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+        styleVisibleChildren(feature, recycler)
+    }
+    // ⚠️ l0() 返回时子项可能尚未完成首次布局（childCount=0），
+    // 若那一刻什么都没处理，再补一次异步处理，避免「挂钩对了但没效果」。
+    if (recycler.childCount == 0) {
+        recycler.post { styleVisibleChildren(feature, recycler) }
+    }
+    WeLogger.i(TAG, "address islands attached (children=${recycler.childCount})")
 }
 
 private fun styleVisibleChildren(feature: ListIslands, recycler: RecyclerView) {
@@ -117,7 +154,7 @@ private fun styleVisibleChildren(feature: ListIslands, recycler: RecyclerView) {
  *  - 字母分组标题行 → `alpha:A` / `alpha:B` …，于是每个字母自成一块
  *  - 含「我的企业」的行（我的企业 / 企业联系人）→ `mine`，这两项合为一块
  *  - 其余行（联系人条目、新的朋友~服务号这批固定入口）→ null，继承上一个指纹；
- *    开头这批固定入口因无前置指纹，继承初值 `entry`，于是「新的朋友 →≥ 服务号」自成一块
+ *    开头这批固定入口因无前置指纹，继承初值 `entry`，于是「新的朋友 → 服务号」自成一块
  */
 private fun ownGroupKeyOf(row: View): String? {
     if (isSectionHeaderRow(row)) {
