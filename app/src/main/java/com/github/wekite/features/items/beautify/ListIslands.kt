@@ -4,7 +4,6 @@ import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.height
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
@@ -20,13 +19,14 @@ import com.github.wekite.features.core.ClickableFeature
 import com.github.wekite.features.core.Feature
 import com.github.wekite.features.items.beautify.islands.applyAddressIslands
 import com.github.wekite.features.items.beautify.islands.applyConversationBind
+import com.github.wekite.features.items.beautify.islands.registerOtherDevicesBanner
 import com.github.wekite.features.items.beautify.islands.applyPreferenceRow
+import com.github.wekite.features.items.beautify.islands.styleConversationContainer
 import com.github.wekite.preferences.WePrefs
 import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.content.dialogListItemColors
-import com.github.wekite.ui.content.dialogRadioButtonColors
 import com.github.wekite.ui.content.dialogSwitchColors
 import com.github.wekite.ui.utils.IslandShape
 import com.github.wekite.ui.utils.ListItem
@@ -34,22 +34,26 @@ import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
 
 /**
- * 列表圆角岛 —— 把微信列表页的行渲染成圆角卡片 / 圆角「岛」。
+ * 圆角卡片 —— 把微信列表页的行渲染成圆角卡片 / 圆角「块」。
  *
- * ⚠️ v3.21 按用户实测反馈重做（v3.20 的发现页/通讯录无效）：
- *  - 发现 + 我：改挂 **Preference 适配器 `ui.base.preference.h0` 的 `getView`**（条目级），
- *    不再去视图树里找 ListView（v3.20 日志实测 `preference ListView not found`）。
- *    分组边界用权威数据判定：`adapter.getItem(position)` 是否为 `PreferenceCategory`。
- *  - 通讯录：改挂 **`MvvmAddressUIFragment.getLayoutView`**，从该 Fragment 自己的根视图向下
- *    找 `WxRecyclerView`（v3.20 挂在外层 `AddressUI.onCreate`，那时列表尚未建立）。
- *  - 分组与卡片样式**解耦**：分组是独立开关，可与任意卡片样式组合
- *    （用户要求「置顶分组岛要与其他几个选项同时可以生效，而不是一个单独的功能」）。
+ * 原名「列表圆角岛」，v3.24 按用户要求改名（内部类名与 pref key 保持不变，
+ * 以免丢掉用户已保存的设置）。
+ *
+ * ⚠️ v3.24 按用户真机截图逐条重做（v3.20~v3.23 四版都没解决的那批问题）：
+ *  - **岛内那条细线**：是**我们自己的描边**。GradientDrawable 只能整圈描边，
+ *    同一块内相邻两行各画一圈 1dp，接缝处叠成一条 3~4px 深线。改为自绘
+ *    「只画外轮廓」（见 `ListIslandStyle.kt` 的 `IslandCardDrawer`）。
+ *  - **空白卡片**：微信的留白占位行照样走 getView，被一视同仁套了卡片。
+ *    改为「行内没有可见内容 ⇒ 不套卡 + 视为分组边界」（`hasVisibleContent`）。
+ *  - **分组逻辑从「按 adapter position 逐行」改为「按容器可见子项统一分组」**
+ *    （`IslandListStyler`）：这样才能看见**表头**（「我」页头像区、主页设备横幅），
+ *    也修掉 RecyclerView 复用行导致的位置错位。
  */
 @Feature(
-    name = "列表圆角岛",
+    name = "圆角卡片",
     categories = ["界面美化"],
     description = "把主页会话列表、通讯录、发现和我页的列表行渲染成圆角卡片；" +
-        "置顶与非置顶会话、通讯录分组、我发现页分组都可各自成为一个圆角岛",
+        "置顶与非置顶会话、通讯录分组、我发现页分组都可各自成为一个圆角块",
 )
 object ListIslands : ClickableFeature(), IResolveDex {
 
@@ -57,10 +61,10 @@ object ListIslands : ClickableFeature(), IResolveDex {
 
     // ---------------------------------------------------------------- 设置项
 
-    /** 卡片样式（圆角 / 内缩 / 底色）。 */
+    /** 卡片样式。v3.24 起只剩一档，保留 pref key 以兼容旧值。 */
     private var shapeName by WePrefs.prefOption("list_islands_shape", IslandShape.ROUNDED_CARD.name)
 
-    /** 「分组」是独立维度，可与任意样式组合。 */
+    /** 「分组」是独立维度：开 = 相邻行拼成整块；关 = 每行各自一张卡片。 */
     private var grouping by WePrefs.prefOption("list_islands_grouping", true)
 
     /** 未读会话高亮（仅主页生效）。 */
@@ -71,18 +75,19 @@ object ListIslands : ClickableFeature(), IResolveDex {
     private var contactsPageEnabled by WePrefs.prefOption("list_islands_page_contacts", true)
     private var discoverMePageEnabled by WePrefs.prefOption("list_islands_page_discover_me", true)
 
+    /** 微信设置的下级页面（同样是 Preference 列表），用同一个开关。 */
+    private var settingsPageEnabled by WePrefs.prefOption("list_islands_page_settings", true)
+
     val shape: IslandShape
         get() = IslandShape.entries.firstOrNull { it.name == shapeName } ?: IslandShape.ROUNDED_CARD
 
     val groupingEnabled: Boolean get() = grouping
 
     internal val isConversationEnabled: Boolean get() = isEnabled && conversationPageEnabled
+    internal val isUnreadHighlightEnabled: Boolean get() = highlightUnread
     internal val isContactsEnabled: Boolean get() = isEnabled && contactsPageEnabled
     internal val isDiscoverMeEnabled: Boolean get() = isEnabled && discoverMePageEnabled
-    internal val isUnreadHighlightEnabled: Boolean get() = highlightUnread
-
-    /** 分组开时行内的原生分隔线会破坏观感，由本功能接管隐藏（仅主页）。 */
-    internal val suppressConversationDividers: Boolean get() = grouping
+    internal val isSettingsEnabled: Boolean get() = isEnabled && settingsPageEnabled
 
     // ---------------------------------------------------------------- 挂钩点
 
@@ -110,7 +115,21 @@ object ListIslands : ClickableFeature(), IResolveDex {
         }
     }
 
-    // 发现 + 我：Preference 适配器（条目级，一处挂钩覆盖两页）
+    // 「已登录 N 台其他设备」横幅：复用「隐藏其他设备横幅」已验证命中的锚点，
+    // 但它设在 setVisibility 上——我们改成 hookAfter 拿 thisObject（横幅 View 实例）。
+    private val methodOtherOnlineBannerSetVisibility by dexMethod(allowFailure = true) {
+        searchPackages("com.tencent.mm.ui.conversation.banner")
+        matcher {
+            paramTypes("int")
+            returnType = "void"
+            usingEqStrings(
+                "com/tencent/mm/ui/conversation/banner/OtherOnlineBanner",
+                "setVisibility",
+            )
+        }
+    }
+
+    // 发现 + 我 + 微信设置下级页：Preference 适配器（条目级，一处挂钩覆盖多页）
     private val methodPreferenceAdapterGetView by dexMethod(allowFailure = true) {
         matcher {
             declaredClass = "com.tencent.mm.ui.base.preference.h0"
@@ -149,6 +168,17 @@ object ListIslands : ClickableFeature(), IResolveDex {
         hookConversationGetView(methodConversationWithCacheGetView)
         hookConversationGetView(methodMvvmConversationGetView)
 
+        // ⚠️ 这个 hook 在**列表装进 activity 之前**就跑了（那一刻横幅 height/width 都是 0），
+        // 所以这里只登记「这是横幅」，真正的套卡由会话容器跑分组时补做
+        // （见 ConversationIslands 的 bannerViews：容器会跳过它、由本模块单独套卡）。
+        if (!methodOtherOnlineBannerSetVisibility.isPlaceholder) {
+            methodOtherOnlineBannerSetVisibility.hookAfter {
+                val banner = thisObject as? View ?: return@hookAfter
+                registerOtherDevicesBanner(banner)
+            }
+            armed++
+        }
+
         if (!methodPreferenceAdapterGetView.isPlaceholder) {
             methodPreferenceAdapterGetView.hookAfter {
                 val row = result as? View ?: return@hookAfter
@@ -175,7 +205,8 @@ object ListIslands : ClickableFeature(), IResolveDex {
             TAG,
             "list islands config: shape=${shape.name} grouping=$grouping " +
                 "pages[chat=$conversationPageEnabled contacts=$contactsPageEnabled " +
-                "discoverMe=$discoverMePageEnabled] unreadHighlight=$highlightUnread",
+                "discoverMe=$discoverMePageEnabled settings=$settingsPageEnabled] " +
+                "unreadHighlight=$highlightUnread",
         )
     }
 
@@ -187,46 +218,26 @@ object ListIslands : ClickableFeature(), IResolveDex {
 
     override fun onClick(context: ComponentActivity) {
         showComposeDialog(context) {
-            var shapeInput by remember { mutableStateOf(shape) }
             var groupingInput by remember { mutableStateOf(grouping) }
             var unreadInput by remember { mutableStateOf(highlightUnread) }
             var conversationInput by remember { mutableStateOf(conversationPageEnabled) }
             var contactsInput by remember { mutableStateOf(contactsPageEnabled) }
             var discoverMeInput by remember { mutableStateOf(discoverMePageEnabled) }
+            var settingsInput by remember { mutableStateOf(settingsPageEnabled) }
 
             AlertDialogContent(
-                title = { Text("列表圆角岛") },
+                title = { Text("圆角卡片") },
                 text = {
                     DefaultColumn {
                         // ── 维度一：分组（与应用范围无关，四个页面共用） ──
                         SwitchRow(
-                            title = "分组显示为整块岛",
+                            title = "相邻行显示为整块卡片",
                             checked = groupingInput,
                             onToggle = {
                                 groupingInput = !groupingInput
                                 grouping = groupingInput
                             },
                         )
-                        // ── 维度二：卡片样式 ──
-                        IslandShape.entries.forEach { entry ->
-                            ListItem(
-                                colors = dialogListItemColors(),
-                                modifier = Modifier
-                                    .height(48.dp)
-                                    .clickable {
-                                        shapeInput = entry
-                                        shapeName = entry.name
-                                    },
-                                leadingContent = {
-                                    RadioButton(
-                                        selected = shapeInput == entry,
-                                        onClick = null,
-                                        colors = dialogRadioButtonColors(),
-                                    )
-                                },
-                                content = { Text(entry.displayName) },
-                            )
-                        }
                         SwitchRow(
                             title = "高亮未读会话（仅主页）",
                             checked = unreadInput,
@@ -260,6 +271,14 @@ object ListIslands : ClickableFeature(), IResolveDex {
                                 discoverMePageEnabled = discoverMeInput
                             },
                         )
+                        SwitchRow(
+                            title = "应用于微信设置的下级菜单",
+                            checked = settingsInput,
+                            onToggle = {
+                                settingsInput = !settingsInput
+                                settingsPageEnabled = settingsInput
+                            },
+                        )
                     }
                 },
                 dismissButton = {
@@ -280,11 +299,4 @@ object ListIslands : ClickableFeature(), IResolveDex {
             content = { Text(title) },
         )
     }
-
-    private val IslandShape.displayName: String
-        get() = when (this) {
-            IslandShape.ROUNDED_CARD -> "圆角卡片（圆角 14dp）"
-            IslandShape.COMPACT -> "紧凑圆角（圆角 10dp）"
-            IslandShape.MINIMAL -> "极简（圆角 6dp）"
-        }
 }

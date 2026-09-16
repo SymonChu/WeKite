@@ -1,95 +1,120 @@
 package com.github.wekite.features.items.beautify.islands
 
 import android.view.View
+import android.view.ViewGroup
 import android.widget.BaseAdapter
 import com.github.wekite.features.items.beautify.ListIslands
-import com.github.wekite.ui.utils.IslandRowPosition
-import com.github.wekite.ui.utils.restoreIslandRow
-import com.github.wekite.ui.utils.styleIslandRow
 import com.github.wekite.utils.WeLogger
+import java.util.Collections
+import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 private const val TAG = "PreferenceIslands"
 
-/** 一次性诊断开关（避免每行都打日志刷屏）。 */
-private val diagnosed = AtomicBoolean(false)
+private val diagClasses = Collections.synchronizedSet(
+    Collections.newSetFromMap(WeakHashMap<Class<*>, Boolean>()),
+)
+private val warnClasses = Collections.synchronizedSet(
+    Collections.newSetFromMap(WeakHashMap<Class<*>, Boolean>()),
+)
+private val blankLogged = AtomicBoolean(false)
 
 /**
- * 「发现」与「我」页的圆角岛实现。
+ * 「发现」「我」以及**微信设置下级页面**的圆角卡片实现。
  *
- * ⚠️ v3.21 重写。v3.20 走「先在视图树里找 ListView」的路线，真机日志实测
- * `preference ListView not found` → 发现页完全无效。
- * 离线核验 8.0.77 后确认：微信的 Preference 列表由
- * `com.tencent.mm.ui.base.preference.h0`（继承 `BaseAdapter`）逐条目渲染，
- * 根本不需要那个 ListView。
+ * ## 挂钩点
+ * 微信的 Preference 列表由 `com.tencent.mm.ui.base.preference.h0`（继承 `BaseAdapter`）
+ * 逐条目渲染，**没有 ListView 可找** —— v3.20 走视图树找 ListView，真机日志实测
+ * `preference ListView not found` → 整页无效。现在挂 `h0.getView`，每次绑定拿到
+ * 「行 View」，再由行向上找到它所属的容器，交给 [ensureContainerStyled] 统一处理。
  *
- * 现在挂 `h0.getView`，每次绑定直接拿到「行 View + position」。
+ * ## 为什么不在这一层分组（v3.24 重写）
+ * v3.21 在这一层用「上一条 / 下一条 item 的类名是否含 `Category`」推断自己在块内的
+ * 位置，实测两个漏洞：
+ * 1. **空白占位行判不出来**：item 是 Preference 对象，没有「界面上有没有东西可看」
+ *    的概念。v3.23 截图实测：发现页「朋友圈」下方一张 **81dp 全空**的卡
+ *    （y=584..861 内 0 个暗像素）、我页「设置」下方一张约 35dp 的空卡。
+ * 2. **块间留白认不出来**：只按 item 相邻关系推，认不出真正的「页面空白」。
  *
- * ## 分组判据（v3.21 修正的关键点）
- * 微信偏好页用**多种** Category 类区分区块：`PreferenceCategory` /
- * `PreferenceSmallCategory`（小组间距）/ `PreferenceTitleCategory` / `PreferenceFooterCategory`
- * 等。v3.20 只认 `PreferenceCategory`，而「我」页**根本不引用**它
- * （离线实测 `MoreTabUI` 零命中）→ 我页切不出块。
+ * 现在改成：这一层只负责**发现容器 + 判定这是哪个页面**，分组交给
+ * [ensureContainerStyled] 按容器可见子项做，边界 = 「没有可见内容」的子项。
+ * 这样同一套代码顺带覆盖了**微信设置的下级菜单**（用户点名的第 5 条）。
  *
- * 现改为：**凡 item 类名含 `Category` 的行都视为分组边界，且该行不套卡片**
- * —— 这类行本身就是区块之间的间距/小标题，保持透明，让留白自然形成块与块之间的缝隙，
- * 从而复现微信自己的分块结构（「我」页即用户说的那几大块）。
- *
- * 发现页与「我」页共用同一个适配器类，一处挂钩同时覆盖两页。
+ * ## 页面归属（发现/我 vs 微信设置）
+ * `h0` 适配器被「发现」「我」和微信设置的多级页面共用，无法从适配器区分，
+ * 因此**按行 View 的祖先链类名**判断：祖先里出现 `setting` 归微信设置页，
+ * 否则归发现/我。两个开关各自控制，互不干扰。
  */
 fun applyPreferenceRow(feature: ListIslands, row: View, adapter: Any?, position: Int) {
-    if (!feature.isDiscoverMeEnabled) {
-        restoreIslandRow(row)
+    if (!feature.isDiscoverMeEnabled && !feature.isSettingsEnabled) return
+
+    val container = findListContainer(row)
+    if (container == null) {
+        if (warnClasses.add(row.javaClass)) {
+            WeLogger.w(TAG, "preference list container not found from row ${row.javaClass.name}")
+        }
         return
     }
 
-    // 一次性诊断：让真机日志能判断「发现/我页到底处理了多少行」，而不用靠肉眼猜。
-    // 只在首次调用时打印，避免刷屏。
-    if (diagnosed.compareAndSet(false, true)) {
+    val inSettings = isInsideSettingsPage(row)
+    if (inSettings && !feature.isSettingsEnabled) return
+    if (!inSettings && !feature.isDiscoverMeEnabled) return
+
+    if (diagClasses.add(container.javaClass)) {
         val count = runCatching { (adapter as? BaseAdapter)?.count }.getOrNull() ?: -1
         WeLogger.i(
             TAG,
             "preference islands active: rows=$count firstPosition=$position " +
-                "isCategory=${isCategoryAt(adapter, position)}",
+                "container=${container.javaClass.name} children=${container.childCount} " +
+                "settingsPage=$inSettings",
         )
     }
 
-    val shape = feature.shape
-    val grouped = feature.groupingEnabled
+    ensureContainerStyled(
+        feature = feature,
+        container = container,
+        // 发现/我/设置下级页：不设「章节标题」边界，整屏内容连成一块，
+        // 留白行（没有可见内容）自然把块切开。
+        groupStart = GroupStart { _, _ -> false },
+        excluded = ExcludedRow { _, child ->
+            if (hasVisibleContent(child)) {
+                false
+            } else {
+                if (blankLogged.compareAndSet(false, true)) {
+                    WeLogger.i(TAG, "blank row left untouched: ${child.javaClass.name}")
+                }
+                true
+            }
+        },
+    )
+}
 
-    // 分组边界行（任意 *Category）本身不套卡片，让它保持原样的间距作用。
-    if (grouped && isCategoryAt(adapter, position)) {
-        styleIslandRow(row, shape, grouped = false, position = IslandRowPosition.SINGLE)
-        // 间距行不应有自己的卡片外观，直接还原成原样最稳。
-        restoreIslandRow(row)
-        return
-    }
-
-    val rowPosition = if (!grouped) {
-        IslandRowPosition.SINGLE
-    } else {
-        // 上一个边界（或列表开头）之后的第一个内容行 = 块首；下一个边界之前 = 块尾。
-        // 「甲」方案：头像区（AccountInfoPreference，不带 Category 标记）若被 Category
-        // 行夹在中间，就会自然成为 SINGLE —— 即它自己也成一张圆角卡片，
-        // 于是「我」页稳定分成 4 块（头像 / 服务 / 收藏那组 / 设置）。
-        val prevIsBoundary = position == 0 || isCategoryAt(adapter, position - 1)
-        val nextIsBoundary = isCategoryAt(adapter, position + 1)
-        when {
-            prevIsBoundary && nextIsBoundary -> IslandRowPosition.SINGLE
-            prevIsBoundary -> IslandRowPosition.FIRST
-            nextIsBoundary -> IslandRowPosition.LAST
-            else -> IslandRowPosition.MIDDLE
+/**
+ * 这一行是否属于**微信设置**体系（而非「发现」「我」tab）。
+ *
+ * 从行 View 往上走，看祖先容器的类名：微信设置的页面分布在
+ * `com.tencent.mm.plugin.setting.*` 下，而「发现」「我」是
+ * `com.tencent.mm.ui.FindMoreFriendsUI` / `MoreTabUI`。走到某个容器类名里
+ * 出现 `setting` 即判为设置页；遇到已知的 tab 页则判为否。
+ */
+private fun isInsideSettingsPage(row: View): Boolean {
+    var current: View? = row
+    var depth = 0
+    while (current != null && depth < 24) {
+        val name = current.javaClass.name
+        if (name.contains("FindMoreFriends", ignoreCase = true) ||
+            name.contains("MoreTab", ignoreCase = true)
+        ) {
+            return false
         }
+        if (name.contains("setting", ignoreCase = true) && !name.startsWith("android.")) {
+            return true
+        }
+        current = current.parent as? View
+        depth++
     }
-
-    styleIslandRow(row, shape, grouped, rowPosition)
+    return false
 }
 
-/** 该 position 是否为分组边界行（任意 `*Category` 类型）。 */
-private fun isCategoryAt(adapter: Any?, position: Int): Boolean {
-    if (adapter == null || position < 0) return false
-    val base = adapter as? BaseAdapter ?: return false
-    if (position >= base.count) return true
-    val item = runCatching { base.getItem(position) }.getOrNull() ?: return false
-    return item.javaClass.name.contains("Category")
-}
+/** 供分组逻辑复用：容器当前是否一个子项都没有（还没渲染）。 */
+internal fun isEmptyContainer(container: ViewGroup): Boolean = container.childCount == 0

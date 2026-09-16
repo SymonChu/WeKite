@@ -4,62 +4,37 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import com.github.wekite.features.items.beautify.ListIslands
-import com.github.wekite.ui.utils.IslandRowPosition
-import com.github.wekite.ui.utils.restoreIslandRow
-import com.github.wekite.ui.utils.styleIslandRow
 import com.github.wekite.utils.WeLogger
-import java.util.Collections
-import java.util.WeakHashMap
 
 private const val TAG = "AddressIslands"
 
-/** 宿主通讯录列表的真实类名（字段类型 = 它）。 */
-private const val HOST_LIST_CLASS = "com.tencent.mm.view.recyclerview.WxRecyclerView"
-/** androidx 列表基类名，用于「按名字」识别任何列表实现。 */
-private const val RECYCLER_VIEW_CLASS = "androidx.recyclerview.widget.RecyclerView"
-
 /**
- * ⚠️⚠️ **判宿主对象类型只能比类名字符串，绝对不能用 `is` / `isAssignableFrom`**（v3.22 血案）
- *
- * 宿主对象由**微信的 ClassLoader** 加载，而模块代码里看到的
- * `androidx.recyclerview.widget.RecyclerView` 来自**模块自己的 ClassLoader** ——
- * 两者是**两个不同的 Class 对象**，所以：
- *
- * ```
- * RecyclerView::class.java.isAssignableFrom(field.type)   // 宿主字段类型 -> 恒 false
- * value is RecyclerView                                   // 宿主实例   -> 恒 false
- * ```
- *
- * v3.22 的失败正是这个：字段 `p` 明明就是 `WxRecyclerView`，却被判据筛掉，
- * 日志只留下 `address WxRecyclerView field not found on fragment`；**同一条错误也吃掉了
- * 视图树退化路径**（`root is RecyclerView`），于是两条路都没结果。
- *
- * 对照：主页用 `android.widget.BaseAdapter`（**系统框架类，模块与宿主共用同一个 Class 对象**）
- * 所以不做任何类型判定就没这个问题；发现/我页同理（不判类型）。**只有通讯录跨了 ClassLoader 判类型。**
- *
- * 推论：不只是判类型，**调方法也要挑 stub 上确实存在的那批**。
- * stub 的 `WxRecyclerView extends ViewGroup`（不是 RecyclerView），
- * 所以 `addOnScrollListener` / `addOnChildAttachStateChangeListener` / `setItemViewCacheSize`
- * 这些 RecyclerView 专有方法在编译期不可见 —— 刷新触发只能用 `View` / `ViewGroup` 的 API。
- */
-
-private val installedLists = Collections.synchronizedSet(
-    Collections.newSetFromMap(WeakHashMap<ViewGroup, Boolean>()),
-)
-
-/**
- * 通讯录页的圆角岛实现。
+ * 通讯录（「联系人」tab）的圆角卡片实现。
  *
  * ## 挂钩时机（三次踩坑后定案，均以字节码实测为准）
  * - v3.20 挂外层 Activity `AddressUI.onCreate` —— 那一刻内部 Fragment 的列表根本没建
  * - v3.21 挂 `MvvmAddressUIFragment.getLayoutView()` —— **只 inflate 布局**，列表字段仍为 null
  * - **v3.22 起挂 `MvvmAddressUIFragment.l0(Bundle)`** —— 字节码实测此处才执行
- *   `check-cast -> WxRecyclerView` / `iput-object -> 字段 p` / `setAdapter` / `setLayoutManager` /
- *   `addView`，是整条链上**第一个「列表已存在」**的时点
+ *   `check-cast -> WxRecyclerView` / `iput-object -> 字段 p` / `setAdapter` /
+ *   `setLayoutManager` / `addView`，是整条链上**第一个「列表已存在」**的时点
  *
- * ## 取列表的方式（v3.23 修正）
+ * ## 取列表（v3.23 修正）
  * 按**类名**在该 Fragment 的字段里找（字段名混淆，当前叫 `p`），沿父类链回溯；
- * 找不到再退化到视图树里按类名搜。**两条路径都只比类名字符串。**
+ * 找不到再退化到视图树里按类名搜。**两条路径都只比类名字符串**：
+ * 宿主的 `WxRecyclerView` 由微信 ClassLoader 加载，模块里的
+ * `androidx.recyclerview.widget.RecyclerView` 来自模块自己的 ClassLoader，
+ * 是两个不同的 Class，`is` / `isAssignableFrom` 恒 false（v3.22 血案）。
+ *
+ * ## 分组
+ * 用户指定与主页一致：新的朋友→服务号一块 / 我的企业一块 / A、B、C 各一块。
+ * 实现 = 「行内可见内容中含单个短文本（字母章节标题）」⇒ 开新岛；
+ * 「我的企业」行也开新岛（让「企业联系人」跟它同岛）。留白行一律不套卡。
+ */
+private const val HOST_LIST_CLASS = "com.tencent.mm.view.recyclerview.WxRecyclerView"
+private const val RECYCLER_VIEW_CLASS = "androidx.recyclerview.widget.RecyclerView"
+
+/**
+ * 从 Fragment 实例上按类名取通讯录列表（含父类链），失败再退化到视图树。
  */
 fun applyAddressIslands(feature: ListIslands, fragment: Any?) {
     if (!feature.isContactsEnabled) return
@@ -76,7 +51,6 @@ fun applyAddressIslands(feature: ListIslands, fragment: Any?) {
     attach(feature, list)
 }
 
-/** 从 Fragment 实例上按类名取通讯录列表（含父类链）。 */
 private fun listOfFragment(fragment: Any): ViewGroup? {
     var cls: Class<*>? = fragment.javaClass
     var depth = 0
@@ -112,7 +86,6 @@ private fun isListClass(type: Class<*>): Boolean {
     while (c != null && depth < 12) {
         val name = c.name
         if (name == HOST_LIST_CLASS || name == RECYCLER_VIEW_CLASS) return true
-        // 走到系统框架类还没命中就不再上溯（避免把随便某个 View 判成列表）
         if (name.startsWith("android.view.") || name.startsWith("android.widget.")) return false
         if (name == "java.lang.Object") return false
         c = c.superclass
@@ -131,80 +104,27 @@ private fun findListInTree(root: View): ViewGroup? {
 }
 
 private fun attach(feature: ListIslands, list: ViewGroup) {
-    styleVisibleChildren(feature, list)
-    if (!installedLists.add(list)) return
-
-    // 刷新触发：只用 stub 上确实存在的 View / ViewGroup API。
-    // ⚠️ 不能用 RecyclerView 的 addOnScrollListener / addOnChildAttachStateChangeListener
-    //    （stub 的 WxRecyclerView 继承 ViewGroup，这些方法编译期不可见）。
-    list.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-        styleVisibleChildren(feature, list)
-    }
-    runCatching {
-        list.viewTreeObserver.addOnScrollChangedListener { styleVisibleChildren(feature, list) }
-    }
-
-    // l0() 返回时子项可能尚未完成首次布局（childCount=0），补一次异步处理，
-    // 避免「挂钩对了但没效果」。
-    if (list.childCount == 0) {
-        list.post { styleVisibleChildren(feature, list) }
-    }
+    ensureContainerStyled(
+        feature = feature,
+        container = list,
+        groupStart = GroupStart { _, child -> ownGroupKeyOf(child) != null },
+        excluded = blankContentRow,
+    )
     WeLogger.i(TAG, "address islands attached (children=${list.childCount})")
 }
 
-private fun styleVisibleChildren(feature: ListIslands, list: ViewGroup) {
-    val shape = feature.shape
-    val grouped = feature.groupingEnabled
-    val childCount = list.childCount
-    if (childCount == 0) return
-
-    if (!feature.isContactsEnabled) {
-        for (index in 0 until childCount) restoreIslandRow(list.getChildAt(index))
-        return
-    }
-
-    // 先给每个可见子项打上「分组归属指纹」，再据此切边界。
-    // 同一指纹的相邻行属于同一块；指纹变化处就是分组边界。
-    // ⚠️ 指纹必须**顺序继承**：字母标题行携带自己的指纹（alpha:A），
-    // 其下的联系人行不带标题，要继承上面最近一次出现的指纹，否则所有字母的联系人会并成一块。
-    val keys = ArrayList<String>(childCount)
-    var carried = "entry"
-    for (index in 0 until childCount) {
-        val own = ownGroupKeyOf(list.getChildAt(index))
-        if (own != null) carried = own
-        keys.add(carried)
-    }
-
-    val hasAnyBoundary = keys.toSet().size > 1
-    var groupStart = 0
-    for (index in 0 until childCount) {
-        if (!grouped) {
-            styleIslandRow(list.getChildAt(index), shape, false, IslandRowPosition.SINGLE)
-            continue
-        }
-        // 指纹变化 ⇒ 新的一块
-        if (hasAnyBoundary && index > 0 && keys[index] != keys[index - 1]) groupStart = index
-        val isFirstInGroup = index == groupStart
-        val isLastInGroup = index == childCount - 1 ||
-            (hasAnyBoundary && keys[index + 1] != keys[index])
-        val position = when {
-            isFirstInGroup && isLastInGroup -> IslandRowPosition.SINGLE
-            isFirstInGroup -> IslandRowPosition.FIRST
-            isLastInGroup -> IslandRowPosition.LAST
-            else -> IslandRowPosition.MIDDLE
-        }
-        styleIslandRow(list.getChildAt(index), shape, true, position)
-    }
-}
-
 /**
- * 这一行**自己**声明的分组指纹；返回 null 表示「无自己的指纹、应继承上一行的」。
+ * 这一行**自己**是否声明了「我是一个新分组的开头」；返回 null 表示「跟着上一行」。
  *
- * 规则（对应用户指定）：
- *  - 字母分组标题行 → `alpha:A` / `alpha:B` …，于是每个字母自成一块
- *  - 含「我的企业」的行（我的企业 / 企业联系人）→ `mine`，这两项合为一块
- *  - 其余行（联系人条目、新的朋友~服务号这批固定入口）→ null，继承上一个指纹；
- *    开头这批固定入口因无前置指纹，继承初值 `entry`，于是「新的朋友 → 服务号」自成一块
+ * 规则（对应用户指定，与主页一致）：
+ *  - 字母分组标题行（A / B / C …）→ 开新岛，于是每个字母自成一块
+ *  - 含「我的企业」的行 → 开新岛（让「企业联系人」跟它同岛）
+ *  - 其余行 → null，继承上一行所属的岛
+ *
+ * ⚠️ 用**字母标题**而不是「凡分组标题都开新岛」：通讯录里还有
+ * 「我的企业及企业联系人」这类中文标题行，它开岛后「企业联系人」自然也同岛，
+ * 不需要额外特判；而顶部那批固定入口（新的朋友 / 群聊 / 标签 …）没有标题行，
+ * 于是自然连成一块 —— 与用户要的三段一致。
  */
 private fun ownGroupKeyOf(row: View): String? {
     if (isSectionHeaderRow(row)) {
@@ -222,7 +142,11 @@ private fun ownGroupKeyOf(row: View): String? {
 /**
  * 判定一个子项是否是通讯录的分组标题行。
  *
- * 结构性判据（不依赖文案与混淆类名）：不可点击、高度明显小于普通联系人行、只有一个短文本。
+ * 结构性判据（不依赖文案与混淆类名）：不可点击、高度明显小于普通联系人行、
+ * 只有一个短文本。
+ *
+ * ⚠️ 这三个条件缺一不可：普通联系人行同样「只有一个非空文本」（就是姓名），
+ * 只靠文本数量会把**每一个联系人**都判成章节标题，于是每行各自成一个岛。
  */
 private fun isSectionHeaderRow(row: View): Boolean {
     if (row.isClickable) return false
@@ -247,9 +171,10 @@ private fun collectTexts(root: View): List<String> {
 
 private fun collectTextsInto(root: View, out: MutableList<String>) {
     if (root is ViewGroup) {
+        if (root.visibility != View.VISIBLE) return
         for (index in 0 until root.childCount) collectTextsInto(root.getChildAt(index), out)
     }
-    if (root is TextView) {
+    if (root is TextView && root.visibility == View.VISIBLE) {
         val text = root.text?.toString()?.trim().orEmpty()
         if (text.isNotEmpty()) out += text
     }
