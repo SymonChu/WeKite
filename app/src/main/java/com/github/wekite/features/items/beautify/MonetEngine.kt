@@ -238,6 +238,68 @@ object MonetEngine : ApiFeature() {
     private val patternKindLogged = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
     /**
+     * Behind the `bg identity` line: `view class#id|drawable class|WxH` keys already reported.
+     *
+     * Why this exists (2026-09-16): the 通讯录/资料页 plate survived FOUR releases partly because the
+     * `pattern overlay kind` line is keyed on the drawable CLASS alone, and every class involved
+     * (`LayerDrawable`, `InsetDrawable`, …) is already reported during WeChat's own startup. So when
+     * the contacts page was later opened, its plate hit an already-deduped key and printed NOTHING —
+     * the diagnostic was structurally incapable of naming the object, no matter how precise the
+     * measurement. The key therefore has to carry a per-INSTANCE dimension, and the size is the
+     * cheapest one that separates instances of the same class. The owning View is included because
+     * the question is "which view on that page", which the drawable alone cannot answer.
+     */
+    private val bgIdentityLogged = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /**
+     * Upper bound on distinct `bg identity` lines per session, so the per-instance key cannot turn
+     * this into a log flood (the earlier `pattern measure retry` line cost 80 lines/session by
+     * forgetting exactly this). Checked before any work, so the hot `setBackground*` paths bail out
+     * with a single integer comparison once the budget is spent.
+     */
+    private val bgIdentityMax = 60
+
+    /** Activity classes already probed by the `window bg probe` line (one line per activity class). */
+    private val windowBgProbed = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /**
+     * Diagnostic only — logs WHICH view a background drawable belongs to, and how big it is, once per
+     * distinct (view, drawable class, size) triple. Changes no colour and no drawable.
+     *
+     * The contacts/profile plate measures a full-width, ~23%-of-screen rectangle, so the size in this
+     * line is what identifies it: whichever entry prints a drawable whose bounds match the on-screen
+     * plate is the one to fix. Without the owning view there is no way back from a drawable to the
+     * page that painted it.
+     */
+    private fun logBackgroundIdentity(view: View?, drawable: Drawable?) {
+        if (bgIdentityLogged.size >= bgIdentityMax) return
+        if (drawable == null) return
+        // Read the Rect through its own accessors, NOT via `drawable.bounds ?: ...`: `getBounds()`
+        // is a platform type, so an elvis on it is a warning ("always returns the left operand") and
+        // is exactly the shape that once lowered a null check into `getClass()`. It is never null.
+        val bounds = drawable.bounds
+        val w = bounds.width()
+        val h = bounds.height()
+        val owner = view?.let { v ->
+            // Resource name of the view's id turns an obfuscated view class into something a layout
+            // can be grepped for; `NO_ID` and lookups that throw both degrade to `noid`.
+            val idName = runCatching {
+                if (v.id == View.NO_ID) "noid" else HostInfo.application.resources.getResourceEntryName(v.id)
+            }.getOrDefault("noid")
+            "${v.javaClass.name}#$idName"
+        } ?: "view=?"
+        val key = "$owner|${drawable.javaClass.simpleName}|${w}x${h}"
+        if (!bgIdentityLogged.add(key)) return
+        WeLogger.i(
+            TAG,
+            "bg identity: view=$owner drawable=${drawable.javaClass.simpleName} " +
+                "bounds=${w}x${h} " +
+                "intrinsic=${drawable.intrinsicWidth}x${drawable.intrinsicHeight} " +
+                "opacity=${drawable.opacity}",
+        )
+    }
+
+    /**
      * Cache for [overlayColor]: the accent-derived overlay colour, keyed by the accent it came from
      * plus the dark/light mode it was solved for (the two have different values, see
      * [SURFACE_OVERLAY_DARK_VALUE]).
@@ -255,7 +317,8 @@ object MonetEngine : ApiFeature() {
      * Selectors are not `ColorDrawable`/`GradientDrawable` instances and would otherwise fall
      * through untouched, so the current state is unwrapped.
      */
-    private fun retargetBackground(drawable: Drawable?, surfaceHits: AtomicInteger) {
+    private fun retargetBackground(drawable: Drawable?, surfaceHits: AtomicInteger, owner: View? = null) {
+        logBackgroundIdentity(owner, drawable)
         // ⚠️ MUST accept null. `View.setBackground(null)` is a legal call — Android's own
         // `View.<init>` and `View.setBackgroundDrawable` forward a possibly-null background, and
         // WeChat calls it on every inflate. Because the parameter is non-null in Kotlin, R8 can
@@ -711,8 +774,23 @@ object MonetEngine : ApiFeature() {
                     is ColorDrawable -> bg.color
                     is GradientDrawable -> bg.color?.defaultColor
                     else -> null
-                } ?: return@hookAfter
-                if (!isOpaqueNeutral(fill)) return@hookAfter
+                }
+                // Diagnostic only (2026-09-16): this whole branch has reported ZERO `window ... tinted`
+                // lines in every log since it was written, which means the grey page plate it was
+                // written for is NOT reaching the `fill` above. The old code returned silently here,
+                // so "the window background is a bitmap/nine-patch/InsetDrawable" and "it is a colour
+                // but not a neutral" were indistinguishable. One line per activity class, and only
+                // when the branch does not fire, separates them without touching behaviour.
+                if (fill == null || !isOpaqueNeutral(fill)) {
+                    if (bg != null && windowBgProbed.add(activity.javaClass.name)) {
+                        val hex = fill?.let { "#%08x".format(it) } ?: "not-a-colour"
+                        WeLogger.i(
+                            TAG,
+                            "window bg probe: ${activity.javaClass.name} bg=${bg.javaClass.simpleName} fill=$hex",
+                        )
+                    }
+                    return@hookAfter
+                }
                 val mapped = recolorSurface(fill, surfaceTintFor(fill))
                 if (mapped == fill) return@hookAfter
                 runCatching {
@@ -743,7 +821,7 @@ object MonetEngine : ApiFeature() {
             attached.hookAfter {
                 val view = thisObject as? View ?: return@hookAfter
                 val bg = view.background ?: return@hookAfter
-                retargetBackground(bg, backgroundSurfaceHits)
+                retargetBackground(bg, backgroundSurfaceHits, view)
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook View.onAttachedToWindow", it)
@@ -837,8 +915,9 @@ object MonetEngine : ApiFeature() {
             WeLogger.i(TAG, "View.setBackgroundDrawable hook bound to: ${setBackground.self}")
             val whiteSurfaceHits = backgroundSurfaceHits
             setBackground.hookBefore {
+                val view = thisObject as? View
                 val drawable = args[0] as? Drawable? ?: return@hookBefore
-                retargetBackground(drawable, whiteSurfaceHits)
+                retargetBackground(drawable, whiteSurfaceHits, view)
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook View.setBackgroundDrawable", it)
@@ -856,8 +935,9 @@ object MonetEngine : ApiFeature() {
             }
             WeLogger.i(TAG, "View.setBackground hook bound to: ${setBackgroundDirect.self}")
             setBackgroundDirect.hookBefore {
+                val view = thisObject as? View
                 val drawable = args[0] as? Drawable? ?: return@hookBefore
-                retargetBackground(drawable, backgroundSurfaceHits)
+                retargetBackground(drawable, backgroundSurfaceHits, view)
             }
         }.onFailure {
             WeLogger.w(TAG, "failed to hook View.setBackground", it)
