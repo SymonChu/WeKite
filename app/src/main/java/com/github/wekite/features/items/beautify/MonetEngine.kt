@@ -17,6 +17,7 @@ import android.graphics.drawable.LayerDrawable
 import android.graphics.drawable.StateListDrawable
 import android.os.Build
 import android.view.View
+import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
@@ -59,6 +60,24 @@ import com.github.wekite.utils.android.isDarkMode
 object MonetEngine : ApiFeature() {
 
     private const val TAG = "MonetEngine"
+
+    /**
+     * Shape thresholds for the `plate candidate` diagnostic. The contacts/profile plate is
+     * full-width and a large band, so requiring both here rejects the overwhelming majority of
+     * backgrounds (a row icon, a divider, a button) WITHOUT rejecting the plate itself.
+     * Measured on the 1280x2800 device: the offending band is 1280 x 646 px = 100% x 23%.
+     */
+    private const val PLATE_MIN_WIDTH_PERCENT = 0.9f
+    private const val PLATE_MIN_HEIGHT_PERCENT = 0.12f
+
+    /** Max whole-plate reports per page (a page has ONE plate; two is slack for re-layout). */
+    private const val PLATE_PER_PAGE_MAX = 2
+
+    /** Upper bound on views the once-per-page plate sweep may visit (ANR guard). */
+    private const val PLATE_SWEEP_MAX_VIEWS = 4000
+
+    /** Upper bound on lines the sweep may print per page (a long list has many full-width rows). */
+    private const val PLATE_SWEEP_MAX_LINES = 12
 
     /** WeChat's hardcoded brand green — the pixels we replace. */
     private const val DEFAULT_COLOR = -16268960 // 0xFF07C160
@@ -238,62 +257,119 @@ object MonetEngine : ApiFeature() {
     private val patternKindLogged = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
     /**
-     * Behind the `bg identity` line: `view class#id|drawable class|WxH` keys already reported.
+     * Whole-plate reports already emitted for the CURRENT page, reset on every Activity.onCreate.
      *
-     * Why this exists (2026-09-16): the 通讯录/资料页 plate survived FOUR releases partly because the
-     * `pattern overlay kind` line is keyed on the drawable CLASS alone, and every class involved
-     * (`LayerDrawable`, `InsetDrawable`, …) is already reported during WeChat's own startup. So when
-     * the contacts page was later opened, its plate hit an already-deduped key and printed NOTHING —
-     * the diagnostic was structurally incapable of naming the object, no matter how precise the
-     * measurement. The key therefore has to carry a per-INSTANCE dimension, and the size is the
-     * cheapest one that separates instances of the same class. The owning View is included because
-     * the question is "which view on that page", which the drawable alone cannot answer.
+     * ⚠️ Deliberately NOT deduped by class across pages. The v3.16 diagnostic deduped on the
+     * drawable/view class, so the page that happened to render those classes FIRST consumed the
+     * budget and every later page — including the one with the plate — printed nothing. Scoping the
+     * budget per page instead keeps the line count bounded (<= PLATE_PER_PAGE_MAX per page) while
+     * making it impossible for one page to silence another.
      */
-    private val bgIdentityLogged = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+    private val platePerPage = AtomicInteger(0)
 
-    /**
-     * Upper bound on distinct `bg identity` lines per session, so the per-instance key cannot turn
-     * this into a log flood (the earlier `pattern measure retry` line cost 80 lines/session by
-     * forgetting exactly this). Checked before any work, so the hot `setBackground*` paths bail out
-     * with a single integer comparison once the budget is spent.
-     */
-    private val bgIdentityMax = 60
 
     /** Activity classes already probed by the `window bg probe` line (one line per activity class). */
     private val windowBgProbed = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
     /**
-     * Diagnostic only — logs WHICH view a background drawable belongs to, and how big it is, once per
-     * distinct (view, drawable class, size) triple. Changes no colour and no drawable.
+     * Diagnostic only: walks the FINAL layout once per page and reports every background whose shape
+     * could be the plate (full-width band). See the call site for why a settled-tree walk is needed
+     * rather than only hooking where a background is set.
      *
-     * The contacts/profile plate measures a full-width, ~23%-of-screen rectangle, so the size in this
-     * line is what identifies it: whichever entry prints a drawable whose bounds match the on-screen
-     * plate is the one to fix. Without the owning view there is no way back from a drawable to the
-     * page that painted it.
+     * Read-only: touches no colour, no drawable, no layout. Capped at [PLATE_SWEEP_MAX_VIEWS] so a
+     * pathological tree cannot turn this into an ANR.
      */
-    private fun logBackgroundIdentity(view: View?, drawable: Drawable?) {
-        if (bgIdentityLogged.size >= bgIdentityMax) return
-        if (drawable == null) return
-        // Read the Rect through its own accessors, NOT via `drawable.bounds ?: ...`: `getBounds()`
-        // is a platform type, so an elvis on it is a warning ("always returns the left operand") and
-        // is exactly the shape that once lowered a null check into `getClass()`. It is never null.
+    private fun sweepForPlate(activity: Activity, root: ViewGroup) {
+        val decor = activity.window?.decorView
+        val winW = decor?.width ?: 0
+        val winH = decor?.height ?: 0
+        if (winW <= 0 || winH <= 0) return
+        var lines = 0
+        val queue = ArrayDeque<View>()
+        queue.addLast(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < PLATE_SWEEP_MAX_VIEWS) {
+            val v = queue.removeFirst()
+            visited++
+            val d = v.background
+            if (d != null) {
+                val b = d.bounds
+                val w = b.width()
+                val h = b.height()
+                if (w >= winW * PLATE_MIN_WIDTH_PERCENT && h >= winH * PLATE_MIN_HEIGHT_PERCENT &&
+                    v.javaClass.name.startsWith("com.tencent.mm")
+                ) {
+                    val idName = runCatching {
+                        if (v.id == View.NO_ID) "noid"
+                        else HostInfo.application.resources.getResourceEntryName(v.id)
+                    }.getOrDefault("noid")
+                    if (lines++ < PLATE_SWEEP_MAX_LINES) {
+                        WeLogger.i(
+                            TAG,
+                            "plate sweep: view=${v.javaClass.name}#$idName drawable=${d.javaClass.name} " +
+                                "bounds=${w}x$h win=${winW}x$winH " +
+                                "intrinsic=${d.intrinsicWidth}x${d.intrinsicHeight} opacity=${d.opacity}",
+                        )
+                    }
+                }
+            }
+            if (v is ViewGroup) {
+                for (i in 0 until v.childCount) queue.addLast(v.getChildAt(i))
+            }
+        }
+        // The window's own background is the other place a page-filling grey can live and it is NOT
+        // any View's `background`, so the tree walk above cannot see it. Report it here instead.
+        val windowBg = decor?.background
+        if (windowBg != null && lines < PLATE_SWEEP_MAX_LINES) {
+            WeLogger.i(
+                TAG,
+                "plate sweep: WINDOW bg drawable=${windowBg.javaClass.name} " +
+                    "win=${winW}x$winH intrinsic=${windowBg.intrinsicWidth}x${windowBg.intrinsicHeight} " +
+                    "opacity=${windowBg.opacity}",
+            )
+        }
+    }
+
+    /**
+     * Reports a background that could plausibly BE the contacts/profile "plate": the full-width grey
+     * band the user reports as too bright (v3.10 onward).
+     *
+     * ⚠️ What this replaced, and why (2026-09-16 — the same wrong lesson twice). The previous
+     * `bg identity` line keyed on `(view class#id, drawable class, size)` with a FLAT 60-line
+     * per-SESSION budget. On the device log that budget was spent within 2 s of cold start almost
+     * entirely on `bounds=0x0` rows, i.e. views that are not on screen and cannot be the plate; so
+     * when the user LATER opened the page, nothing was printed at all. Because the budget never
+     * refills inside a process, clearing the log and then swiping the page produced an EMPTY log
+     * (2026-09-16 09:23 — 5 lines). A budget that can only be spent is not a diagnostic.
+     *
+     * Fix: FILTER to the plate's shape, and SCOPE the budget per page.
+     * Rejected: `bounds` with zero width/height; narrower than [PLATE_MIN_WIDTH_PERCENT] of the
+     * window; shorter than [PLATE_MIN_HEIGHT_PERCENT] of the window; anything not drawn by WeChat
+     * (the module's own injected UI must never be recoloured anyway).
+     */
+    private fun logPlateCandidate(view: View?, drawable: Drawable?) {
+        if (view == null || drawable == null) return
+        if (platePerPage.get() >= PLATE_PER_PAGE_MAX) return
         val bounds = drawable.bounds
         val w = bounds.width()
         val h = bounds.height()
-        val owner = view?.let { v ->
-            // Resource name of the view's id turns an obfuscated view class into something a layout
-            // can be grepped for; `NO_ID` and lookups that throw both degrade to `noid`.
-            val idName = runCatching {
-                if (v.id == View.NO_ID) "noid" else HostInfo.application.resources.getResourceEntryName(v.id)
-            }.getOrDefault("noid")
-            "${v.javaClass.name}#$idName"
-        } ?: "view=?"
-        val key = "$owner|${drawable.javaClass.simpleName}|${w}x${h}"
-        if (!bgIdentityLogged.add(key)) return
+        if (w <= 0 || h <= 0) return
+        val activity = view.context as? Activity ?: return
+        val decor = activity.window?.decorView ?: return
+        val winW = decor.width
+        val winH = decor.height
+        if (winW <= 0 || winH <= 0) return
+        if (w < winW * PLATE_MIN_WIDTH_PERCENT) return
+        if (h < winH * PLATE_MIN_HEIGHT_PERCENT) return
+        if (!view.javaClass.name.startsWith("com.tencent.mm")) return
+        val idName = runCatching {
+            if (view.id == View.NO_ID) "noid" else HostInfo.application.resources.getResourceEntryName(view.id)
+        }.getOrDefault("noid")
+        if (platePerPage.incrementAndGet() > PLATE_PER_PAGE_MAX) return
         WeLogger.i(
             TAG,
-            "bg identity: view=$owner drawable=${drawable.javaClass.simpleName} " +
-                "bounds=${w}x${h} " +
+            "plate candidate: view=${view.javaClass.name}#$idName drawable=${drawable.javaClass.name} " +
+                "bounds=${w}x$h win=${winW}x$winH " +
                 "intrinsic=${drawable.intrinsicWidth}x${drawable.intrinsicHeight} " +
                 "opacity=${drawable.opacity}",
         )
@@ -318,7 +394,7 @@ object MonetEngine : ApiFeature() {
      * through untouched, so the current state is unwrapped.
      */
     private fun retargetBackground(drawable: Drawable?, surfaceHits: AtomicInteger, owner: View? = null) {
-        logBackgroundIdentity(owner, drawable)
+        logPlateCandidate(owner, drawable)
         // ⚠️ MUST accept null. `View.setBackground(null)` is a legal call — Android's own
         // `View.<init>` and `View.setBackgroundDrawable` forward a possibly-null background, and
         // WeChat calls it on every inflate. Because the parameter is non-null in Kotlin, R8 can
@@ -769,6 +845,31 @@ object MonetEngine : ApiFeature() {
             val windowFixes = AtomicInteger(0)
             onCreate.hookAfter {
                 val activity = thisObject as? Activity ?: return@hookAfter
+                // New PAGE: the plate budget is per page, never per session (see logPlateCandidate).
+                platePerPage.set(0)
+                // ── Guaranteed page sweep (diagnostic only) ───────────────────────────────
+                // The `plate candidate` line can only fire where a background is SET or re-attached.
+                // On the 8.0.94 device the plate produced ZERO lines, because a page's backgrounds are
+                // applied during inflation — so the walk never reached it. Walk the FINAL layout once
+                // per page instead: after the first layout pass, visit every view and report any
+                // background matching the plate's shape. This does not depend on when (or whether) the
+                // background was set, which is the whole point — three releases all measured something
+                // that was not the plate.
+                val content = activity.findViewById<ViewGroup>(android.R.id.content)
+                if (content != null) {
+                    // ⚠️ NOT `content.post { }`: onCreate runs BEFORE the first layout traversal, so a
+                    // plain post can execute while decorView is still 0x0 — the sweep would then bail on
+                    // its own size guard and print nothing, which is exactly the failure mode this
+                    // release exists to fix. onGlobalLayout fires AFTER layout, so sizes are real.
+                    val observer = content.viewTreeObserver
+                    observer.addOnGlobalLayoutListener(object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                        override fun onGlobalLayout() {
+                            val o = content.viewTreeObserver
+                            if (o.isAlive) o.removeOnGlobalLayoutListener(this)
+                            runCatching { sweepForPlate(activity, content) }
+                        }
+                    })
+                }
                 val bg = runCatching { activity.window?.decorView?.background }.getOrNull()
                 val fill = when (bg) {
                     is ColorDrawable -> bg.color
