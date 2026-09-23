@@ -73,7 +73,12 @@ object WeContactPrefsScreenApi : ApiFeature() {
                                     setKeyMethod.invoke(pref, item.key)
                                     setTitleMethod.invoke(pref, item.title)
                                     item.summary?.let { summary -> setSummaryMethod.invoke(pref, summary) }
-                                    addPreferenceMethod.invoke(adapterInstance, pref, item.position)
+                                    // h0.add(preference, index) 在 index > 已有条目数时会 IndexOutOfBoundsException
+                                    // (群成员资料页 initView 时宿主列表为空)。夹到 [0, count]: 空列表退化为
+                                    // 0 号位, 其余情况下插入位置语义不变。
+                                    val adapter = adapterInstance as BaseAdapter
+                                    val pos = item.position.coerceIn(0, adapter.count)
+                                    addPreferenceMethod.invoke(adapter, pref, pos)
                                 }
                             } catch (ex: Exception) {
                                 WeLogger.e(
