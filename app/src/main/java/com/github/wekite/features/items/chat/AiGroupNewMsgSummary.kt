@@ -473,6 +473,9 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         pendingRecheck[host] = true
         host.postDelayed({
             pendingRecheck.remove(host)
+            // ⚠️ 守卫：这段时间里挂件可能已被移除（功能被关掉 / 页面销毁）——
+            //    此时绝不能再去 syncPill，否则会把挂件重新创建出来，看着像「关了没生效」。
+            if (pills[host]?.parent == null) return@postDelayed
             unreadCache.remove(WeChatNewMsgTipApi.convIdOf(host))
             runCatching { syncPill(host, tip) }
                 .onFailure { WeLogger.e(TAG, "pill recheck failed", it) }
