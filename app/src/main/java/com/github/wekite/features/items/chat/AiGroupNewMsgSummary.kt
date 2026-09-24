@@ -14,6 +14,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -90,6 +91,15 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
 
     /** 挂件与提示条的间距（视觉上「接着挂」） */
     private const val GAP_DP = 8
+
+    /** 挂件左右留白（舌头本体 padding 实测为 0，胶囊尺寸由 9-patch 背景撑出） */
+    private const val PILL_PAD_H_DP = 14
+
+    /** 内置供应商 id（`custom` = 自己填地址；其余见 PROVIDERS） */
+    private var providerId by prefOption("ai_sum_provider", "custom")
+
+    /** true = 只在「N条新消息」提示条出现时才显示挂件；false（默认）= 群聊页常显 */
+    private var onlyWhenUnread by prefOption("ai_sum_only_unread", false)
 
     /** 每批喂给模型的条数 */
     private const val CHUNK_SIZE = 60
@@ -169,16 +179,21 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         val base = tipBaseBottomMargins.getOrPut(tip) {
             (tip.layoutParams as? ViewGroup.MarginLayoutParams)?.bottomMargin ?: 0
         }
+        // ⚠️ 提示条只在「真·新消息到达且用户没看到」时才 VISIBLE，平时是 GONE 且未测量（h=0）。
+        // 挂件不能跟着它的可见性走（v3.22 真机实测：那样用户在群聊页永远看不到挂件），
+        // 也不能把它的测量值当尺寸来源（GONE 时为 0 ⇒ 挂件 0 高，插进去了但看不见）。
         val tipVisible = tip.visibility == View.VISIBLE && tip.height > 0
-        val tipHeight = if (tipVisible) tip.height else 0
         val gap = GAP_DP.dpToPx(tip.context)
 
-        // 提示条让出原位：自己上移「高度 + 间距」，我们占它原来的底部边距 ⇒ 视觉上紧贴其下方
-        setBottomMargin(tip, if (tipVisible) base + tipHeight + gap else base)
+        // 提示条可见时上移让位；挂件始终占提示条原来的位置 ⇒ 视觉上就是「挂在它下面」
+        setBottomMargin(tip, if (tipVisible) base + tip.height + gap else base)
         setBottomMargin(pill, base)
-        if (tipHeight > 0 && pill.minimumHeight != tipHeight) pill.minimumHeight = tipHeight
 
-        pill.visibility = if (tipVisible) View.VISIBLE else View.GONE
+        // 挂件是 wrap_content + 与提示条同一张 9-patch 背景，背景自带的 minimumHeight 决定胶囊高度
+        // ⇒ 不需要提示条的测量值也能与它等高；提示条真被测量过时再对齐一次。
+        if (tip.height > 0 && pill.minimumHeight != tip.height) pill.minimumHeight = tip.height
+
+        pill.visibility = if (!onlyWhenUnread || tipVisible) View.VISIBLE else View.GONE
         pill.setOnClickListener { onPillClick(host, conv) }
     }
 
@@ -208,6 +223,13 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                 return null
             }
         pills[host] = pill
+        pill.addOnLayoutChangeListener { v, l, t, r, b, _, _, _, _ ->
+            WeLogger.i(
+                TAG,
+                "AI pill laid out: ${r - l}x${b - t} visibility=${v.visibility} " +
+                        "margin=${(v.layoutParams as? ViewGroup.MarginLayoutParams)?.bottomMargin}"
+            )
+        }
         WeLogger.i(TAG, "AI pill added: parent=${parent.javaClass.simpleName} host=${host.javaClass.simpleName}")
         return pill
     }
@@ -218,18 +240,23 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             (0 until group.childCount).map { group.getChildAt(it) }.filterIsInstance<TextView>().firstOrNull()
         }
         if (src != null) {
+            // ⚠️ textSize/文字色由 XML 设定，提示条 GONE 时也读得到 ⇒ 可以直接抄
             pill.setTextSize(TypedValue.COMPLEX_UNIT_PX, src.textSize)
             pill.typeface = src.typeface
             pill.setTextColor(src.currentTextColor)
             pill.includeFontPadding = src.includeFontPadding
-            pill.gravity = src.gravity
         }
+        pill.gravity = Gravity.CENTER
+
+        // 提示条本体 padding 实测为 0（8.0.77 的 c7j），尺寸由 9-patch 背景的留白/minimumHeight 撑出。
+        // ⚠️ 全 0 时不要 setPadding(0,0,0,0)：显式设置会让背景自带的留白失效（胶囊会缩成文字大小）。
         val tipPadding = intArrayOf(tip.paddingLeft, tip.paddingTop, tip.paddingRight, tip.paddingBottom)
-        val padSource = if (tipPadding.any { it > 0 }) tipPadding else null
-        val p = padSource ?: src?.let {
-            intArrayOf(it.paddingLeft, it.paddingTop, it.paddingRight, it.paddingBottom)
+        if (tipPadding.any { it > 0 }) {
+            pill.setPadding(tipPadding[0], tipPadding[1], tipPadding[2], tipPadding[3])
+        } else {
+            val padH = PILL_PAD_H_DP.dpToPx(tip.context)
+            pill.setPadding(padH, 0, padH, 0)
         }
-        p?.let { pill.setPadding(it[0], it[1], it[2], it[3]) }
 
         val bg = tip.background
         if (bg != null) {
@@ -327,12 +354,133 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         }
     }
 
+    // ==================== 内置供应商 ====================
+
+    /**
+     * 内置供应商预设。
+     *
+     * ⚠️ 只预置**稳定且公开**的事实：厂商官方基址、Key 头名/前缀。
+     * **不写死模型名** —— 模型名变化极快（同一家半年换两代），写死 = 装到手机上就报
+     * 「model not found」。模型走「填完 Key 一键拉取该站 /models 列表」或手动输入。
+     *
+     * ⚠️ **内网/自建网关地址不进源码**（仓库是公开的，写死等于把私有信息推到 GitHub）
+     * ——这类走第 1 项「自定义」，地址/请求头/UA 由用户自己填；公益站与厂商的公开域名可以预置。
+     */
+    private data class Provider(
+        val id: String,
+        val label: String,
+        val base: String,
+        val keyHeader: String = "Authorization",
+        val keyPrefix: String = "Bearer ",
+        val userAgent: String = "",
+        val hint: String = ""
+    )
+
+    private val PROVIDERS = listOf(
+        Provider(
+            "custom", "自定义 / 自建网关 / 反代", "",
+            hint = "地址、请求头、UA 全部自己填（「高级设置」里）"
+        ),
+        Provider(
+            "agentrouter", "AgentRouter（公益站）", "https://ps.air-outer.com/v1",
+            userAgent = "claude-cli/1.0.60 (external, cli)", hint = "需 claude-cli UA，已预置"
+        ),
+        Provider(
+            "opencode-zen", "opencode zen", "https://opencode.ai/zen/v1",
+            userAgent = "claude-cli/1.0.60 (external, cli)", hint = "需 claude-cli UA，已预置"
+        ),
+        Provider("deepseek", "DeepSeek 深度求索", "https://api.deepseek.com/v1"),
+        Provider("openai", "OpenAI", "https://api.openai.com/v1"),
+        Provider("moonshot", "月之暗面 Kimi", "https://api.moonshot.cn/v1"),
+        Provider("zhipu", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4"),
+        Provider("dashscope", "阿里通义千问（百炼）", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        Provider(
+            "volces", "火山方舟（豆包）", "https://ark.cn-beijing.volces.com/api/v3",
+            hint = "模型名要填「推理接入点」ep-xxxx"
+        ),
+        Provider("siliconflow", "硅基流动 SiliconFlow", "https://api.siliconflow.cn/v1"),
+        Provider("qianfan", "百度千帆", "https://qianfan.baidubce.com/v2"),
+        Provider("hunyuan", "腾讯混元", "https://api.hunyuan.cloud.tencent.com/v1"),
+        Provider("minimax", "MiniMax", "https://api.minimax.chat/v1"),
+        Provider("stepfun", "阶跃星辰 StepFun", "https://api.stepfun.com/v1"),
+        Provider("lingyi", "零一万物 Yi", "https://api.lingyiwanwu.com/v1"),
+        Provider(
+            "spark", "讯飞星火", "https://spark-api-open.xf-yun.com/v1",
+            hint = "Key 要填成 APIKey:APISecret（两段用冒号连起来）"
+        ),
+        Provider("openrouter", "OpenRouter", "https://openrouter.ai/api/v1"),
+        Provider("groq", "Groq", "https://api.groq.com/openai/v1"),
+        Provider("xai", "xAI Grok", "https://api.x.ai/v1"),
+        Provider("mistral", "Mistral", "https://api.mistral.ai/v1"),
+        Provider("together", "Together AI", "https://api.together.xyz/v1"),
+        Provider("ollama", "本机 Ollama", "http://127.0.0.1:11434/v1", keyPrefix = "", hint = "Key 随便填"),
+        Provider("lmstudio", "本机 LM Studio", "http://127.0.0.1:1234/v1", keyPrefix = "", hint = "Key 随便填")
+    )
+
+    private fun providerOf(id: String): Provider =
+        PROVIDERS.firstOrNull { it.id == id } ?: PROVIDERS.first()
+
+    /** 预设基址都自带 `/v1`、`/v4` 之类版本段 ⇒ 拼接口用 `/chat/completions`。 */
+    private const val PRESET_PATH = "/chat/completions"
+
+    /** 由基址/完整地址推出该站的模型列表地址（`…/chat/completions` → `…/models`）。 */
+    private fun modelListUrl(baseOrEndpoint: String): String {
+        val b = baseOrEndpoint.trim().trimEnd('/')
+        if (b.isEmpty()) return ""
+        val stem = b.removeSuffix("/chat/completions").removeSuffix("/completions").trimEnd('/')
+        return if (stem.isEmpty()) "" else "$stem/models"
+    }
+
+    /** 拉取该站模型列表（OpenAI 风格 `data[].id`，兼容 `models[].name`）。失败抛异常带状态码与原文。 */
+    private fun fetchModels(params: AiParams): List<String> {
+        val url = modelListUrl(params.endpoint)
+        if (url.isEmpty()) throw IllegalStateException("请先填接口地址")
+        val builder = Request.Builder()
+            .url(url)
+            .get()
+            .addHeader("Accept", "application/json")
+            .addHeader(params.keyHeader, params.keyPrefix + params.apiKey)
+        if (params.userAgent.isNotEmpty()) builder.addHeader("User-Agent", params.userAgent)
+        params.extraHeaders.lineSequence()
+            .map { it.trim() }
+            .filter { it.contains(':') && !it.startsWith("#") }
+            .forEach { line ->
+                val idx = line.indexOf(':')
+                builder.addHeader(line.substring(0, idx).trim(), line.substring(idx + 1).trim())
+            }
+        clientFor(params).newCall(builder.build()).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw IllegalStateException("HTTP ${response.code} ${response.message}\n${text.take(600)}")
+            }
+            val root = runCatching { JSONObject(text) }.getOrNull()
+                ?: throw IllegalStateException("响应不是 JSON\n${text.take(600)}")
+            val ids = LinkedHashSet<String>()
+            root.optJSONArray("data")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val id = obj.optString("id").ifEmpty { obj.optString("name") }
+                    if (id.isNotEmpty()) ids.add(id)
+                }
+            }
+            root.optJSONArray("models")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val id = obj.optString("name").ifEmpty { obj.optString("id") }
+                    if (id.isNotEmpty()) ids.add(id)
+                }
+            }
+            return ids.sorted()
+        }
+    }
+
     // ==================== 设置 ====================
 
     override fun onClick(context: ComponentActivity) = openSettings(context)
 
     private fun openSettings(context: Context) {
         showComposeDialog(context) {
+            var providerInput by remember { mutableStateOf(providerId.ifEmpty { "custom" }) }
             var urlInput by remember { mutableStateOf(apiUrl) }
             var baseInput by remember { mutableStateOf(apiBase) }
             var pathInput by remember { mutableStateOf(apiPath) }
@@ -347,6 +495,11 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             var retriesInput by remember { mutableStateOf(retries.toString()) }
             var maxInput by remember { mutableStateOf(maxMsgs.toString()) }
             var tlsInput by remember { mutableStateOf(skipTls) }
+            var onlyUnreadInput by remember { mutableStateOf(onlyWhenUnread) }
+            var advanced by remember { mutableStateOf(false) }
+            var showProviderList by remember { mutableStateOf(false) }
+            var showModelList by remember { mutableStateOf(false) }
+            var modelChoices by remember { mutableStateOf(emptyList<String>()) }
             var testStatus by remember { mutableStateOf("") }
 
             fun inputsAsParams(forTest: Boolean) = AiParams(
@@ -363,10 +516,156 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                 systemPrompt = promptInput.trim().ifEmpty { DEFAULT_SYSTEM_PROMPT }
             )
 
+            /** 选中内置供应商：只留「Key + 模型」要填，地址/请求头/UA 自动带好。 */
+            fun applyPreset(p: Provider) {
+                providerInput = p.id
+                if (p.id != "custom") {
+                    urlInput = ""
+                    baseInput = p.base
+                    pathInput = PRESET_PATH
+                    keyHeaderInput = p.keyHeader
+                    keyPrefixInput = p.keyPrefix
+                    uaInput = p.userAgent
+                }
+                showProviderList = false
+                testStatus = ""
+            }
+
+            /** 用当前填的 Key 拉该站模型列表，省得用户手抄模型名。 */
+            fun loadModels() {
+                val params = inputsAsParams(forTest = true)
+                if (params.endpoint.isBlank()) {
+                    testStatus = "先选一个供应商，或在「高级设置」里填接口地址"
+                    return
+                }
+                if (params.apiKey.isBlank()) {
+                    testStatus = "先填 API Key"
+                    return
+                }
+                testStatus = "正在获取模型列表…"
+                val activity = context.activityOrNull()
+                thread {
+                    val result = runCatching { fetchModels(params) }
+                    val text = result.fold(
+                        onSuccess = { list ->
+                            if (list.isEmpty()) "该站没返回模型列表，请手动填模型名" else "已获取 ${list.size} 个模型，请选择"
+                        },
+                        onFailure = { "获取失败：${it.message?.take(200)}" }
+                    )
+                    activity?.runOnUiThread {
+                        result.onSuccess { list ->
+                            modelChoices = list
+                            if (list.isNotEmpty()) showModelList = true
+                        }
+                        testStatus = text
+                    }
+                }
+            }
+
+            fun testConnection() {
+                val params = inputsAsParams(forTest = true)
+                if (!params.isUsable()) {
+                    testStatus = "先填接口地址、API Key、模型名"
+                    return
+                }
+                testStatus = "测试中…"
+                val activity = context.activityOrNull()
+                thread {
+                    val result = runCatching {
+                        chatCompletion(params, "你是连通性测试助手。", "只回复两个字：可用")
+                    }
+                    val text = result.fold(
+                        onSuccess = { "✅ 连接成功：${it.take(60)}" },
+                        onFailure = { "❌ 失败：${it.message?.take(300)}" }
+                    )
+                    if (activity != null) activity.runOnUiThread { testStatus = text } else testStatus = text
+                }
+            }
+
             AlertDialogContent(
                 title = { Text("群聊新消息 AI 分析") },
                 text = {
                     DefaultColumn(modifier = Modifier.heightIn(max = 420.dp), scrollable = true) {
+                        if (showProviderList) {
+                            PROVIDERS.forEach { p ->
+                                ListItem(
+                                    colors = dialogListItemColors(),
+                                    modifier = Modifier.clickable { applyPreset(p) },
+                                    headlineContent = { Text(p.label) },
+                                    supportingContent = { if (p.hint.isNotEmpty()) Text(p.hint) },
+                                    trailingContent = { if (p.id == providerInput) Text("✓") }
+                                )
+                            }
+                        } else if (showModelList) {
+                            modelChoices.forEach { m ->
+                                ListItem(
+                                    colors = dialogListItemColors(),
+                                    modifier = Modifier.clickable {
+                                        modelInput = m
+                                        showModelList = false
+                                    },
+                                    headlineContent = { Text(m) }
+                                )
+                            }
+                            ListItem(
+                                colors = dialogListItemColors(),
+                                modifier = Modifier.clickable { showModelList = false },
+                                headlineContent = { Text("返回（自己填模型名）") }
+                            )
+                        } else {
+                        // ① 供应商 ② API Key ③ 模型 —— 「只填 Key」的主路径
+                        ListItem(
+                            colors = dialogListItemColors(),
+                            modifier = Modifier.clickable { showProviderList = true },
+                            headlineContent = { Text("模型供应商") },
+                            supportingContent = { Text(providerOf(providerInput).label) },
+                            trailingContent = { Text("›") }
+                        )
+                        OutlinedTextField(
+                            value = keyInput, onValueChange = { keyInput = it },
+                            label = { Text("API Key") },
+                            singleLine = true, modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = modelInput, onValueChange = { modelInput = it },
+                            label = { Text("模型名") },
+                            singleLine = true, modifier = Modifier.fillMaxWidth()
+                        )
+                        Row {
+                            TextButton(onClick = { loadModels() }) { Text("获取模型列表") }
+                            if (modelChoices.isNotEmpty()) {
+                                TextButton(onClick = { showModelList = true }) { Text("选模型") }
+                            }
+                            TextButton(onClick = { testConnection() }) { Text("测试连接") }
+                        }
+                        if (testStatus.isNotEmpty()) Text(testStatus)
+                        ListItem(
+                            colors = dialogListItemColors(),
+                            modifier = Modifier.clickable { onlyUnreadInput = !onlyUnreadInput },
+                            leadingContent = {
+                                Switch(
+                                    checked = onlyUnreadInput,
+                                    onCheckedChange = { onlyUnreadInput = it },
+                                    colors = dialogSwitchColors()
+                                )
+                            },
+                            headlineContent = { Text("只在有「N条新消息」时显示挂件") },
+                            supportingContent = { Text("默认关闭：群聊页常显「AI分析」胶囊") }
+                        )
+                        ListItem(
+                            colors = dialogListItemColors(),
+                            modifier = Modifier.clickable { advanced = !advanced },
+                            leadingContent = {
+                                Switch(
+                                    checked = advanced,
+                                    onCheckedChange = { advanced = it },
+                                    colors = dialogSwitchColors()
+                                )
+                            },
+                            headlineContent = { Text("高级设置") },
+                            supportingContent = { Text("地址 / 请求头 / UA / 超时 / 提示词 / TLS") }
+                        )
+                        if (advanced) {
                         OutlinedTextField(
                             value = urlInput, onValueChange = { urlInput = it },
                             label = { Text("完整接口地址（优先，留空则用下面两项拼）") },
@@ -380,16 +679,6 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                         OutlinedTextField(
                             value = pathInput, onValueChange = { pathInput = it },
                             label = { Text("接口路径，默认 /v1/chat/completions") },
-                            singleLine = true, modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = keyInput, onValueChange = { keyInput = it },
-                            label = { Text("API Key") },
-                            singleLine = true, modifier = Modifier.fillMaxWidth()
-                        )
-                        OutlinedTextField(
-                            value = modelInput, onValueChange = { modelInput = it },
-                            label = { Text("模型名（原样透传，如 deepseek-chat / gpt-4o-mini）") },
                             singleLine = true, modifier = Modifier.fillMaxWidth()
                         )
                         OutlinedTextField(
@@ -443,32 +732,13 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                             },
                             headlineContent = { Text("忽略 TLS 证书校验（自签反代才需要）") }
                         )
-                        Row {
-                            TextButton(onClick = {
-                                val params = inputsAsParams(forTest = true)
-                                if (!params.isUsable()) {
-                                    testStatus = "先填完整接口地址、API Key、模型名"
-                                } else {
-                                    testStatus = "测试中…"
-                                    val activity = context.activityOrNull()
-                                    thread {
-                                        val result = runCatching {
-                                            chatCompletion(params, "你是连通性测试助手。", "只回复两个字：可用")
-                                        }
-                                        val text = result.fold(
-                                            onSuccess = { "✅ 连接成功：${it.take(60)}" },
-                                            onFailure = { "❌ 失败：${it.message?.take(300)}" }
-                                        )
-                                        if (activity != null) activity.runOnUiThread { testStatus = text } else testStatus = text
-                                    }
-                                }
-                            }) { Text("测试连接") }
                         }
-                        if (testStatus.isNotEmpty()) Text(testStatus)
+                        }
                     }
                 },
                 confirmButton = {
                     Button({
+                        providerId = providerInput
                         apiUrl = urlInput.trim()
                         apiBase = baseInput.trim().trimEnd('/')
                         apiPath = pathInput.trim().ifEmpty { "/v1/chat/completions" }
@@ -483,6 +753,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                         retries = retriesInput.trim().toIntOrNull()?.coerceIn(0, 5) ?: 1
                         maxMsgs = maxInput.trim().toIntOrNull()?.coerceIn(1, 1000) ?: DEFAULT_MAX_MSGS
                         skipTls = tlsInput
+                        onlyWhenUnread = onlyUnreadInput
                         clientCache = null
                         showToast(context, "配置已保存")
                         onDismiss()
