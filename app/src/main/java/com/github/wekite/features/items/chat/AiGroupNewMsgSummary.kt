@@ -6,6 +6,10 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.ContextWrapper
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -16,6 +20,7 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -34,9 +39,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.github.wekite.features.api.core.WeDatabaseApi
+import com.github.wekite.features.api.core.models.WeMessage
 import com.github.wekite.features.api.ui.WeChatNewMsgTipApi
 import com.github.wekite.features.core.ClickableFeature
 import com.github.wekite.features.core.Feature
+import com.github.wekite.preferences.WePrefs
 import com.github.wekite.preferences.WePrefs.Companion.prefOption
 import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.Button
@@ -58,6 +65,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
+import java.util.Calendar
 import java.util.WeakHashMap
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
@@ -85,6 +93,11 @@ import kotlin.concurrent.thread
 )
 object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListener {
 
+    init {
+        // 「聊天」分类第一项（分类内默认顺序由 KSP 生成决定，见 BaseFeature.pinnedFirst）
+        pinnedFirst = true
+    }
+
     private const val TAG = "AiGroupNewMsgSummary"
 
     private const val PILL_TEXT = "AI分析"
@@ -92,8 +105,19 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** 挂件与提示条的间距（视觉上「接着挂」） */
     private const val GAP_DP = 8
 
-    /** 挂件左右留白（舌头本体 padding 实测为 0，胶囊尺寸由 9-patch 背景撑出） */
-    private const val PILL_PAD_H_DP = 14
+    /** 挂件左右留白 */
+    private const val PILL_PAD_H_DP = 16
+
+    /** 挂件高度兜底（提示条没测量过时用；真机实测提示条高度 ≈ 40dp） */
+    private const val PILL_HEIGHT_DP = 40
+
+    /** 「只分析新消息」模式的条数硬上限（用户指定 1000） */
+    private const val UNREAD_MAX = 1000
+
+    // 报告弹窗与屏幕的间距（用户 2026-09-24 指定：左右各 12dp，上留 20mm、下留 15mm）
+    private const val DIALOG_SIDE_DP = 12
+    private const val DIALOG_TOP_MM = 20f
+    private const val DIALOG_BOTTOM_MM = 15f
 
     /** 内置供应商 id（`custom` = 自己填地址；其余见 PROVIDERS） */
     private var providerId by prefOption("ai_sum_provider", "custom")
@@ -104,9 +128,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** 每批喂给模型的条数 */
     private const val CHUNK_SIZE = 60
 
-    /** 拿不到未读数时的兜底条数 */
-    private const val FALLBACK_MSGS = 50
-
+    /** 常显模式的默认条数（= 当天消息的条数上限；「只分析新消息」模式改用 [UNREAD_MAX]） */
     private const val DEFAULT_MAX_MSGS = 200
 
     private const val DEFAULT_SYSTEM_PROMPT =
@@ -136,23 +158,42 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** ChattingContent -> 我们的胶囊 */
     private val pills = WeakHashMap<View, TextView>()
 
+    /** ChattingContent -> 对应提示条（悬浮底栏高度变化时用它重新定位） */
+    private val tipForHost = WeakHashMap<View, View>()
+
     /** 提示条 -> 原标题条底部外边距（只记一次，只加不覆盖） */
     private val tipBaseBottomMargins = WeakHashMap<View, Int>()
 
     @Volatile
     private var clientCache: Pair<AiParams, OkHttpClient>? = null
 
+    /** 悬浮输入框占用高度变化 → 重新定位（见 FloatingChatFooter.reservedBottomPx） */
+    private val zoneListener: (Int) -> Unit = { onZoneChanged() }
+
     override fun onEnable() {
         WeChatNewMsgTipApi.addListener(this)
+        FloatingChatFooter.addZoneListener(zoneListener)
     }
 
     override fun onDisable() {
         WeChatNewMsgTipApi.removeListener(this)
+        FloatingChatFooter.removeZoneListener(zoneListener)
         pills.forEach { (host, pill) ->
             runCatching { (host as? ViewGroup)?.removeView(pill) }
         }
         pills.clear()
+        tipForHost.clear()
         tipBaseBottomMargins.clear()
+    }
+
+    /** 底栏占用高度变了（进聊天页 / 展开面板 / 关掉悬浮）⇒ 挂件重新贴到卡片上沿。 */
+    private fun onZoneChanged() {
+        pills.forEach { (host, pill) ->
+            if (pill.parent == null) return@forEach
+            val tip = tipForHost[host] ?: return@forEach
+            runCatching { syncPill(host, tip) }
+                .onFailure { WeLogger.e(TAG, "re-sync after bottom zone change failed", it) }
+        }
     }
 
     // ==================== 挂件同步 ====================
@@ -179,19 +220,32 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         val base = tipBaseBottomMargins.getOrPut(tip) {
             (tip.layoutParams as? ViewGroup.MarginLayoutParams)?.bottomMargin ?: 0
         }
+        tipForHost[host] = tip
         // ⚠️ 提示条只在「真·新消息到达且用户没看到」时才 VISIBLE，平时是 GONE 且未测量（h=0）。
-        // 挂件不能跟着它的可见性走（v3.22 真机实测：那样用户在群聊页永远看不到挂件），
-        // 也不能把它的测量值当尺寸来源（GONE 时为 0 ⇒ 挂件 0 高，插进去了但看不见）。
+        // 挂件不能跟着它的可见性走，也不能把它的测量值当尺寸来源（GONE 时为 0）。
         val tipVisible = tip.visibility == View.VISIBLE && tip.height > 0
         val gap = GAP_DP.dpToPx(tip.context)
 
-        // 提示条可见时上移让位；挂件始终占提示条原来的位置 ⇒ 视觉上就是「挂在它下面」
-        setBottomMargin(tip, if (tipVisible) base + tip.height + gap else base)
-        setBottomMargin(pill, base)
+        // 悬浮输入框会压掉页底 ~240px（实测顶掉 241px，挂件贴底 85px 完全被盖住）。
+        // 让出这段高度：提示条与挂件一起浮在卡片上沿之上；底栏没开时为 0，行为与从前一致。
+        val zone = if (FloatingChatFooter.isActive) FloatingChatFooter.reservedBottomPx else 0
+        val slot = base + zone
 
-        // 挂件是 wrap_content + 与提示条同一张 9-patch 背景，背景自带的 minimumHeight 决定胶囊高度
-        // ⇒ 不需要提示条的测量值也能与它等高；提示条真被测量过时再对齐一次。
-        if (tip.height > 0 && pill.minimumHeight != tip.height) pill.minimumHeight = tip.height
+        // 提示条在下、挂件紧贴它上方（用户 2026-09-24 要求「放在 N条新消息 上方靠近」）；
+        // 提示条隐藏时挂件独占这一行。
+        setBottomMargin(tip, slot)
+        setBottomMargin(pill, if (tipVisible) slot + tip.height + gap else slot)
+
+        // 尺寸与提示条等高：提示条被测量过就用它，否则 40dp 兜底（真机实测提示条高 ≈40dp）。
+        // 背景已是蓝色渐变，故不能再用原 9-patch 的 minimumHeight 撑高。
+        val wantH = if (tip.height > 0) tip.height else PILL_HEIGHT_DP.dpToPx(tip.context)
+        if (pill.minimumHeight != wantH) pill.minimumHeight = wantH
+        applyPillSkin(pill, wantH)
+        WeLogger.i(
+            TAG,
+            "pill placed: zone=$zone slot=$slot tipVisible=$tipVisible tipH=${tip.height} h=$wantH " +
+                    "base=$base conv=$conv"
+        )
 
         pill.visibility = if (!onlyWhenUnread || tipVisible) View.VISIBLE else View.GONE
         pill.setOnClickListener { onPillClick(host, conv) }
@@ -234,36 +288,38 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         return pill
     }
 
-    /** 观感全部取自提示条本体 ⇒ 「挂件大小一样」不靠常量。 */
+    /** 字号/行距抄提示条（保持等大观感）；颜色与背景由 [applyPillSkin] 决定（用户指定的蓝色梦幻）。 */
     private fun styleFromTip(pill: TextView, tip: View) {
         val src = (tip as? ViewGroup)?.let { group ->
             (0 until group.childCount).map { group.getChildAt(it) }.filterIsInstance<TextView>().firstOrNull()
         }
         if (src != null) {
-            // ⚠️ textSize/文字色由 XML 设定，提示条 GONE 时也读得到 ⇒ 可以直接抄
+            // textSize 由 XML 设定，提示条 GONE 时也读得到 ⇒ 可以直接抄
             pill.setTextSize(TypedValue.COMPLEX_UNIT_PX, src.textSize)
-            pill.typeface = src.typeface
-            pill.setTextColor(src.currentTextColor)
             pill.includeFontPadding = src.includeFontPadding
         }
         pill.gravity = Gravity.CENTER
+        pill.setTextColor(Color.WHITE)
+        pill.setTypeface(pill.typeface, Typeface.BOLD)
+        // 左右留白自己给：背景已不是提示条那张 9-patch，不再有背景自带留白
+        val padH = PILL_PAD_H_DP.dpToPx(tip.context)
+        pill.setPadding(padH, 0, padH, 0)
+    }
 
-        // 提示条本体 padding 实测为 0（8.0.77 的 c7j），尺寸由 9-patch 背景的留白/minimumHeight 撑出。
-        // ⚠️ 全 0 时不要 setPadding(0,0,0,0)：显式设置会让背景自带的留白失效（胶囊会缩成文字大小）。
-        val tipPadding = intArrayOf(tip.paddingLeft, tip.paddingTop, tip.paddingRight, tip.paddingBottom)
-        if (tipPadding.any { it > 0 }) {
-            pill.setPadding(tipPadding[0], tipPadding[1], tipPadding[2], tipPadding[3])
-        } else {
-            val padH = PILL_PAD_H_DP.dpToPx(tip.context)
-            pill.setPadding(padH, 0, padH, 0)
+    /**
+     * 蓝色渐变「梦幻」胶囊皮肤：蓝 → 淡紫对角渐变、圆角取高度一半（标准胶囊）、
+     * 细白描边 + 轻微投影。高度由调用方按提示条高度给定 ⇒ 圆角恒等于半个高度。
+     */
+    private fun applyPillSkin(pill: TextView, heightPx: Int) {
+        val bg: Drawable = GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            intArrayOf(Color.parseColor("#5B7CFF"), Color.parseColor("#B07CFF"))
+        ).apply {
+            cornerRadius = (heightPx.coerceAtLeast(1)) / 2f
+            setStroke(1.dpToPx(pill.context), Color.parseColor("#59FFFFFF"))
         }
-
-        val bg = tip.background
-        if (bg != null) {
-            val copy = runCatching { bg.constantState?.newDrawable()?.mutate() }.getOrNull()
-            pill.background = copy ?: bg
-        }
-        if (tip.height > 0) pill.minimumHeight = tip.height
+        pill.background = bg
+        pill.elevation = 2.dpToPx(pill.context).toFloat()
     }
 
     private fun cloneParams(src: ViewGroup.LayoutParams?): ViewGroup.MarginLayoutParams = when (src) {
@@ -295,16 +351,20 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         }
     }
 
-    /** 读取该群「新消息」→ 分块总结 → 汇总成报告。 */
+    /**
+     * 读取该群「新消息」→ 分块总结 → 汇总成报告。
+     *
+     * 范围随挂件模式（用户 2026-09-24 指定）：
+     * - 打开「只在有「N条新消息」时显示挂件」→ 分析**全部未读新消息**（上限 [UNREAD_MAX] = 1000 条）
+     * - 未打开（常显）→ 默认只分析**当天**的消息（上限 = 设置里的条数，默认 200）
+     */
     private fun analyzeNewMessages(convId: String, params: AiParams, onStage: (String) -> Unit): String {
-        val unread = queryUnread(convId)
-        val limit = (if (unread > 0) unread else FALLBACK_MSGS).coerceAtMost(maxMsgs.coerceIn(1, 1000))
-        onStage("读取该群最近 $limit 条新消息…")
-
-        val messages = WeDatabaseApi.getMessages(convId, pageIndex = 1, pageSize = limit)
-            .filter { it.type?.isText == true }
-            .reversed()
-        if (messages.isEmpty()) return "该群当前没有可分析的文本新消息。"
+        val raw = if (onlyWhenUnread) collectUnread(convId, onStage) else collectToday(convId, onStage)
+        val messages = raw.filter { it.type?.isText == true }.reversed()
+        if (messages.isEmpty()) {
+            return if (onlyWhenUnread) "该群当前没有未读的新消息。"
+            else "今天这个群还没有可分析的文本消息。"
+        }
 
         val nameCache = HashMap<String, String>()
         val lines = messages.map { msg ->
@@ -331,6 +391,31 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                     "主要话题、讨论要点、值得注意的信息与结论。条理清晰，不要编造。",
             digest
         )
+    }
+
+    /** 该群**全部未读**新消息（上限 [UNREAD_MAX]）；没有未读则返回空。 */
+    private fun collectUnread(convId: String, onStage: (String) -> Unit): List<WeMessage> {
+        val unread = queryUnread(convId).coerceIn(0, UNREAD_MAX)
+        if (unread <= 0) return emptyList()
+        onStage("读取该群全部未读新消息（$unread 条）…")
+        return WeDatabaseApi.getMessages(convId, pageIndex = 1, pageSize = unread)
+    }
+
+    /** **当天**（本地 00:00 起）的消息；条数上限 = 设置里的「单次最多分析条数」。 */
+    private fun collectToday(convId: String, onStage: (String) -> Unit): List<WeMessage> {
+        val cap = maxMsgs.coerceIn(1, UNREAD_MAX)
+        onStage("读取今天的消息（上限 $cap 条）…")
+        return WeDatabaseApi.getMessagesSince(convId, todayStartSeconds(), cap)
+    }
+
+    /** 本地当天 00:00 的**秒级**时间戳（微信 `message.createTime` 存的是秒）。 */
+    private fun todayStartSeconds(): Long {
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis / 1000L
     }
 
     /** 该会话的未读数（群聊取 `unReadCount` / `unReadMuteCount` 较大者）。 */
@@ -379,7 +464,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     private val PROVIDERS = listOf(
         Provider(
             "custom", "自定义 / 自建网关 / 反代", "",
-            hint = "地址、请求头、UA 全部自己填（「高级设置」里）"
+            hint = "填网址和 Key 即可；其余（请求头/前缀/路径）已默认填好"
         ),
         Provider(
             "agentrouter", "AgentRouter（公益站）", "https://ps.air-outer.com/v1",
@@ -390,35 +475,39 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             userAgent = "claude-cli/1.0.60 (external, cli)", hint = "需 claude-cli UA，已预置"
         ),
         Provider("deepseek", "DeepSeek 深度求索", "https://api.deepseek.com/v1"),
-        Provider("openai", "OpenAI", "https://api.openai.com/v1"),
         Provider("moonshot", "月之暗面 Kimi", "https://api.moonshot.cn/v1"),
         Provider("zhipu", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4"),
         Provider("dashscope", "阿里通义千问（百炼）", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-        Provider(
-            "volces", "火山方舟（豆包）", "https://ark.cn-beijing.volces.com/api/v3",
-            hint = "模型名要填「推理接入点」ep-xxxx"
-        ),
+        Provider("hunyuan", "腾讯混元", "https://api.hunyuan.cloud.tencent.com/v1"),
         Provider("siliconflow", "硅基流动 SiliconFlow", "https://api.siliconflow.cn/v1"),
         Provider("qianfan", "百度千帆", "https://qianfan.baidubce.com/v2"),
-        Provider("hunyuan", "腾讯混元", "https://api.hunyuan.cloud.tencent.com/v1"),
         Provider("minimax", "MiniMax", "https://api.minimax.chat/v1"),
         Provider("stepfun", "阶跃星辰 StepFun", "https://api.stepfun.com/v1"),
-        Provider("lingyi", "零一万物 Yi", "https://api.lingyiwanwu.com/v1"),
-        Provider(
-            "spark", "讯飞星火", "https://spark-api-open.xf-yun.com/v1",
-            hint = "Key 要填成 APIKey:APISecret（两段用冒号连起来）"
-        ),
+        Provider("openai", "OpenAI", "https://api.openai.com/v1"),
         Provider("openrouter", "OpenRouter", "https://openrouter.ai/api/v1"),
-        Provider("groq", "Groq", "https://api.groq.com/openai/v1"),
-        Provider("xai", "xAI Grok", "https://api.x.ai/v1"),
-        Provider("mistral", "Mistral", "https://api.mistral.ai/v1"),
-        Provider("together", "Together AI", "https://api.together.xyz/v1"),
-        Provider("ollama", "本机 Ollama", "http://127.0.0.1:11434/v1", keyPrefix = "", hint = "Key 随便填"),
-        Provider("lmstudio", "本机 LM Studio", "http://127.0.0.1:1234/v1", keyPrefix = "", hint = "Key 随便填")
+        Provider("nvidia", "NVIDIA NIM", "https://integrate.api.nvidia.com/v1")
     )
 
     private fun providerOf(id: String): Provider =
         PROVIDERS.firstOrNull { it.id == id } ?: PROVIDERS.first()
+
+    // ==================== 每个供应商各存一份 Key（用户 2026-09-24 要求）====================
+    // 切到别的供应商：它存过 Key 就显示它自己的，没存过就留空；输入即存，不用点保存。
+
+    private fun keyPref(providerId: String) = "ai_sum_key_${providerId.ifEmpty { "custom" }}"
+
+    /** 该供应商已保存的 Key。首次升级把旧的全局 Key 认到当前选中的供应商名下。 */
+    private fun keyForProvider(id: String): String {
+        val stored = WePrefs.getStringOrDef(keyPref(id), "")
+        if (stored.isNotEmpty()) return stored
+        val legacy = apiKey
+        return if (legacy.isNotEmpty() && id == providerId.ifEmpty { "custom" }) legacy else ""
+    }
+
+    private fun rememberKey(id: String, value: String) {
+        runCatching { WePrefs.putString(keyPref(id), value) }
+            .onFailure { WeLogger.e(TAG, "remember key for $id failed", it) }
+    }
 
     /** 预设基址都自带 `/v1`、`/v4` 之类版本段 ⇒ 拼接口用 `/chat/completions`。 */
     private const val PRESET_PATH = "/chat/completions"
@@ -484,7 +573,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             var urlInput by remember { mutableStateOf(apiUrl) }
             var baseInput by remember { mutableStateOf(apiBase) }
             var pathInput by remember { mutableStateOf(apiPath) }
-            var keyInput by remember { mutableStateOf(apiKey) }
+            // 每个供应商各显示自己那份 Key（没存过就留空）
+            var keyInput by remember { mutableStateOf(keyForProvider(providerId.ifEmpty { "custom" })) }
             var modelInput by remember { mutableStateOf(model) }
             var keyHeaderInput by remember { mutableStateOf(keyHeader) }
             var keyPrefixInput by remember { mutableStateOf(keyPrefix) }
@@ -516,17 +606,23 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                 systemPrompt = promptInput.trim().ifEmpty { DEFAULT_SYSTEM_PROMPT }
             )
 
-            /** 选中内置供应商：只留「Key + 模型」要填，地址/请求头/UA 自动带好。 */
+            /**
+             * 选中供应商：只留「网址（仅自定义）+ Key」要填，其余全部自动带好
+             * （请求头名 / Key 前缀 / 接口路径 / UA）。自定义也套同一套默认值
+             * ⇒ 用户「只填网址和 Key」即可（用户 2026-09-24 指定）。
+             */
             fun applyPreset(p: Provider) {
                 providerInput = p.id
+                // 切供应商：显示它自己存过的 Key，没存过就留空（用户 2026-09-24 要求）
+                keyInput = keyForProvider(p.id)
                 if (p.id != "custom") {
                     urlInput = ""
                     baseInput = p.base
-                    pathInput = PRESET_PATH
-                    keyHeaderInput = p.keyHeader
-                    keyPrefixInput = p.keyPrefix
-                    uaInput = p.userAgent
                 }
+                pathInput = PRESET_PATH
+                keyHeaderInput = p.keyHeader
+                keyPrefixInput = p.keyPrefix
+                uaInput = p.userAgent
                 showProviderList = false
                 testStatus = ""
             }
@@ -555,6 +651,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                     activity?.runOnUiThread {
                         result.onSuccess { list ->
                             modelChoices = list
+                            // 用户要求「只填网址和 Key」⇒ 模型为空时自动选第一个，省一次点击
+                            if (modelInput.isBlank() && list.isNotEmpty()) modelInput = list.first()
                             if (list.isNotEmpty()) showModelList = true
                         }
                         testStatus = text
@@ -622,7 +720,12 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                             trailingContent = { Text("›") }
                         )
                         OutlinedTextField(
-                            value = keyInput, onValueChange = { keyInput = it },
+                            value = keyInput,
+                            onValueChange = {
+                                keyInput = it
+                                // 输入即存到「当前供应商」名下，不用点保存
+                                rememberKey(providerInput, it.filterNot { c -> c.isWhitespace() })
+                            },
                             label = { Text("API Key") },
                             singleLine = true, modifier = Modifier.fillMaxWidth()
                         )
@@ -650,7 +753,9 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                                 )
                             },
                             headlineContent = { Text("只在有「N条新消息」时显示挂件") },
-                            supportingContent = { Text("默认关闭：群聊页常显「AI分析」胶囊") }
+                            supportingContent = {
+                                Text("关（默认）＝群聊页常显，只分析当天消息；开＝有未读才显示，分析全部新消息（上限 1000 条）")
+                            }
                         )
                         ListItem(
                             colors = dialogListItemColors(),
@@ -739,6 +844,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                 confirmButton = {
                     Button({
                         providerId = providerInput
+                        // 该供应商的 Key 存到它自己名下（另存一份"当前生效"的给运行时用）
+                        rememberKey(providerInput, keyInput.filterNot { it.isWhitespace() })
                         apiUrl = urlInput.trim()
                         apiBase = baseInput.trim().trimEnd('/')
                         apiPath = pathInput.trim().ifEmpty { "/v1/chat/completions" }
@@ -782,15 +889,30 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         fun isUsable() = endpoint.isNotBlank() && apiKey.isNotBlank() && model.isNotBlank()
     }
 
-    /** 完整地址优先；否则 base + path 拼接（path 缺省 `/v1/chat/completions`）。 */
+    /**
+     * 完整地址优先；否则 base + path 拼接。
+     *
+     * ⚠️ **不能无条件拼 `/v1/chat/completions`**：预设基址、以及用户手填的
+     * `http://host/v1` 这类**自带版本段**，硬拼会变成 `/v1/v1/chat/completions`（v3.22 的坑）。
+     * 规则：基址末尾已是 `/vN` ⇒ 只补 `/chat/completions`；否则按 path（缺省 `/v1/chat/completions`）。
+     */
     private fun endpointOf(url: String, base: String, path: String): String {
         val full = url.trim()
         if (full.isNotEmpty()) return full
-        val trimmedBase = base.trim().trimEnd('/')
-        if (trimmedBase.isEmpty()) return ""
-        val p = path.trim().ifEmpty { "/v1/chat/completions" }
-        return trimmedBase + (if (p.startsWith("/")) p else "/$p")
+        val b = base.trim().trimEnd('/')
+        if (b.isEmpty()) return ""
+        if (b.endsWith("/chat/completions") || b.endsWith("/completions")) return b
+        val suffix = if (VERSION_TAIL.containsMatchIn(b)) {
+            "/chat/completions"
+        } else {
+            val p = path.trim().ifEmpty { "/v1/chat/completions" }
+            if (p.startsWith("/")) p else "/$p"
+        }
+        return b + suffix
     }
+
+    /** 基址末尾的版本段（`/v1`、`/v2`、`/v4`、`/api/v3` 的尾段…）。 */
+    private val VERSION_TAIL = Regex("""/v\d+$""")
 
     private fun currentParams() = AiParams(
         endpoint = endpointOf(apiUrl, apiBase, apiPath),
@@ -897,6 +1019,27 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     ) {
         val activity = context.activityOrNull()
         showComposeDialog(context, directlyDismissable = false) {
+            // 报告弹窗尺寸（用户 2026-09-24 指定）：左右各留 12dp、上留 20mm、下留 15mm。
+            // 做法 = 把弹窗窗口本身设成「屏幕减去这三段留白」的固定盒子，窗口顶部定位在上留白处，
+            // 卡片再 fillHeight 撑满 ⇒ 视觉上就是上下留白 20mm / 15mm。
+            run {
+                val dm = context.resources.displayMetrics
+                val side = DIALOG_SIDE_DP.dpToPx(context)
+                val top = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_MM, DIALOG_TOP_MM, dm).toInt()
+                val bottom = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_MM, DIALOG_BOTTOM_MM, dm).toInt()
+                val w = (dm.widthPixels - side * 2).coerceAtLeast(1)
+                val h = (dm.heightPixels - top - bottom).coerceAtLeast(1)
+                window.setLayout(w, h)
+                window.setGravity(Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+                val lp = window.attributes
+                lp.y = top
+                window.attributes = lp
+                WeLogger.i(
+                    TAG,
+                    "report dialog window: ${w}x$h (side=$side top=$top bottom=$bottom) " +
+                            "screen=${dm.widthPixels}x${dm.heightPixels}"
+                )
+            }
             var stage by remember { mutableStateOf(title) }
             var finished by remember { mutableStateOf(false) }
             var resultText by remember { mutableStateOf("") }
@@ -905,7 +1048,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             when {
                 !finished -> AlertDialogContent(
                     title = { Text("群聊新消息 AI 分析") },
-                    text = { Text(stage) }
+                    text = { Text(stage) },
+                    fillHeight = true
                 )
 
                 errorText.isNotEmpty() -> AlertDialogContent(
@@ -915,11 +1059,12 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                             text = errorText,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(300.dp)
+                                .fillMaxHeight()
                                 .verticalScroll(rememberScrollState())
                         )
                     },
-                    confirmButton = { Button(onDismiss) { Text("关闭") } }
+                    confirmButton = { Button(onDismiss) { Text("关闭") } },
+                    fillHeight = true
                 )
 
                 else -> AlertDialogContent(
@@ -929,7 +1074,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                             text = resultText,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(300.dp)
+                                .fillMaxHeight()
                                 .verticalScroll(rememberScrollState())
                         )
                     },
@@ -939,7 +1084,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                             copyToClipboard(context, resultText)
                             showToast(context, "已复制")
                         }) { Text("复制") }
-                    }
+                    },
+                    fillHeight = true
                 )
             }
 

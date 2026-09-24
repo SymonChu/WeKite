@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooterBottom
 import dev.ujhhgtg.reflekt.reflekt
+import java.util.concurrent.CopyOnWriteArrayList
 import com.github.wekite.dexkit.abc.IResolveDex
 import com.github.wekite.dexkit.dsl.dexMethod
 import com.github.wekite.features.core.ClickableFeature
@@ -389,6 +390,38 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     }
 
     /**
+     * 悬浮卡片实际占用的底部高度（= 给消息列表补的 padding，含额外间距）。
+     *
+     * 供同页其它悬浮挂件避让：「AI分析」胶囊必须浮在卡片上沿之上，否则被卡片盖住
+     * （v3.23 真机实测：胶囊贴底 85px，卡片占用 241px ⇒ 完全看不到）。不悬浮时为 0。
+     */
+    @Volatile
+    var reservedBottomPx: Int = 0
+        private set
+
+    private val zoneListeners = CopyOnWriteArrayList<(Int) -> Unit>()
+
+    /** 订阅「卡片占用高度」变化（参数 = 新的 [reservedBottomPx]），挂件据此重新定位。 */
+    fun addZoneListener(listener: (Int) -> Unit) {
+        zoneListeners.addIfAbsent(listener)
+    }
+
+    fun removeZoneListener(listener: (Int) -> Unit) {
+        zoneListeners.remove(listener)
+    }
+
+    private fun publishReservedBottom(px: Int) {
+        if (reservedBottomPx == px) return
+        reservedBottomPx = px
+        for (l in zoneListeners) runCatching { l(px) }
+    }
+
+    override fun onDisable() {
+        reservedBottomPx = 0
+        zoneListeners.clear()
+    }
+
+    /**
      * 卡片悬浮在列表之上后, 给消息列表底部补 [extra] 的 padding, 让最后一条消息在滚到底时
      * 停在卡片上沿而不是藏在卡片后面。RecyclerView 本身 clipToPadding=false, 滚动时消息
      * 会正常从卡片和小白条背后穿过。
@@ -405,6 +438,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         val base = chatListBasePaddings.getOrPut(recycler) { recycler.paddingBottom }
         val target = base + extra
         val old = recycler.paddingBottom
+        publishReservedBottom(extra)
         if (old == target) return
         val wasAtBottom = !recycler.canScrollVertically(1)
         recycler.setPadding(recycler.paddingLeft, recycler.paddingTop, recycler.paddingRight, target)
@@ -461,7 +495,12 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             footer.requestLayout()
         }
         // 卡片现在盖在列表上方, 给列表底部补出同样的高度, 最后一条消息才不会藏在卡片后面
-        if (visible > 0) applyChatListPadding(footer, visible + extraBottom)
+        if (visible > 0) {
+            applyChatListPadding(footer, visible + extraBottom)
+        } else {
+            // 不悬浮（面板未就位/被关掉）⇒ 底部不再被占，挂件可以贴底
+            publishReservedBottom(0)
+        }
     }
 
     override fun onClick(context: ComponentActivity) {

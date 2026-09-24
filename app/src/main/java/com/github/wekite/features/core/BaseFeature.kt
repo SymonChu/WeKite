@@ -29,6 +29,15 @@ abstract class BaseFeature {
 
     var description: String = ""
 
+    /**
+     * 置顶到所在分类的第一项。
+     *
+     * 分类内的默认顺序 = **KSP 生成顺序，无法用命名控制** ⇒ 需要置顶的功能在自己的 `init`
+     * 里设为 true；设置页 `settings/FeaturesPager.kt` 的 `CategoryDetailScreen` 用稳定排序
+     * 把它提到第一位，其余项保持原顺序。
+     */
+    var pinnedFirst: Boolean = false
+
     open fun startup() {
         error("You shouldn't inherit BaseFeature")
     }

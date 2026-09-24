@@ -196,7 +196,11 @@ fun CategoryDetailScreen(categoryName: String, onBack: () -> Unit) {
         if (categoryName == ENABLED_FEATURES_CATEGORY) {
             enabledFeatureItems()
         } else {
-            FeaturesProvider.ALL_HOOK_ITEMS.filter { categoryName in it.categories }
+            // 置顶项排第一（KSP 生成顺序无法用命名控制，见 BaseFeature.pinnedFirst）；
+            // sortedByDescending 是稳定排序 ⇒ 其余项保持原顺序。
+            FeaturesProvider.ALL_HOOK_ITEMS
+                .filter { categoryName in it.categories }
+                .sortedByDescending { it.pinnedFirst }
         }
     }
 

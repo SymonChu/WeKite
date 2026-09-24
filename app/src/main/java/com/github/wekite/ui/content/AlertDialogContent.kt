@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,7 +31,12 @@ fun AlertDialogContent(
     title: @Composable (() -> Unit)?,
     text: @Composable (() -> Unit)?,
     confirmButton: (@Composable () -> Unit)? = null,
-    dismissButton: (@Composable () -> Unit)? = null
+    dismissButton: (@Composable () -> Unit)? = null,
+    /**
+     * true = 卡片高度撑满可用高度（配合调用方把弹窗窗口设成固定大小，
+     * 用于「报告弹窗上下留白」这类需求）；默认 false = 原来的 wrapContentHeight。
+     */
+    fillHeight: Boolean = false
 ) {
     val dark = ThemeSettings.themeMode.resolve()
     Surface(
@@ -39,9 +45,8 @@ fun AlertDialogContent(
         color = if (dark) Color(0xFF111111) else Color.White,
         contentColor = if (dark) Color.White else Color.Black,
         modifier = modifier
-//            .padding(12.dp)
             .fillMaxWidth()
-            .wrapContentHeight()
+            .then(if (fillHeight) Modifier.fillMaxHeight() else Modifier.wrapContentHeight())
     ) {
         DefaultColumn(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
