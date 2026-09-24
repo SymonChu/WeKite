@@ -37,6 +37,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.github.wekite.features.api.core.WeDatabaseApi
 import com.github.wekite.features.api.core.models.WeMessage
@@ -75,22 +76,23 @@ import javax.net.ssl.X509TrustManager
 import kotlin.concurrent.thread
 
 /**
- * 群聊新消息 AI 分析：在聊天页右下「N条新消息」提示条的**下面**挂一个同尺寸「AI分析」胶囊，
- * 点击即把该群**新消息**（未读范围）发给用户自填的 OpenAI 兼容接口，生成一份中文报告。
+ * 群聊消息分析：在聊天页右下「N条新消息」提示条的**上方**挂一个同尺寸「AI分析」胶囊，
+ * 点击即把该群消息（未读范围 / 当天范围）发给用户自填的 OpenAI 兼容接口，生成一份中文报告。
  *
  * 设计要点：
- * - 挂件尺寸/圆角/内边距/字体**全部复制提示条本体**（背景用 `constantState.newDrawable()`），
- *   所以「和 N条新消息 一样大」不靠写死常量，换微信版本/字体自动一致。
- * - 位置 = 提示条的原始 `marginBottom` 处，提示条自己上移 `自身高度 + 8dp` ⇒ 视觉上紧贴其下方。
- *   提示条被微信隐藏时挂件同步隐藏（没有新消息就没什么可分析的）。
+ * - 挂件高度抄提示条（提示条没测量过就用 40dp 兜底），背景是自绘的蓝色渐变，
+ *   位置让开悬浮输入框占用的高度（`FloatingChatFooter.reservedBottomPx`）。
+ * - ⚠️ **提示条在真机上可能始终 `GONE`**（2026-09-24 实测微信 8.0.77：日志里所有
+ *   `pill placed` 都是 `tipVisible=false tipH=0`）⇒ 「只在有未读时显示」不能只拿提示条可见性
+ *   当判据，改用**会话真实未读数** `rconversation.unReadCount`（见 [recentUnread]）。
  * - 接口/Key/模型/请求头全部用户自填，支持各类反代与公益站（自定义 URL、Key 头名与前缀、
  *   User-Agent、任意额外请求头、超时/重试、忽略 TLS 校验、错误原文回显）。
  */
 @SuppressLint("DiscouragedApi")
 @Feature(
-    name = "群聊新消息 AI 分析",
+    name = "群聊消息分析",
     categories = ["聊天"],
-    description = "聊天页「N条新消息」下方挂同尺寸「AI分析」胶囊，点击总结该群新消息（接口/模型自填，支持各类反代）"
+    description = "聊天页「N条新消息」上方挂同尺寸「AI分析」胶囊，点击分析该群消息（接口/模型自填，支持各类反代）"
 )
 object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListener {
 
@@ -115,13 +117,19 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** 「只分析新消息」模式的条数硬上限（用户指定 1000） */
     private const val UNREAD_MAX = 1000
 
+    /** 未读数缓存的 TTL（毫秒） */
+    private const val UNREAD_TTL_MS = 1200L
+
+    /** 挂件隐藏后的复查延迟（毫秒） */
+    private const val RECHECK_DELAY_MS = 1500L
+
     // 报告弹窗与屏幕的间距（用户 2026-09-24 指定：左右各 12dp，上留 20mm、下留 15mm）
     private const val DIALOG_SIDE_DP = 12
     private const val DIALOG_TOP_MM = 20f
     private const val DIALOG_BOTTOM_MM = 15f
 
-    /** 报告弹窗整体**上移**的量（用户 2026-09-25：往上移动 30dp，大小不变） */
-    private const val DIALOG_REPORT_LIFT_DP = 30
+    /** 报告弹窗整体**上移**的量（用户 2026-09-25：往上移动 30dp，大小不变；同日再追加 12dp ⇒ 42dp） */
+    private const val DIALOG_REPORT_LIFT_DP = 42
 
     /** 内置供应商 id（`custom` = 自己填地址；其余见 PROVIDERS） */
     private var providerId by prefOption("ai_sum_provider", "custom")
@@ -228,6 +236,12 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         // ⚠️ 提示条只在「真·新消息到达且用户没看到」时才 VISIBLE，平时是 GONE 且未测量（h=0）。
         // 挂件不能跟着它的可见性走，也不能把它的测量值当尺寸来源（GONE 时为 0）。
         val tipVisible = tip.visibility == View.VISIBLE && tip.height > 0
+        // ⚠️ 真机实测（2026-09-24 微信 8.0.77）：这条提示条**始终** `visibility=8 h=0`
+        //    （日志里每一条 `pill placed` 都是 tipVisible=false）⇒ 只拿它当判据的话
+        //    「只在有未读新消息时显示挂件」恒为假、挂件永不出现（用户报的 bug）。
+        //    现在以**该会话真实未读数**为主判据（提示条可见时也算有），语义与开关名一致。
+        val unread = if (onlyWhenUnread) recentUnread(conv) else 0
+        val hasNew = tipVisible || unread > 0
         val gap = GAP_DP.dpToPx(tip.context)
 
         // 悬浮输入框会压掉页底 ~240px（实测顶掉 241px，挂件贴底 85px 完全被盖住）。
@@ -248,10 +262,12 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         WeLogger.i(
             TAG,
             "pill placed: zone=$zone slot=$slot tipVisible=$tipVisible tipH=${tip.height} h=$wantH " +
-                    "base=$base conv=$conv"
+                    "base=$base conv=$conv unread=$unread"
         )
 
-        pill.visibility = if (!onlyWhenUnread || tipVisible) View.VISIBLE else View.GONE
+        pill.visibility = if (!onlyWhenUnread || hasNew) View.VISIBLE else View.GONE
+        // 隐藏后安排一次有界复查：刚进群那一刻未读数可能还没落到库里
+        if (onlyWhenUnread && !hasNew) schedulePillRecheck(host, tip) else pendingRecheck.remove(host)
         pill.setOnClickListener { onPillClick(host, conv) }
     }
 
@@ -380,9 +396,9 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         }
 
         val chunks = lines.chunked(CHUNK_SIZE)
-        // 用户 2026-09-24：弹窗里不要「第 X/Y 批分析中…」这类批次进度，
-        // 只留一句「共 N 条新消息，分析中…」；批次划分数只进日志（排障用，不上界面）。
-        onStage("共 ${lines.size} 条新消息，分析中…")
+        // 用户 2026-09-24 / 2026-09-25：弹窗里不要批次进度，也不要「共 N 条新消息，分析中…」
+        // 这类每次看起来都一样的提示 ⇒ 界面只留「读取…」与「汇总报告…」两句；
+        // 条数与批次划分只进日志（排障用，不上界面）。
         WeLogger.i(TAG, "analyze: ${lines.size} messages -> ${chunks.size} chunk(s), CHUNK_SIZE=$CHUNK_SIZE")
         val parts = chunks.mapIndexed { index, chunk ->
             WeLogger.i(TAG, "analyze: chunk ${index + 1}/${chunks.size} ...")
@@ -432,6 +448,36 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             arrayOf<Any>(convId)
         ).use { cursor -> if (cursor.moveToFirst()) maxOf(cursor.getInt(0), cursor.getInt(1)) else 0 }
     }.getOrDefault(0)
+
+    // ============ 未读判定的缓存与复查（用户 2026-09-24 报「只在有未读时显示」不出挂件）============
+
+    /** conv -> (查询时刻, 未读数)：syncPill 被底栏/提示条事件频繁触发，别每次都打 SQLite。 */
+    private val unreadCache = HashMap<String, Pair<Long, Int>>()
+
+    /** 已排了复查的宿主，避免重复 post。 */
+    private val pendingRecheck = WeakHashMap<View, Boolean>()
+
+    /** 该会话真实未读数（带短 TTL 缓存）。 */
+    private fun recentUnread(conv: String): Int {
+        val now = System.currentTimeMillis()
+        unreadCache[conv]?.let { (at, value) -> if (now - at < UNREAD_TTL_MS) return value }
+        val value = queryUnread(conv)
+        if (unreadCache.size > 32) unreadCache.clear()
+        unreadCache[conv] = now to value
+        return value
+    }
+
+    /** 隐藏挂件后 1.5s 复查一次（先清缓存）：刚进群那一刻未读数可能还没落库。 */
+    private fun schedulePillRecheck(host: View, tip: View) {
+        if (pendingRecheck[host] == true) return
+        pendingRecheck[host] = true
+        host.postDelayed({
+            pendingRecheck.remove(host)
+            unreadCache.remove(WeChatNewMsgTipApi.convIdOf(host))
+            runCatching { syncPill(host, tip) }
+                .onFailure { WeLogger.e(TAG, "pill recheck failed", it) }
+        }, RECHECK_DELAY_MS)
+    }
 
     private val senderPrefixRegex = Regex("""^([^:\n]{1,64}):\n""")
 
@@ -792,7 +838,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             }
 
             AlertDialogContent(
-                title = { Text("群聊新消息 AI 分析") },
+                title = { Text("群聊消息分析") },
                 text = {
                     DefaultColumn(modifier = Modifier.heightIn(max = 420.dp), scrollable = true) {
                         if (showCustomEditor) {
@@ -1270,9 +1316,15 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
 
             when {
                 !finished -> AlertDialogContent(
-                    // 用户 2026-09-24：分析中弹窗文案 = 「群聊新消息 AI 分析…」（省略号表示进行中）
-                    title = { Text("群聊新消息 AI 分析…") },
-                    text = { Text(stage) },
+                    // 用户 2026-09-25：标题改「群聊消息分析中」；进度文字（读取…/汇总报告…）居中显示
+                    title = { Text("群聊消息分析中") },
+                    text = {
+                        Text(
+                            text = stage,
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Center
+                        )
+                    },
                     rotatingBorder = true
                 )
 
@@ -1293,7 +1345,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                 )
 
                 else -> AlertDialogContent(
-                    title = { Text("群聊新消息分析") },
+                    title = { Text("群聊消息分析") },
                     text = {
                         Text(
                             text = resultText,

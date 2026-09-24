@@ -24,7 +24,7 @@ import androidx.compose.ui.unit.dp
  *
  * 观感 = 一道青 → 淡紫的彗尾光带，沿着卡片的圆角矩形边缘绕圈跑；跑了就再从起点来。
  * 用途见 [com.github.wekite.ui.content.AlertDialogContent] 的 `rotatingBorder` 参数
- * （当前只有「群聊新消息 AI 分析」的弹窗打开它）。
+ * （当前只有「群聊消息分析」的弹窗打开它）。
  *
  * 实现要点（踩坑记录）：
  * - **不改尺寸**：光带是画在卡片自身边缘上的（向内缩半个线宽），所以挂件/弹窗的几何
@@ -38,7 +38,7 @@ import androidx.compose.ui.unit.dp
  *   不触发重组，60fps 也便宜。
  */
 
-/** 流光配色（与「群聊新消息 AI 分析」胶囊的蓝色梦幻同系）。 */
+/** 流光配色（与「群聊消息分析」胶囊的蓝色梦幻同系）。 */
 private val RING_HEAD = Color(0xFF7FD4FF)
 private val RING_TAIL = Color(0xFFB07CFF)
 
