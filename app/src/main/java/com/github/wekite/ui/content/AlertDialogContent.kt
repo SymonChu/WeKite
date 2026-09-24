@@ -20,6 +20,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.github.wekite.ui.content.animation.rememberRotatingRingAngle
+import com.github.wekite.ui.content.animation.rotatingBorderRing
 import com.github.wekite.ui.utils.theme.ThemeSettings
 
 // drop-in replacement for AlertDialog that should be used in showComposeDialog()
@@ -36,9 +38,22 @@ fun AlertDialogContent(
      * true = 卡片高度撑满可用高度（配合调用方把弹窗窗口设成固定大小，
      * 用于「报告弹窗上下留白」这类需求）；默认 false = 原来的 wrapContentHeight。
      */
-    fillHeight: Boolean = false
+    fillHeight: Boolean = false,
+    /**
+     * true = 卡片边缘加一圈**旋转流光**（用户 2026-09-24 要求：围绕弹窗的旋转动效）。
+     * 只画在卡片自己的边缘上，**不改卡片尺寸/位置**；默认 false，其它弹窗不受影响。
+     * 实现见 [com.github.wekite.ui.content.animation.rotatingBorderRing]。
+     */
+    rotatingBorder: Boolean = false
 ) {
     val dark = ThemeSettings.themeMode.resolve()
+    // 只在需要时创建无限动画（常开的无限动画即使不画也会占帧回调）
+    val ringAngle = if (rotatingBorder) rememberRotatingRingAngle() else null
+    val ringModifier = if (ringAngle != null) {
+        Modifier.rotatingBorderRing(angle = ringAngle, cornerRadius = 28.dp)
+    } else {
+        Modifier
+    }
     Surface(
         shape = RoundedCornerShape(28.dp),
         tonalElevation = 6.dp,
@@ -47,6 +62,7 @@ fun AlertDialogContent(
         modifier = modifier
             .fillMaxWidth()
             .then(if (fillHeight) Modifier.fillMaxHeight() else Modifier.wrapContentHeight())
+            .then(ringModifier)
     ) {
         DefaultColumn(
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)

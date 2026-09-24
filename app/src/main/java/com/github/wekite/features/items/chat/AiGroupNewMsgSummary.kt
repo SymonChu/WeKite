@@ -376,9 +376,12 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         }
 
         val chunks = lines.chunked(CHUNK_SIZE)
-        onStage("共 ${lines.size} 条新消息，分 ${chunks.size} 批分析…")
+        // 用户 2026-09-24：弹窗里不要「第 X/Y 批分析中…」这类批次进度，
+        // 只留一句「共 N 条新消息，分析中…」；批次划分数只进日志（排障用，不上界面）。
+        onStage("共 ${lines.size} 条新消息，分析中…")
+        WeLogger.i(TAG, "analyze: ${lines.size} messages -> ${chunks.size} chunk(s), CHUNK_SIZE=$CHUNK_SIZE")
         val parts = chunks.mapIndexed { index, chunk ->
-            onStage("第 ${index + 1}/${chunks.size} 批分析中…")
+            WeLogger.i(TAG, "analyze: chunk ${index + 1}/${chunks.size} ...")
             chatCompletion(params, params.systemPrompt, chunk.joinToString("\n"))
         }
         if (parts.size == 1) return parts.first()
@@ -1047,9 +1050,11 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
 
             when {
                 !finished -> AlertDialogContent(
-                    title = { Text("群聊新消息 AI 分析") },
+                    // 用户 2026-09-24：分析中弹窗文案 = 「群聊新消息 AI 分析…」（省略号表示进行中）
+                    title = { Text("群聊新消息 AI 分析…") },
                     text = { Text(stage) },
-                    fillHeight = true
+                    fillHeight = true,
+                    rotatingBorder = true
                 )
 
                 errorText.isNotEmpty() -> AlertDialogContent(
@@ -1064,7 +1069,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                         )
                     },
                     confirmButton = { Button(onDismiss) { Text("关闭") } },
-                    fillHeight = true
+                    fillHeight = true,
+                    rotatingBorder = true
                 )
 
                 else -> AlertDialogContent(
@@ -1085,7 +1091,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                             showToast(context, "已复制")
                         }) { Text("复制") }
                     },
-                    fillHeight = true
+                    fillHeight = true,
+                    rotatingBorder = true
                 )
             }
 
