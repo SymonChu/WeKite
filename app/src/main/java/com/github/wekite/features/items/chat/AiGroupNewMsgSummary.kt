@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.github.wekite.features.api.core.WeDatabaseApi
+import com.github.wekite.utils.formatEpoch
 import com.github.wekite.features.api.core.models.WeMessage
 import com.github.wekite.features.api.ui.WeChatNewMsgTipApi
 import com.github.wekite.features.core.ClickableFeature
@@ -75,6 +76,7 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import kotlin.concurrent.thread
+import kotlin.math.abs
 
 /**
  * 群聊消息分析：在聊天页右下「N条新消息」提示条的**上方**挂一个同尺寸「AI分析」胶囊，
@@ -429,25 +431,31 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
      * **当天**的消息（本地 00:00 起到现在 = 用户说的「0 点到 24 点」；库里不会有未来时间的消息，
      * 所以只加下界即可）；条数上限 = 设置里的「单次最多分析条数」。
      *
-     * ⚠️ **单位坑（v3.27 修正，用户报「感觉判断不准确」）**：本仓对 `message.createTime` 有
-     * **两种互斥**的用法 —— 网络层按**秒**（`nowSec = ts/1000`），而消息对象/展示层按**毫秒**
-     * （`formatEpoch` → `Instant.ofEpochMilli`、`System.currentTimeMillis() - createTime`）。
-     * 原实现固定按秒算阈值：**若库其实是毫秒**，则 `createTime >= 阈值` **恒为真**
-     * ⇒ 把**历史记录**也当成「今天的消息」一起分析（正是用户看到的现象）。
-     * 现在改为**自适应**：量一下库里最新的时间戳判定单位（见 [createTimeUnitScale]），
-     * 并把实际阈值/条数/最新最旧时间戳打进日志 ⇒ 装机后一眼可核，不靠猜。
+     * ⚠️⚠️ **单位坑（两次踩，务必读）**：本仓对 `message.createTime` 有**两种互斥**的用法 ——
+     * 网络层按**秒**（`nowSec = ts/1000`），消息对象/展示层按**毫秒**（`formatEpoch` →
+     * `Instant.ofEpochMilli`）。单位搞错的后果极隐蔽：阈值算小了 ⇒ `createTime >= 阈值` **恒真**
+     * ⇒ 取到的是「最近 N 条」的**跨天历史**（用户两次实测报回：「感觉判断不准确」「还是按最高条数分析」）。
+     * v3.27 第一次修时**判对了单位却用反了方向**（判出「毫秒库」却把阈值除了 1000）。
+     * 现在：① [createTimeDivisor] 按「最新一条 vs 现在」判定换算分母；
+     * ② 查完再在 Kotlin 里**按换算后的毫秒值过滤一遍**（双保险：即便 SQL 的单位还错，
+     * 也绝不会把跨天历史当成「今天」去分析，最坏只会变成 0 条）；
+     * ③ 把 div/阈值/条数/被丢弃条数/最新最旧（含可读时间）打进日志 ⇒ 一眼可核。
      */
     private fun collectToday(convId: String, onStage: (String) -> Unit): List<WeMessage> {
         val cap = maxMsgs.coerceIn(1, UNREAD_MAX)
-        val scale = createTimeUnitScale()
-        val since = todayStartMillis() / scale
+        val div = createTimeDivisor()
+        val todayStart = todayStartMillis()
+        val since = todayStart / div
         onStage("读取今天的消息（上限 $cap 条）…")
-        val messages = WeDatabaseApi.getMessagesSince(convId, since, cap)
+        val fetched = WeDatabaseApi.getMessagesSince(convId, since, cap)
+        // 双保险：SQL 之外再按「换算成毫秒后是否属于今天」过滤（SQL 的 >= 可能因单位问题恒真）
+        val messages = fetched.filter { toEpochMs(it.createTime, div) >= todayStart }
+        val newestMs = messages.firstOrNull()?.let { toEpochMs(it.createTime, div) } ?: 0L
+        val oldestMs = messages.lastOrNull()?.let { toEpochMs(it.createTime, div) } ?: 0L
         WeLogger.i(
             TAG,
-            "today range: unitScale=$scale since=$since n=${messages.size} " +
-                    "newest=${messages.firstOrNull()?.createTime} oldest=${messages.lastOrNull()?.createTime} " +
-                    "conv=$convId"
+            "today range: div=$div since=$since n=${messages.size} dropped=${fetched.size - messages.size} " +
+                    "newest=${readableTime(newestMs)} oldest=${readableTime(oldestMs)} conv=$convId"
         )
         return messages
     }
@@ -463,16 +471,33 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     }
 
     /**
-     * 微信库里 `message.createTime` 的单位：返回 **1000 = 毫秒**、**1 = 秒**。
-     * 判据：秒级时间戳到 2033 年才 ~2×10^9，毫秒级从 1973 年起就 > 10^11 ⇒ 用 10^11 分界，
-     * 量库里最新那条就知道，**不依赖任何机型假设**。查不到时按毫秒（本仓展示层的口径）。
+     * 库里 `message.createTime` → **毫秒** 的换算分母：库是毫秒 ⇒ `1`，库是秒 ⇒ `1000`。
+     *
+     * 判定不靠魔数、靠「库里最新一条 vs 现在」：直接把最新值当毫秒落在近 30 天内 ⇒ 毫秒库；
+     * 把最新值 ×1000 当毫秒才落在近 30 天内 ⇒ 秒库。
+     * ⚠️ v3.27 首版曾按「>1e11 即毫秒」判定后**把阈值除以 1000**（方向反了）⇒ 毫秒库下阈值退化成
+     * 秒级数值、比较恒真、结果永远是「上限条数」的跨天记录。改单位时**先算一遍真实数字再动手**。
      */
-    private fun createTimeUnitScale(): Long = runCatching {
+    private fun createTimeDivisor(): Long = runCatching {
         val newest = WeDatabaseApi.rawQuery("SELECT MAX(createTime) FROM message").use { c ->
             if (c.moveToFirst()) c.getLong(0) else 0L
         }
-        if (newest > 100_000_000_000L) 1000L else 1L
-    }.getOrDefault(1000L)
+        val now = System.currentTimeMillis()
+        val window = 30L * 24 * 3600 * 1000
+        when {
+            newest <= 0L -> 1L
+            abs(newest - now) < window -> 1L              // 库里就是毫秒
+            abs(newest * 1000 - now) < window -> 1000L    // 库里是秒
+            else -> if (newest > 100_000_000_000L) 1L else 1000L
+        }
+    }.getOrDefault(1L)
+
+    /** 把库里单位的时间换算成毫秒（[div] = 1 ⇒ 已是毫秒；1000 ⇒ 是秒）。 */
+    private fun toEpochMs(value: Long, div: Long): Long = if (div == 1L) value else value * 1000L
+
+    /** 日志用的可读时间（0 显示为 `-`）。 */
+    private fun readableTime(epochMs: Long): String =
+        if (epochMs <= 0L) "-" else runCatching { formatEpoch(epochMs, "MM-dd HH:mm:ss") }.getOrDefault("$epochMs")
 
     /** 该会话的未读数（群聊取 `unReadCount` / `unReadMuteCount` 较大者）。 */
     private fun queryUnread(convId: String): Int = runCatching {
