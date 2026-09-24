@@ -449,14 +449,11 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     // ==================== 内置供应商 ====================
 
     /**
-     * 内置供应商预设。
+     * 供应商预设条目。
      *
      * ⚠️ 只预置**稳定且公开**的事实：厂商官方基址、Key 头名/前缀。
      * **不写死模型名** —— 模型名变化极快（同一家半年换两代），写死 = 装到手机上就报
      * 「model not found」。模型走「填完 Key 一键拉取该站 /models 列表」或手动输入。
-     *
-     * ⚠️ **内网/自建网关地址不进源码**（仓库是公开的，写死等于把私有信息推到 GitHub）
-     * ——这类走第 1 项「自定义」，地址/请求头/UA 由用户自己填；公益站与厂商的公开域名可以预置。
      */
     private data class Provider(
         val id: String,
@@ -468,11 +465,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         val hint: String = ""
     )
 
-    private val PROVIDERS = listOf(
-        Provider(
-            "custom", "自定义 / 自建网关 / 反代", "",
-            hint = "填网址和 Key 即可；其余（请求头/前缀/路径）已默认填好"
-        ),
+    private val BUILTIN_PROVIDERS = listOf(
         Provider(
             "agentrouter", "AgentRouter（公益站）", "https://ps.air-outer.com/v1",
             userAgent = "claude-cli/1.0.60 (external, cli)", hint = "需 claude-cli UA，已预置"
@@ -495,8 +488,18 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         Provider("nvidia", "NVIDIA NIM", "https://integrate.api.nvidia.com/v1")
     )
 
+    /** 按 id 找供应商（内置 + 自定义）；找不到就退回第一个内置（只影响显示，不影响已保存的配置）。 */
     private fun providerOf(id: String): Provider =
-        PROVIDERS.firstOrNull { it.id == id } ?: PROVIDERS.first()
+        allProviders().firstOrNull { it.id == id } ?: BUILTIN_PROVIDERS.first()
+
+    /** 自定义供应商的网址归一：用户可能直接粘完整接口地址，这里统一存成基址。 */
+    private fun normalizeCustomUrl(raw: String): String {
+        val u = raw.trim().trimEnd('/')
+        return u.removeSuffix("/chat/completions").trimEnd('/')
+    }
+
+    /** 自定义供应商 id 前缀（迁移来的旧「自定义」用 `custom`，新建的用 `custom_<时间戳>`）。 */
+    private fun isCustomId(id: String) = id.startsWith("custom")
 
     // ==================== 每个供应商各存一份 Key（用户 2026-09-24 要求）====================
     // 切到别的供应商：它存过 Key 就显示它自己的，没存过就留空；输入即存，不用点保存。
@@ -515,6 +518,87 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         runCatching { WePrefs.putString(keyPref(id), value) }
             .onFailure { WeLogger.e(TAG, "remember key for $id failed", it) }
     }
+
+    // ==================== 每个供应商各存一份「模型」（用户 2026-09-25 要求）====================
+    // 几个供应商来回切换时，各自恢复上次用过的模型（与 Key 同一套机制：输入即存、切换即显示）。
+
+    private fun modelPref(providerId: String) = "ai_sum_model_${providerId.ifEmpty { "custom" }}"
+
+    /** 该供应商上次用过的模型；没存过就是空的（旧全局模型认给「当前选中的供应商」）。 */
+    private fun modelForProvider(id: String): String {
+        val stored = WePrefs.getStringOrDef(modelPref(id), "")
+        if (stored.isNotEmpty()) return stored
+        val legacy = model
+        return if (legacy.isNotEmpty() && id == providerId.ifEmpty { "custom" }) legacy else ""
+    }
+
+    private fun rememberModel(id: String, value: String) {
+        runCatching { WePrefs.putString(modelPref(id), value) }
+            .onFailure { WeLogger.e(TAG, "remember model for $id failed", it) }
+    }
+
+    private fun forgetProvider(id: String) {
+        runCatching {
+            WePrefs.putString(keyPref(id), "")
+            WePrefs.putString(modelPref(id), "")
+        }.onFailure { WeLogger.e(TAG, "forget provider $id failed", it) }
+    }
+
+    // ==================== 自定义供应商（可加多个，用户 2026-09-25 要求）====================
+
+    private const val PREF_CUSTOM_LIST = "ai_sum_custom_list"
+
+    /** 用户自建的供应商（自建网关 / 反代 / 私有站），JSON：`[{"id","name","url"}]`。 */
+    private fun customProviders(): List<Provider> = runCatching {
+        val raw = WePrefs.getStringOrDef(PREF_CUSTOM_LIST, "")
+        if (raw.isBlank()) return migrateLegacyCustom()
+        val arr = JSONArray(raw)
+        (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val id = o.optString("id").trim()
+            if (id.isEmpty()) null
+            else Provider(
+                id = id,
+                label = o.optString("name").trim().ifEmpty { "自定义" },
+                base = o.optString("url").trim()
+            )
+        }
+    }.getOrElse {
+        WeLogger.e(TAG, "parse custom providers failed", it)
+        emptyList()
+    }
+
+    private fun saveCustomProviders(list: List<Provider>) {
+        val arr = JSONArray()
+        list.forEach { p ->
+            arr.put(
+                JSONObject().apply {
+                    put("id", p.id)
+                    put("name", p.label)
+                    put("url", p.base)
+                }
+            )
+        }
+        runCatching { WePrefs.putString(PREF_CUSTOM_LIST, arr.toString()) }
+            .onFailure { WeLogger.e(TAG, "save custom providers failed", it) }
+    }
+
+    /**
+     * 升级迁移：v3.25 之前「自定义」只有唯一一个，地址存在全局 pref（`ai_sum_api_url`/`ai_sum_api_base`）；
+     * 现在自定义是多实例 ⇒ 首次读到空清单时把旧地址落成名为「自定义」的那一条，配置不丢。
+     * （写回一次清单即视为已迁移，不会每次开设置都重跑。）
+     */
+    private fun migrateLegacyCustom(): List<Provider> {
+        val legacyUrl = apiUrl.ifBlank { apiBase }
+        val list = if (legacyUrl.isBlank()) emptyList()
+        else listOf(Provider("custom", "自定义 / 自建网关 / 反代", legacyUrl))
+        saveCustomProviders(list)
+        WeLogger.i(TAG, "custom providers migrated: ${list.size}")
+        return list
+    }
+
+    /** 内置 + 自定义（内置在前，自定义在后）。 */
+    private fun allProviders(): List<Provider> = BUILTIN_PROVIDERS + customProviders()
 
     /** 预设基址都自带 `/v1`、`/v4` 之类版本段 ⇒ 拼接口用 `/chat/completions`。 */
     private const val PRESET_PATH = "/chat/completions"
@@ -576,13 +660,25 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
 
     private fun openSettings(context: Context) {
         showComposeDialog(context) {
-            var providerInput by remember { mutableStateOf(providerId.ifEmpty { "custom" }) }
+            // 自定义供应商清单（可加多个，用户 2026-09-25 要求）：本对话框内维护一份，改动即时落盘
+            var customs by remember { mutableStateOf(customProviders()) }
+            // 选中项：优先用已保存的那个供应商；它已被删掉（或从未选过）就退回第一个可选项
+            var providerInput by remember {
+                mutableStateOf(
+                    providerId.ifEmpty { "custom" }
+                        .takeIf { id -> allProviders().any { p -> p.id == id } }
+                        ?: allProviders().first().id
+                )
+            }
             var urlInput by remember { mutableStateOf(apiUrl) }
-            var baseInput by remember { mutableStateOf(apiBase) }
+            // 选中的是自定义供应商时，网址以它自己那份为准（权威来源）
+            var baseInput by remember {
+                mutableStateOf(customs.firstOrNull { it.id == providerInput }?.base ?: apiBase)
+            }
             var pathInput by remember { mutableStateOf(apiPath) }
-            // 每个供应商各显示自己那份 Key（没存过就留空）
-            var keyInput by remember { mutableStateOf(keyForProvider(providerId.ifEmpty { "custom" })) }
-            var modelInput by remember { mutableStateOf(model) }
+            // 每个供应商各显示自己那份 Key / 模型（没存过就留空）
+            var keyInput by remember { mutableStateOf(keyForProvider(providerInput)) }
+            var modelInput by remember { mutableStateOf(modelForProvider(providerInput)) }
             var keyHeaderInput by remember { mutableStateOf(keyHeader) }
             var keyPrefixInput by remember { mutableStateOf(keyPrefix) }
             var uaInput by remember { mutableStateOf(userAgent) }
@@ -596,6 +692,9 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             var advanced by remember { mutableStateOf(false) }
             var showProviderList by remember { mutableStateOf(false) }
             var showModelList by remember { mutableStateOf(false) }
+            var showCustomEditor by remember { mutableStateOf(false) }
+            var newCustomName by remember { mutableStateOf("") }
+            var newCustomUrl by remember { mutableStateOf("") }
             var modelChoices by remember { mutableStateOf(emptyList<String>()) }
             var testStatus by remember { mutableStateOf("") }
 
@@ -617,20 +716,22 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
              * 选中供应商：只留「网址（仅自定义）+ Key」要填，其余全部自动带好
              * （请求头名 / Key 前缀 / 接口路径 / UA）。自定义也套同一套默认值
              * ⇒ 用户「只填网址和 Key」即可（用户 2026-09-24 指定）。
+             * 切换时**各自恢复自己那份 Key 与模型**（用户 2026-09-24 / 2026-09-25 要求）。
              */
             fun applyPreset(p: Provider) {
                 providerInput = p.id
-                // 切供应商：显示它自己存过的 Key，没存过就留空（用户 2026-09-24 要求）
                 keyInput = keyForProvider(p.id)
-                if (p.id != "custom") {
-                    urlInput = ""
-                    baseInput = p.base
-                }
-                pathInput = PRESET_PATH
+                modelInput = modelForProvider(p.id)
+                urlInput = ""
+                baseInput = p.base
                 keyHeaderInput = p.keyHeader
                 keyPrefixInput = p.keyPrefix
                 uaInput = p.userAgent
+                // 预设基址自带 /v1、/v4 之类版本段 ⇒ 路径固定 /chat/completions；
+                // 自定义的基址可能没有版本段 ⇒ 路径保持当前值（默认 /v1/chat/completions）。
+                if (!isCustomId(p.id)) pathInput = PRESET_PATH
                 showProviderList = false
+                showCustomEditor = false
                 testStatus = ""
             }
 
@@ -659,7 +760,10 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                         result.onSuccess { list ->
                             modelChoices = list
                             // 用户要求「只填网址和 Key」⇒ 模型为空时自动选第一个，省一次点击
-                            if (modelInput.isBlank() && list.isNotEmpty()) modelInput = list.first()
+                            if (modelInput.isBlank() && list.isNotEmpty()) {
+                                modelInput = list.first()
+                                rememberModel(providerInput, list.first())
+                            }
                             if (list.isNotEmpty()) showModelList = true
                         }
                         testStatus = text
@@ -691,8 +795,42 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                 title = { Text("群聊新消息 AI 分析") },
                 text = {
                     DefaultColumn(modifier = Modifier.heightIn(max = 420.dp), scrollable = true) {
-                        if (showProviderList) {
-                            PROVIDERS.forEach { p ->
+                        if (showCustomEditor) {
+                            // 新建自定义供应商（可加多个，用户 2026-09-25 要求）：只要名称 + 网址
+                            OutlinedTextField(
+                                value = newCustomName, onValueChange = { newCustomName = it },
+                                label = { Text("名称（可留空，如：我的网关）") },
+                                singleLine = true, modifier = Modifier.fillMaxWidth()
+                            )
+                            OutlinedTextField(
+                                value = newCustomUrl, onValueChange = { newCustomUrl = it },
+                                label = { Text("网址，如 https://host/v1") },
+                                singleLine = true, modifier = Modifier.fillMaxWidth()
+                            )
+                            Row {
+                                TextButton({
+                                    val url = normalizeCustomUrl(newCustomUrl)
+                                    if (url.isEmpty()) {
+                                        testStatus = "先填网址"
+                                    } else {
+                                        val p = Provider(
+                                            id = "custom_" + System.currentTimeMillis(),
+                                            label = newCustomName.trim().ifEmpty { "自定义 ${customs.size + 1}" },
+                                            base = url
+                                        )
+                                        customs = customs + p
+                                        saveCustomProviders(customs)
+                                        newCustomName = ""
+                                        newCustomUrl = ""
+                                        testStatus = ""
+                                        applyPreset(p)
+                                    }
+                                }) { Text("添加") }
+                                TextButton({ showCustomEditor = false }) { Text("取消") }
+                            }
+                            if (testStatus.isNotEmpty()) Text(testStatus)
+                        } else if (showProviderList) {
+                            BUILTIN_PROVIDERS.forEach { p ->
                                 ListItem(
                                     colors = dialogListItemColors(),
                                     modifier = Modifier.clickable { applyPreset(p) },
@@ -701,12 +839,48 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                                     trailingContent = { if (p.id == providerInput) Text("✓") }
                                 )
                             }
+                            customs.forEach { p ->
+                                ListItem(
+                                    colors = dialogListItemColors(),
+                                    modifier = Modifier.clickable { applyPreset(p) },
+                                    headlineContent = { Text(p.label) },
+                                    supportingContent = { Text(p.base.ifEmpty { "未填网址" }) },
+                                    trailingContent = {
+                                        Row {
+                                            if (p.id == providerInput) Text("✓")
+                                            TextButton({
+                                                val rest = customs.filterNot { it.id == p.id }
+                                                customs = rest
+                                                saveCustomProviders(rest)
+                                                forgetProvider(p.id)
+                                                // 删掉的正好是当前选中的 ⇒ 换到下一个可选项
+                                                if (providerInput == p.id) {
+                                                    applyPreset(rest.firstOrNull() ?: BUILTIN_PROVIDERS.first())
+                                                }
+                                            }) { Text("删除") }
+                                        }
+                                    }
+                                )
+                            }
+                            ListItem(
+                                colors = dialogListItemColors(),
+                                modifier = Modifier.clickable {
+                                    newCustomName = ""
+                                    newCustomUrl = ""
+                                    testStatus = ""
+                                    showCustomEditor = true
+                                },
+                                headlineContent = { Text("＋ 新建自定义供应商") },
+                                supportingContent = { Text("自建网关 / 反代 / 私有站，可以加多个") }
+                            )
                         } else if (showModelList) {
                             modelChoices.forEach { m ->
                                 ListItem(
                                     colors = dialogListItemColors(),
                                     modifier = Modifier.clickable {
                                         modelInput = m
+                                        // 选中的模型也存到该供应商名下（用户 2026-09-25 要求）
+                                        rememberModel(providerInput, m)
                                         showModelList = false
                                     },
                                     headlineContent = { Text(m) }
@@ -726,6 +900,25 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                             supportingContent = { Text(providerOf(providerInput).label) },
                             trailingContent = { Text("›") }
                         )
+                        // 自定义供应商：网址就在主路径里改（用户要求「自定义只填网址 + Key」，
+                        // 且每个自定义各记自己那份 ⇒ 改完即时写回清单）
+                        if (isCustomId(providerInput)) {
+                            OutlinedTextField(
+                                value = baseInput,
+                                onValueChange = { v ->
+                                    baseInput = v
+                                    val idx = customs.indexOfFirst { it.id == providerInput }
+                                    if (idx >= 0) {
+                                        val updated = customs.toMutableList()
+                                        updated[idx] = updated[idx].copy(base = normalizeCustomUrl(v))
+                                        customs = updated
+                                        saveCustomProviders(customs)
+                                    }
+                                },
+                                label = { Text("网址，如 https://host/v1") },
+                                singleLine = true, modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                         OutlinedTextField(
                             value = keyInput,
                             onValueChange = {
@@ -737,7 +930,12 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                             singleLine = true, modifier = Modifier.fillMaxWidth()
                         )
                         OutlinedTextField(
-                            value = modelInput, onValueChange = { modelInput = it },
+                            value = modelInput,
+                            onValueChange = {
+                                modelInput = it
+                                // 模型也按供应商各存一份（用户 2026-09-25 要求）
+                                rememberModel(providerInput, it.trim())
+                            },
                             label = { Text("模型名") },
                             singleLine = true, modifier = Modifier.fillMaxWidth()
                         )
@@ -851,8 +1049,19 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                 confirmButton = {
                     Button({
                         providerId = providerInput
-                        // 该供应商的 Key 存到它自己名下（另存一份"当前生效"的给运行时用）
+                        // 该供应商的 Key / 模型存到它自己名下（另存一份"当前生效"的给运行时用）
                         rememberKey(providerInput, keyInput.filterNot { it.isWhitespace() })
+                        rememberModel(providerInput, modelInput.trim())
+                        // 自定义供应商：把网址同步回它的清单条目（高级设置里的基址与主路径是同一个值）
+                        if (isCustomId(providerInput)) {
+                            val idx = customs.indexOfFirst { it.id == providerInput }
+                            if (idx >= 0) {
+                                val updated = customs.toMutableList()
+                                updated[idx] = updated[idx].copy(base = normalizeCustomUrl(baseInput))
+                                customs = updated
+                                saveCustomProviders(customs)
+                            }
+                        }
                         apiUrl = urlInput.trim()
                         apiBase = baseInput.trim().trimEnd('/')
                         apiPath = pathInput.trim().ifEmpty { "/v1/chat/completions" }
