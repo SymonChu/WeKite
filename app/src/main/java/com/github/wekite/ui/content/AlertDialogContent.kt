@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.github.wekite.ui.content.animation.rememberRotatingRingAngle
 import com.github.wekite.ui.content.animation.rotatingBorderRing
+import com.github.wekite.ui.content.animation.staticBorderRing
 import com.github.wekite.ui.utils.theme.ThemeSettings
 
 // drop-in replacement for AlertDialog that should be used in showComposeDialog()
@@ -40,6 +41,12 @@ fun AlertDialogContent(
      */
     fillHeight: Boolean = false,
     /**
+     * 卡片边缘的**静态描边色**：null = 不画（默认，其它弹窗不受影响）。
+     * 与 [rotatingBorder] = true 同时给出时以「旋转流光」为准。
+     * 用于「分析报告」弹窗（用户 2026-09-25：报告只要蓝色描边、不要动效）。
+     */
+    borderColor: Color? = null,
+    /**
      * true = 卡片边缘加一圈**旋转流光**（用户 2026-09-24 要求：围绕弹窗的旋转动效）。
      * 只画在卡片自己的边缘上，**不改卡片尺寸/位置**；默认 false，其它弹窗不受影响。
      * 实现见 [com.github.wekite.ui.content.animation.rotatingBorderRing]。
@@ -49,10 +56,12 @@ fun AlertDialogContent(
     val dark = ThemeSettings.themeMode.resolve()
     // 只在需要时创建无限动画（常开的无限动画即使不画也会占帧回调）
     val ringAngle = if (rotatingBorder) rememberRotatingRingAngle() else null
-    val ringModifier = if (ringAngle != null) {
-        Modifier.rotatingBorderRing(angle = ringAngle, cornerRadius = 28.dp)
-    } else {
-        Modifier
+    val ringModifier = when {
+        ringAngle != null ->
+            Modifier.rotatingBorderRing(angle = ringAngle, cornerRadius = 28.dp)
+        borderColor != null ->
+            Modifier.staticBorderRing(borderColor = borderColor, cornerRadius = 28.dp)
+        else -> Modifier
     }
     Surface(
         shape = RoundedCornerShape(28.dp),

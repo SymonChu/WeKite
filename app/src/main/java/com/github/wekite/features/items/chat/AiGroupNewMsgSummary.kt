@@ -49,6 +49,7 @@ import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.Button
 import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
+import com.github.wekite.ui.content.animation.WEKITE_BLUE
 import com.github.wekite.ui.content.dialogListItemColors
 import com.github.wekite.ui.content.dialogSwitchColors
 import com.github.wekite.ui.utils.dpToPx
@@ -118,6 +119,9 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     private const val DIALOG_SIDE_DP = 12
     private const val DIALOG_TOP_MM = 20f
     private const val DIALOG_BOTTOM_MM = 15f
+
+    /** 报告弹窗整体**上移**的量（用户 2026-09-25：往上移动 30dp，大小不变） */
+    private const val DIALOG_REPORT_LIFT_DP = 30
 
     /** 内置供应商 id（`custom` = 自己填地址；其余见 PROVIDERS） */
     private var providerId by prefOption("ai_sum_provider", "custom")
@@ -1022,38 +1026,44 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     ) {
         val activity = context.activityOrNull()
         showComposeDialog(context, directlyDismissable = false) {
-            // 报告弹窗尺寸（用户 2026-09-24 指定）：左右各留 12dp、上留 20mm、下留 15mm。
-            // 做法 = 把弹窗窗口本身设成「屏幕减去这三段留白」的固定盒子，窗口顶部定位在上留白处，
-            // 卡片再 fillHeight 撑满 ⇒ 视觉上就是上下留白 20mm / 15mm。
-            run {
-                val dm = context.resources.displayMetrics
-                val side = DIALOG_SIDE_DP.dpToPx(context)
-                val top = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_MM, DIALOG_TOP_MM, dm).toInt()
-                val bottom = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_MM, DIALOG_BOTTOM_MM, dm).toInt()
-                val w = (dm.widthPixels - side * 2).coerceAtLeast(1)
-                val h = (dm.heightPixels - top - bottom).coerceAtLeast(1)
-                window.setLayout(w, h)
-                window.setGravity(Gravity.TOP or Gravity.CENTER_HORIZONTAL)
-                val lp = window.attributes
-                lp.y = top
-                window.attributes = lp
-                WeLogger.i(
-                    TAG,
-                    "report dialog window: ${w}x$h (side=$side top=$top bottom=$bottom) " +
-                            "screen=${dm.widthPixels}x${dm.heightPixels}"
-                )
-            }
             var stage by remember { mutableStateOf(title) }
             var finished by remember { mutableStateOf(false) }
             var resultText by remember { mutableStateOf("") }
             var errorText by remember { mutableStateOf("") }
+
+            // 弹窗尺寸**分两段**（用户 2026-09-25 要求）：
+            //   分析中 = 保持主题默认的小尺寸 + 屏幕居中（不设任何固定尺寸）；
+            //   出报告 / 失败 = 放大成固定盒子（左右 12dp、上 20mm、下 15mm）并**整体上移 30dp**（大小不变）。
+            // ⚠️ 必须在 `finished` 声明之后读它 —— 否则窗口几何不会跟随阶段变化。
+            LaunchedEffect(finished) {
+                if (!finished) {
+                    WeLogger.i(TAG, "analysis dialog: compact+centered (theme default size)")
+                } else {
+                    val dm = context.resources.displayMetrics
+                    val side = DIALOG_SIDE_DP.dpToPx(context)
+                    val top = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_MM, DIALOG_TOP_MM, dm).toInt()
+                    val bottom = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_MM, DIALOG_BOTTOM_MM, dm).toInt()
+                    val lift = DIALOG_REPORT_LIFT_DP.dpToPx(context)
+                    val w = (dm.widthPixels - side * 2).coerceAtLeast(1)
+                    val h = (dm.heightPixels - top - bottom).coerceAtLeast(1)
+                    window.setLayout(w, h)
+                    window.setGravity(Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+                    val lp = window.attributes
+                    lp.y = top - lift
+                    window.attributes = lp
+                    WeLogger.i(
+                        TAG,
+                        "report dialog window: ${w}x$h (side=$side top=$top bottom=$bottom lift=$lift) " +
+                                "screen=${dm.widthPixels}x${dm.heightPixels}"
+                    )
+                }
+            }
 
             when {
                 !finished -> AlertDialogContent(
                     // 用户 2026-09-24：分析中弹窗文案 = 「群聊新消息 AI 分析…」（省略号表示进行中）
                     title = { Text("群聊新消息 AI 分析…") },
                     text = { Text(stage) },
-                    fillHeight = true,
                     rotatingBorder = true
                 )
 
@@ -1070,7 +1080,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                     },
                     confirmButton = { Button(onDismiss) { Text("关闭") } },
                     fillHeight = true,
-                    rotatingBorder = true
+                    borderColor = WEKITE_BLUE
                 )
 
                 else -> AlertDialogContent(
@@ -1092,7 +1102,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                         }) { Text("复制") }
                     },
                     fillHeight = true,
-                    rotatingBorder = true
+                    borderColor = WEKITE_BLUE
                 )
             }
 

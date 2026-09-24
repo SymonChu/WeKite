@@ -120,5 +120,41 @@ fun Modifier.rotatingBorderRing(
     ring(stroke, 1f)
 }
 
+/** 静态描边的品牌蓝（与「AI分析」胶囊皮肤同色）。 */
+val WEKITE_BLUE = Color(0xFF5B7CFF)
+
+/**
+ * 静态描边（不转）：在自身内容之上沿圆角矩形边缘画一圈纯色，**不改布局尺寸**。
+ * 用于「分析报告」弹窗（用户 2026-09-25：报告弹窗不要动效，只要蓝色描边）。
+ *
+ * ⚠️ 参数名不能叫 `color`/`strokeWidth`：`Paint.apply {}` 里这两个名字会被解析成 **Paint 的成员**
+ *    （或反过来遮蔽外层参数），本文件第一版就因此编译失败（`'val' cannot be reassigned`）。
+ *
+ * @param borderColor 描边色（报告弹窗传 [WEKITE_BLUE]）
+ * @param cornerRadius 卡片圆角（必须与 surface 形状一致，否则描边会和边缘错开）
+ * @param strokeWidth 线宽
+ */
+fun Modifier.staticBorderRing(
+    borderColor: Color = WEKITE_BLUE,
+    cornerRadius: Dp = 28.dp,
+    strokeWidth: Dp = 2.dp
+): Modifier = drawWithContent {
+    drawContent()
+
+    val stroke = strokeWidth.toPx()
+    val w = size.width
+    val h = size.height
+    if (w <= stroke * 3f || h <= stroke * 3f) return@drawWithContent
+
+    val inset = stroke / 2f
+    val r = (cornerRadius.toPx() - inset).coerceAtLeast(0f)
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        this.strokeWidth = stroke
+        color = borderColor.toArgb()
+    }
+    drawContext.canvas.nativeCanvas.drawRoundRect(inset, inset, w - inset, h - inset, r, r, paint)
+}
+
 private fun argb(color: Color, alphaScale: Float): Int =
     color.copy(alpha = (color.alpha * alphaScale).coerceIn(0f, 1f)).toArgb()
