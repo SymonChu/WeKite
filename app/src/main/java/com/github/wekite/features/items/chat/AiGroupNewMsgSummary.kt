@@ -13,6 +13,7 @@ import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.util.TypedValue
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -424,22 +425,54 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         return WeDatabaseApi.getMessages(convId, pageIndex = 1, pageSize = unread)
     }
 
-    /** **当天**（本地 00:00 起）的消息；条数上限 = 设置里的「单次最多分析条数」。 */
+    /**
+     * **当天**的消息（本地 00:00 起到现在 = 用户说的「0 点到 24 点」；库里不会有未来时间的消息，
+     * 所以只加下界即可）；条数上限 = 设置里的「单次最多分析条数」。
+     *
+     * ⚠️ **单位坑（v3.27 修正，用户报「感觉判断不准确」）**：本仓对 `message.createTime` 有
+     * **两种互斥**的用法 —— 网络层按**秒**（`nowSec = ts/1000`），而消息对象/展示层按**毫秒**
+     * （`formatEpoch` → `Instant.ofEpochMilli`、`System.currentTimeMillis() - createTime`）。
+     * 原实现固定按秒算阈值：**若库其实是毫秒**，则 `createTime >= 阈值` **恒为真**
+     * ⇒ 把**历史记录**也当成「今天的消息」一起分析（正是用户看到的现象）。
+     * 现在改为**自适应**：量一下库里最新的时间戳判定单位（见 [createTimeUnitScale]），
+     * 并把实际阈值/条数/最新最旧时间戳打进日志 ⇒ 装机后一眼可核，不靠猜。
+     */
     private fun collectToday(convId: String, onStage: (String) -> Unit): List<WeMessage> {
         val cap = maxMsgs.coerceIn(1, UNREAD_MAX)
+        val scale = createTimeUnitScale()
+        val since = todayStartMillis() / scale
         onStage("读取今天的消息（上限 $cap 条）…")
-        return WeDatabaseApi.getMessagesSince(convId, todayStartSeconds(), cap)
+        val messages = WeDatabaseApi.getMessagesSince(convId, since, cap)
+        WeLogger.i(
+            TAG,
+            "today range: unitScale=$scale since=$since n=${messages.size} " +
+                    "newest=${messages.firstOrNull()?.createTime} oldest=${messages.lastOrNull()?.createTime} " +
+                    "conv=$convId"
+        )
+        return messages
     }
 
-    /** 本地当天 00:00 的**秒级**时间戳（微信 `message.createTime` 存的是秒）。 */
-    private fun todayStartSeconds(): Long {
+    /** 本地当天 00:00 的**毫秒**时间戳。 */
+    private fun todayStartMillis(): Long {
         val cal = Calendar.getInstance()
         cal.set(Calendar.HOUR_OF_DAY, 0)
         cal.set(Calendar.MINUTE, 0)
         cal.set(Calendar.SECOND, 0)
         cal.set(Calendar.MILLISECOND, 0)
-        return cal.timeInMillis / 1000L
+        return cal.timeInMillis
     }
+
+    /**
+     * 微信库里 `message.createTime` 的单位：返回 **1000 = 毫秒**、**1 = 秒**。
+     * 判据：秒级时间戳到 2033 年才 ~2×10^9，毫秒级从 1973 年起就 > 10^11 ⇒ 用 10^11 分界，
+     * 量库里最新那条就知道，**不依赖任何机型假设**。查不到时按毫秒（本仓展示层的口径）。
+     */
+    private fun createTimeUnitScale(): Long = runCatching {
+        val newest = WeDatabaseApi.rawQuery("SELECT MAX(createTime) FROM message").use { c ->
+            if (c.moveToFirst()) c.getLong(0) else 0L
+        }
+        if (newest > 100_000_000_000L) 1000L else 1L
+    }.getOrDefault(1000L)
 
     /** 该会话的未读数（群聊取 `unReadCount` / `unReadMuteCount` 较大者）。 */
     private fun queryUnread(convId: String): Int = runCatching {
@@ -1295,7 +1328,17 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             // ⚠️ 必须在 `finished` 声明之后读它 —— 否则窗口几何不会跟随阶段变化。
             LaunchedEffect(finished) {
                 if (!finished) {
-                    WeLogger.i(TAG, "analysis dialog: compact+centered (theme default size)")
+                    // 分析中弹窗：宽度也按用户要求左右各留 12dp，高度自适应、屏幕居中
+                    // （原来不设宽度 = 走系统主题默认，实测可能接近满屏宽）
+                    val dm = context.resources.displayMetrics
+                    val side = DIALOG_SIDE_DP.dpToPx(context)
+                    val w = (dm.widthPixels - side * 2).coerceAtLeast(1)
+                    window.setLayout(w, WindowManager.LayoutParams.WRAP_CONTENT)
+                    window.setGravity(Gravity.CENTER)
+                    WeLogger.i(
+                        TAG,
+                        "analysis dialog window: ${w}xWRAP (side=$side) screen=${dm.widthPixels}x${dm.heightPixels}"
+                    )
                 } else {
                     val dm = context.resources.displayMetrics
                     val side = DIALOG_SIDE_DP.dpToPx(context)
