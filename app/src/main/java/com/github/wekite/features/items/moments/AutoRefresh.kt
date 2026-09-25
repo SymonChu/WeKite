@@ -125,7 +125,6 @@ object AutoRefresh : ClickableFeature(), IResolveDex {
             var intervalInput by remember { mutableStateOf(intervalMinutes.toString()) }
 
             AlertDialogContent(
-                bodyScrollable = false,
                 title = { Text("自动刷新") },
                 text = {
                     DefaultColumn(Modifier.verticalScroll(rememberScrollState())) {

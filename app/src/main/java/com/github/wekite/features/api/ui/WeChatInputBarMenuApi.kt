@@ -83,7 +83,6 @@ object WeChatInputBarMenuApi : ApiFeature(), IResolveDex {
 
         showComposeDialog(context) {
             AlertDialogContent(
-                bodyScrollable = false,
                 title = { Text("聊天功能") },
                 text = {
                     LazyColumn(

@@ -339,7 +339,6 @@ object OpenHistoryRedPackets : ClickableFeature(), WeContactPrefsScreenApi.ICont
             }
 
             AlertDialogContent(
-                bodyScrollable = false,
                 title = { Text("历史红包捡漏") },
                 text = {
                     LazyColumn(

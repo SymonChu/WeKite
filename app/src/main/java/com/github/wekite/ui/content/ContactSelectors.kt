@@ -396,7 +396,6 @@ fun BaseContactSelector(
     }
 
     AlertDialogContent(
-        bodyScrollable = false,
         modifier = modifier
             .fillMaxWidth()
             .fillMaxHeight(),

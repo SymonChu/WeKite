@@ -65,7 +65,6 @@ object DisplayGroupMemberRealNamesLastChar : ClickableFeature(), IContactInfoPro
             var fg by remember { mutableStateOf(annotationFg) }
 
             AlertDialogContent(
-                bodyScrollable = false,
                 title = { Text("显示群成员实名尾字") },
                 text = {
                     DefaultColumn(Modifier.verticalScroll(rememberScrollState())) {

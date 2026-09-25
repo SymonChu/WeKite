@@ -103,7 +103,6 @@ object DisplayGroupMemberRoles : ClickableFeature(), IResolveDex,
             var showMem by remember { mutableStateOf(showMember) }
 
             AlertDialogContent(
-                bodyScrollable = false,
                 title = { Text("显示群成员身份") },
                 text = {
                     DefaultColumn(Modifier.verticalScroll(rememberScrollState())) {

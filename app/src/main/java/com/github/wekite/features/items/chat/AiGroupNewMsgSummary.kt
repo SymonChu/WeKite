@@ -1517,7 +1517,6 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                 )
 
                 errorText.isNotEmpty() -> AlertDialogContent(
-                    bodyScrollable = false,
                     title = { Text("分析失败") },
                     text = {
                         Text(
@@ -1534,7 +1533,6 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                 )
 
                 else -> AlertDialogContent(
-                    bodyScrollable = false,
                     title = { Text("群聊消息分析") },
                     text = {
                         Text(

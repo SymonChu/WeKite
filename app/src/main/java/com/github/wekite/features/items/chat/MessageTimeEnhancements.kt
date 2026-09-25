@@ -263,7 +263,6 @@ object MessageTimeEnhancements : ClickableFeature(),
             }
 
             AlertDialogContent(
-                bodyScrollable = false,
                 title = { Text("消息时间增强") },
                 text = {
                     DefaultColumn(Modifier.verticalScroll(rememberScrollState())) {
