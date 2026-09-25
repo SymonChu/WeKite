@@ -374,6 +374,7 @@ object WeChatMessageContextMenuApi : ApiFeature(), IResolveDex {
     ) {
         showComposeDialog(view.context) {
             AlertDialogContent(
+                bodyScrollable = false,
                 title = { Text("WeKite") },
                 text = {
                     LazyColumn(
@@ -457,6 +458,7 @@ object WeChatMessageContextMenuApi : ApiFeature(), IResolveDex {
 
         showComposeDialog(view.context) {
             AlertDialogContent(
+                bodyScrollable = false,
                 title = { Text("WeKite (${msgInfos.size} 条消息)") },
                 text = {
                     LazyColumn(

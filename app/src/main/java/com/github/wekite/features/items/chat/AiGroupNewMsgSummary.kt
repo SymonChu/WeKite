@@ -118,10 +118,12 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     private const val PILL_PAD_H_DP = 16
 
     /**
-     * 挂件高度兜底：**只在「胶囊从未被测量过」时**用（真机截图实测那枚胶囊约 18–20dp 高，留一点余量）。
-     * 胶囊被测量过时一律照抄它的实测高度 ⇒ 与它同形状。
+     * 挂件高度兜底：**只在「胶囊从未被测量过」时**用。
+     * 实测（2026-09-25 用户截图逐行扫「近白连通段」）：那枚胶囊 429×130px ≈ **121×37dp**
+     * （1dp≈3.54px，由 24dip=85px 反推）⇒ 兜底取 40dp 贴近它。
+     * ⚠️ 别再用「按绿色像素」量出来的旧值（112×20dp）：那个掩码只框到绿字/图标，会矮一半。
      */
-    private const val PILL_HEIGHT_DP = 24
+    private const val PILL_HEIGHT_DP = 40
 
     /** 「只分析新消息」模式的条数硬上限（用户指定 1000） */
     private const val UNREAD_MAX = 1000
@@ -238,7 +240,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
      * 让挂件贴着「N条新消息」胶囊（用户 2026-09-25 定的规格）：
      * - 胶囊在**上支**（gravity 含 TOP）⇒ 挂件挂在它**下面** 12dp；
      * - 胶囊在**下支**（gravity 含 BOTTOM）⇒ 挂件挂在它**上面** 12dp（挂它下面会被悬浮输入框吃掉）；
-     * - 两支都不可见（常显模式）⇒ 沿用上次见到的那一侧与那次实测的宽高；从没见过则按上支的 24dip 基准摆。
+     * - 两支都不可见（常显模式）⇒ 挂件走**常驻位：屏幕右侧垂直居中**（用户 2026-09-25 指定；
+     *   早先「沿用上次那一侧」的做法被用户否掉：「常驻时位置不对，就在右侧的中间位置吧」）。
      * ⚠️ 尺寸照抄胶囊**实测**宽高 ⇒ 才「同形状」（`gone` 时的 0 绝不能当尺寸）。
      * ⚠️ 真机实测（2026-09-25）：**上支才是微信在显示的那一枚**（截图实测它贴在消息区上沿 ~24dip、右对齐）；
      * 旧实现只挑下支，而那支在 09-24/09-25 两份日志里恒 `visibility=8 h=0`（`tipVisible=true` 0 次）
@@ -269,6 +272,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         }
         // 锚点侧：可见时按它自己的 gravity；不可见时沿用上次那一侧（默认上支）
         val useTop = if (tipVisible) topAnchored else (lastTopAnchored[host] ?: true)
+        // 用户 2026-09-25：胶囊不在屏幕上 ⇒ 挂件走常驻位（屏幕右侧垂直居中），不再贴着已消失的位置
+        val centered = !tipVisible
         val gap = GAP_DP.dpToPx(anchor.context)
 
         // 悬浮输入框会压掉页底 ~240px（实测顶掉 241px）⇒ 下支胶囊与挂件一起浮到卡片上沿之上；
@@ -282,18 +287,19 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         val measuredW = if (tipVisible) anchor.width else remembered?.first ?: 0
         val pillH = measuredH.takeIf { it > 0 } ?: PILL_HEIGHT_DP.dpToPx(anchor.context)
         val pillW = measuredW.takeIf { it > 0 }
-        val pillEdge = anchorEdge + pillH + gap
+        val pillEdge = if (centered) 0 else anchorEdge + pillH + gap
 
         if (pill.minimumHeight != 0) pill.minimumHeight = 0
         applyPillSkin(pill, pillH)
-        placePill(pill, useTop, pillW, pillH, pillEdge)
+        placePill(pill, useTop, centered, pillW, pillH, pillEdge)
 
         // ⚠️ 只有开了「只在有『N条新消息』时显示挂件」才查未读（syncPill 被底栏/提示条事件频繁触发）
         val unread = if (onlyWhenUnread) recentUnread(conv) else 0
         val hasNew = tipVisible || unread > 0
         WeLogger.i(
             TAG,
-            "pill placed: side=${if (useTop) "top" else "bottom"} anchorId=0x${Integer.toHexString(anchor.id)} " +
+            "pill placed: side=${if (centered) "center" else if (useTop) "top" else "bottom"} " +
+                    "anchorId=0x${Integer.toHexString(anchor.id)} " +
                     "zone=$zone anchorEdge=$anchorEdge gap=$gap tipVisible=$tipVisible " +
                     "tipW=${anchor.width} tipH=${anchor.height} pillW=${pillW ?: -1} pillH=$pillH " +
                     "conv=$conv unread=$unread"
@@ -339,20 +345,28 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     }
 
     /**
-     * 挂件落位：上支 ⇒ `gravity=TOP|END` + `topMargin`（挂在胶囊下方）；下支 ⇒ `BOTTOM|END` + `bottomMargin`（挂上方）。
-     * 宽高按胶囊实测值写死（`null` = `WRAP_CONTENT`）⇒ 与胶囊同形状。
+     * 挂件落位：
+     * - 上支胶囊 ⇒ `gravity=TOP|END` + `topMargin`（挂在胶囊下方）；
+     * - 下支胶囊 ⇒ `BOTTOM|END` + `bottomMargin`（挂在胶囊上方）；
+     * - 常驻（胶囊不在）⇒ `END|CENTER_VERTICAL`（屏幕右侧垂直居中，用户 2026-09-25 指定）。
+     * 宽高按胶囊实测值写死（`null` = `WRAP_CONTENT`）⇒ 与胶囊同形状；**右外边距恒 0**
+     * ⇒ 右缘贴屏幕边（与原生胶囊「左边圆角、右边直角贴屏幕」的观感一致，见 [applyPillSkin]）。
      */
-    private fun placePill(pill: TextView, useTop: Boolean, width: Int?, height: Int, edge: Int) {
+    private fun placePill(pill: TextView, useTop: Boolean, centered: Boolean, width: Int?, height: Int, edge: Int) {
         val lp = pill.layoutParams as? FrameLayout.LayoutParams
         if (lp == null) {
             // 宿主不是 FrameLayout 系的兜底：只调底边距（保持旧行为）
             setMargin(pill, bottom = edge)
             return
         }
-        val gravity = if (useTop) (Gravity.TOP or Gravity.END) else (Gravity.BOTTOM or Gravity.END)
+        val gravity = when {
+            centered -> (Gravity.END or Gravity.CENTER_VERTICAL)
+            useTop -> (Gravity.TOP or Gravity.END)
+            else -> (Gravity.BOTTOM or Gravity.END)
+        }
         val wantW = width ?: ViewGroup.LayoutParams.WRAP_CONTENT
-        val wantTop = if (useTop) edge else 0
-        val wantBottom = if (useTop) 0 else edge
+        val wantTop = if (!centered && useTop) edge else 0
+        val wantBottom = if (!centered && !useTop) edge else 0
         var changed = false
         if (lp.gravity != gravity) {
             lp.gravity = gravity; changed = true
@@ -368,6 +382,10 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         }
         if (lp.bottomMargin != wantBottom) {
             lp.bottomMargin = wantBottom; changed = true
+        }
+        // 右缘贴屏幕边：右外边距固定 0（原生胶囊也是顶到屏幕右侧的直角边）
+        if (lp.rightMargin != 0) {
+            lp.rightMargin = 0; changed = true
         }
         if (changed) pill.layoutParams = lp
     }
@@ -417,15 +435,19 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     }
 
     /**
-     * 蓝色渐变「梦幻」胶囊皮肤：蓝 → 淡紫对角渐变、圆角取高度一半（标准胶囊）、
-     * 细白描边 + 轻微投影。高度由调用方按提示条高度给定 ⇒ 圆角恒等于半个高度。
+     * 蓝色渐变「梦幻」胶囊皮肤：蓝 → 淡紫对角渐变、**左边圆角、右边直角**（用户 2026-09-25：
+     * 「应该和『N条新消息』一样，左边是圆角，右边没有圆角、直角贴屏幕」——实测原生胶囊
+     * 429×130px ≈ 121×37dp、左缘圆角、右缘是顶到屏幕边（x=1279）的直角）。
+     * 圆角半径取高度一半 ⇒ 左半段是标准胶囊弧。
      */
     private fun applyPillSkin(pill: TextView, heightPx: Int) {
+        val r = (heightPx.coerceAtLeast(1)) / 2f
         val bg: Drawable = GradientDrawable(
             GradientDrawable.Orientation.TL_BR,
             intArrayOf(Color.parseColor("#5B7CFF"), Color.parseColor("#B07CFF"))
         ).apply {
-            cornerRadius = (heightPx.coerceAtLeast(1)) / 2f
+            // cornerRadii 顺序 = 左上/左上、右上/右上、右下/右下、左下/左下
+            cornerRadii = floatArrayOf(r, r, 0f, 0f, 0f, 0f, r, r)
             setStroke(1.dpToPx(pill.context), Color.parseColor("#59FFFFFF"))
         }
         pill.background = bg
@@ -1157,7 +1179,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                             headlineContent = { Text("只在有「N条新消息」时显示挂件") },
                             supportingContent = {
                                 Text(
-                                    "关（默认）＝群聊页常显；开＝有未读才显示。" +
+                                    "关（默认）＝群聊页常显（没有「N条新消息」胶囊时停在屏幕右侧居中）；" +
+                                            "开＝有未读才显示。" +
                                             "点挂件时的分析范围：该群有未读 → 分析全部未读（上限 1000 条），" +
                                             "没有未读 → 分析当天消息"
                                 )
@@ -1494,6 +1517,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                 )
 
                 errorText.isNotEmpty() -> AlertDialogContent(
+                    bodyScrollable = false,
                     title = { Text("分析失败") },
                     text = {
                         Text(
@@ -1510,6 +1534,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                 )
 
                 else -> AlertDialogContent(
+                    bodyScrollable = false,
                     title = { Text("群聊消息分析") },
                     text = {
                         Text(

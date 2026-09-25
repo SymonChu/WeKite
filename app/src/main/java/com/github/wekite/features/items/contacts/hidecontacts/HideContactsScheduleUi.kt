@@ -181,6 +181,7 @@ internal fun HideContacts.showSchedulesDialog(context: Context) {
         val addedIds = remember { mutableSetOf<String>() }
 
         AlertDialogContent(
+            bodyScrollable = false,
             modifier = Modifier.fillMaxWidth(),
             title = { Text("定时显示/隐藏") },
             text = {

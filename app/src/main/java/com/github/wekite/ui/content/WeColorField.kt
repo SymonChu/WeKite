@@ -135,6 +135,7 @@ fun WeColorPickerDialog(
     val hexError = runCatching { hexText.toColorInt() }.isFailure
 
     AlertDialogContent(
+        bodyScrollable = false,
         title = { Text("选择颜色") },
         text = {
             DefaultColumn(Modifier.verticalScroll(rememberScrollState())) {

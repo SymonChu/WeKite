@@ -101,6 +101,7 @@ object QrCodeRecord : ClickableFeature(), IResolveDex {
             var list by remember { mutableStateOf(records.toList()) }
 
             AlertDialogContent(
+                bodyScrollable = false,
                 title = { Text("二维码扫描记录") },
                 text = {
                     if (list.isEmpty()) {
