@@ -89,6 +89,12 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     private const val RECONCILE_NEW_MSG_TIP = 1 shl 3
 
     /**
+     * 顶部「N条新消息」胶囊的**额外上移量**（用户 2026-09-25：「目前的『N条新消息』胶囊在上面的时候，
+     * 位置再上移 20dp」）。作用域仅限本文件的避让路径 —— 即悬浮标题栏生效时把那枚胶囊少往下推 20dp。
+     */
+    private const val NEW_MSG_TIP_UP_LIFT_DP = 20
+
+    /**
      * 顶部「N条新消息」提示条的 layout_gravity 候选值。
      * 微信 8.0.72(3085) res/a7/sp.xml 实测: 上提示条 (c5t) = `0x05` 即 RIGHT,
      * 纵向位不写默认为 top; 下提示条 (c5q) = `0x55` 即 BOTTOM|RIGHT, 不在此列。
@@ -1753,16 +1759,18 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
         val base = newMsgTipBaseMargins.getOrPut(tip) { lp.topMargin }
         val density = layout.resources.displayMetrics.density
         val gapPx = (extraGapDp * density).toInt()
+        // 用户 2026-09-25：这枚胶囊在顶部时再上移 20dp（少往下推同样的量）
+        val liftPx = (NEW_MSG_TIP_UP_LIFT_DP * density).toInt()
         // 悬浮卡下沿 (ChattingUILayout 坐标系): 有挂件卡时用最下那张卡的下沿, 否则用标题卡下沿
         val cardBottomPx = overlayCardBottoms[layout] ?: headerBottomInLayout(layout, header)
         // ChattingScrollLayout 滚动时用 translationY 移动内容区, 要一起算进提示条的屏幕位置
         val contentTopPx = content.offsetTopIn(layout) + content.translationY.roundToInt()
-        val marginTop = (cardBottomPx + gapPx - contentTopPx).coerceAtLeast(0) + base
+        val marginTop = (cardBottomPx + gapPx - contentTopPx - liftPx).coerceAtLeast(0) + base
         if (lp.topMargin != marginTop) {
             val previous = lp.topMargin
             lp.topMargin = marginTop
             tip.requestLayout()
-            WeLogger.d(TAG, "new msg tip top margin: $previous -> $marginTop (base=$base)")
+            WeLogger.d(TAG, "new msg tip top margin: $previous -> $marginTop (base=$base lift=${liftPx}px)")
         }
         return true
     }

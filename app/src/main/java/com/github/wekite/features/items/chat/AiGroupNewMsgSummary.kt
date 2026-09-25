@@ -79,15 +79,18 @@ import kotlin.concurrent.thread
 import kotlin.math.abs
 
 /**
- * 群聊消息分析：在聊天页右下「N条新消息」提示条的**上方**挂一个同尺寸「AI分析」胶囊，
- * 点击即把该群消息（未读范围 / 当天范围）发给用户自填的 OpenAI 兼容接口，生成一份中文报告。
+ * 群聊消息分析：在聊天页「N条新消息」胶囊旁挂一个**同尺寸**「AI分析」胶囊
+ * （胶囊在上支容器时挂它**下面** 12dp，在下支容器时挂它**上面** 12dp），
+ * 点击即把该群消息（有未读 ⇒ 未读全部；无未读 ⇒ 当天）发给用户自填的 OpenAI 兼容接口，生成一份中文报告。
  *
  * 设计要点：
- * - 挂件高度抄提示条（提示条没测量过就用 40dp 兜底），背景是自绘的蓝色渐变，
- *   位置让开悬浮输入框占用的高度（`FloatingChatFooter.reservedBottomPx`）。
- * - ⚠️ **提示条在真机上可能始终 `GONE`**（2026-09-24 实测微信 8.0.77：日志里所有
- *   `pill placed` 都是 `tipVisible=false tipH=0`）⇒ 「只在有未读时显示」不能只拿提示条可见性
- *   当判据，改用**会话真实未读数** `rconversation.unReadCount`（见 [recentUnread]）。
+ * - 锚点 = `WeChatNewMsgTipApi` 给出的**当前可见的那一支**胶囊容器；尺寸照抄它的实测宽高 ⇒ 才「同形状」。
+ * - ⚠️ **别只挑一支容器**（2026-09-25 定案）：旧实现只把「下支」当锚点，而那支在真机日志里恒
+ *   `visibility=8 h=0`（09-24 / 09-25 两份日志全部样本 `tipVisible=true` 出现 0 次）⇒ 挂件位置退化成死常量、
+ *   永远固定贴右下角（用户报「位置不正确」）。现在两支都试、谁可见贴谁；都不可见时沿用上次那一侧。
+ * - 「只在有『N条新消息』时显示挂件」开关只管**显隐**（亮 = 跟随胶囊；灭 = 群聊页常显）；
+ *   **分析范围不再跟开关走** —— 有未读就分析未读，没有才回退当天（旧实现默认模式下胶囊写 33 条、
+ *   实际分析的是当天的 18 条文本消息，用户报「判断有误」）。
  * - 接口/Key/模型/请求头全部用户自填，支持各类反代与公益站（自定义 URL、Key 头名与前缀、
  *   User-Agent、任意额外请求头、超时/重试、忽略 TLS 校验、错误原文回显）。
  */
@@ -95,7 +98,7 @@ import kotlin.math.abs
 @Feature(
     name = "群聊消息分析",
     categories = ["聊天"],
-    description = "聊天页「N条新消息」上方挂同尺寸「AI分析」胶囊，点击分析该群消息（接口/模型自填，支持各类反代）"
+    description = "聊天页「N条新消息」胶囊旁挂同尺寸「AI分析」胶囊，点击分析该群消息（接口/模型自填，支持各类反代）"
 )
 object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListener {
 
@@ -108,14 +111,17 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
 
     private const val PILL_TEXT = "AI分析"
 
-    /** 挂件与提示条的间距（视觉上「接着挂」） */
-    private const val GAP_DP = 8
+    /** 挂件与胶囊的间距（视觉上「接着挂」；用户 2026-09-25 明确要 12dp） */
+    private const val GAP_DP = 12
 
     /** 挂件左右留白 */
     private const val PILL_PAD_H_DP = 16
 
-    /** 挂件高度兜底（提示条没测量过时用；真机实测提示条高度 ≈ 40dp） */
-    private const val PILL_HEIGHT_DP = 40
+    /**
+     * 挂件高度兜底：**只在「胶囊从未被测量过」时**用（真机截图实测那枚胶囊约 18–20dp 高，留一点余量）。
+     * 胶囊被测量过时一律照抄它的实测高度 ⇒ 与它同形状。
+     */
+    private const val PILL_HEIGHT_DP = 24
 
     /** 「只分析新消息」模式的条数硬上限（用户指定 1000） */
     private const val UNREAD_MAX = 1000
@@ -143,7 +149,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** 每批喂给模型的条数 */
     private const val CHUNK_SIZE = 60
 
-    /** 常显模式的默认条数（= 当天消息的条数上限；「只分析新消息」模式改用 [UNREAD_MAX]） */
+    /** 常显模式（没有未读、回退当天范围）的默认条数 = 当天消息的条数上限 */
     private const val DEFAULT_MAX_MSGS = 200
 
     private const val DEFAULT_SYSTEM_PROMPT =
@@ -179,6 +185,12 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** 提示条 -> 原标题条底部外边距（只记一次，只加不覆盖） */
     private val tipBaseBottomMargins = WeakHashMap<View, Int>()
 
+    /** 该会话页上次见到的锚点侧（true = 上支/挂在它下面）：胶囊消失后沿用，挂件不跳来跳去 */
+    private val lastTopAnchored = WeakHashMap<View, Boolean>()
+
+    /** 该会话页上次见到的胶囊**实测宽高**（px）：胶囊 gone 时靠它保持「同形状」 */
+    private val lastTipSizes = WeakHashMap<View, Pair<Int, Int>>()
+
     @Volatile
     private var clientCache: Pair<AiParams, OkHttpClient>? = null
 
@@ -193,12 +205,16 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     override fun onDisable() {
         WeChatNewMsgTipApi.removeListener(this)
         FloatingChatFooter.removeZoneListener(zoneListener)
+        // 还原我们抬过的下支胶囊（上支的边距归 FloatingChatHeader）
+        tipForHost.keys.toList().forEach { runCatching { restoreMovedTips(it) } }
         pills.forEach { (host, pill) ->
             runCatching { (host as? ViewGroup)?.removeView(pill) }
         }
         pills.clear()
         tipForHost.clear()
         tipBaseBottomMargins.clear()
+        lastTopAnchored.clear()
+        lastTipSizes.clear()
     }
 
     /** 底栏占用高度变了（进聊天页 / 展开面板 / 关掉悬浮）⇒ 挂件重新贴到卡片上沿。 */
@@ -218,72 +234,142 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             .onFailure { WeLogger.e(TAG, "syncPill failed", it) }
     }
 
+    /**
+     * 让挂件贴着「N条新消息」胶囊（用户 2026-09-25 定的规格）：
+     * - 胶囊在**上支**（gravity 含 TOP）⇒ 挂件挂在它**下面** 12dp；
+     * - 胶囊在**下支**（gravity 含 BOTTOM）⇒ 挂件挂在它**上面** 12dp（挂它下面会被悬浮输入框吃掉）；
+     * - 两支都不可见（常显模式）⇒ 沿用上次见到的那一侧与那次实测的宽高；从没见过则按上支的 24dip 基准摆。
+     * ⚠️ 尺寸照抄胶囊**实测**宽高 ⇒ 才「同形状」（`gone` 时的 0 绝不能当尺寸）。
+     * ⚠️ 真机实测（2026-09-25）：**上支才是微信在显示的那一枚**（截图实测它贴在消息区上沿 ~24dip、右对齐）；
+     * 旧实现只挑下支，而那支在 09-24/09-25 两份日志里恒 `visibility=8 h=0`（`tipVisible=true` 0 次）
+     * ⇒ 挂件位置退化成死常量（85+241=326px）、永远固定贴右下角（用户报「位置不正确」）。
+     */
     private fun syncPill(host: View, tip: View) {
         val conv = WeChatNewMsgTipApi.convIdOf(host)
         val isGroup = conv.isNotEmpty() && conv.isGroupChatWxId
+        val active = WeChatNewMsgTipApi.activeTipOf(host)
+        val anchor = active ?: tip
+        val topAnchored = WeChatNewMsgTipApi.isTopAnchored(anchor)
 
         if (!isGroup) {
             pills[host]?.visibility = View.GONE
-            restoreTipMargin(tip)
+            restoreMovedTips(host)
             return
         }
 
         val existing = pills[host]
         val pill = if (existing != null && existing.parent != null) existing
-        else createPill(host, tip) ?: return
+        else createPill(host, anchor) ?: return
 
-        val base = tipBaseBottomMargins.getOrPut(tip) {
-            (tip.layoutParams as? ViewGroup.MarginLayoutParams)?.bottomMargin ?: 0
+        tipForHost[host] = anchor
+        val tipVisible = active != null && anchor.height > 0
+        if (tipVisible) {
+            lastTopAnchored[host] = topAnchored
+            lastTipSizes[host] = anchor.width to anchor.height
         }
-        tipForHost[host] = tip
-        // ⚠️ 提示条只在「真·新消息到达且用户没看到」时才 VISIBLE，平时是 GONE 且未测量（h=0）。
-        // 挂件不能跟着它的可见性走，也不能把它的测量值当尺寸来源（GONE 时为 0）。
-        val tipVisible = tip.visibility == View.VISIBLE && tip.height > 0
-        // ⚠️ 真机实测（2026-09-24 微信 8.0.77）：这条提示条**始终** `visibility=8 h=0`
-        //    （日志里每一条 `pill placed` 都是 tipVisible=false）⇒ 只拿它当判据的话
-        //    「只在有未读新消息时显示挂件」恒为假、挂件永不出现（用户报的 bug）。
-        //    现在以**该会话真实未读数**为主判据（提示条可见时也算有），语义与开关名一致。
+        // 锚点侧：可见时按它自己的 gravity；不可见时沿用上次那一侧（默认上支）
+        val useTop = if (tipVisible) topAnchored else (lastTopAnchored[host] ?: true)
+        val gap = GAP_DP.dpToPx(anchor.context)
+
+        // 悬浮输入框会压掉页底 ~240px（实测顶掉 241px）⇒ 下支胶囊与挂件一起浮到卡片上沿之上；
+        // 上支胶囊的边距归 FloatingChatHeader 的避让逻辑，这里一个字都不碰。
+        val zone = if (FloatingChatFooter.isActive) FloatingChatFooter.reservedBottomPx else 0
+        val anchorEdge = moveTip(anchor, if (useTop) 0 else zone)
+
+        // 尺寸：胶囊可见 ⇒ 实测宽高；否则上次记住的；再否则高度兜底、宽度 wrap_content
+        val remembered = lastTipSizes[host]
+        val measuredH = if (tipVisible) anchor.height else remembered?.second ?: 0
+        val measuredW = if (tipVisible) anchor.width else remembered?.first ?: 0
+        val pillH = measuredH.takeIf { it > 0 } ?: PILL_HEIGHT_DP.dpToPx(anchor.context)
+        val pillW = measuredW.takeIf { it > 0 }
+        val pillEdge = anchorEdge + pillH + gap
+
+        if (pill.minimumHeight != 0) pill.minimumHeight = 0
+        applyPillSkin(pill, pillH)
+        placePill(pill, useTop, pillW, pillH, pillEdge)
+
+        // ⚠️ 只有开了「只在有『N条新消息』时显示挂件」才查未读（syncPill 被底栏/提示条事件频繁触发）
         val unread = if (onlyWhenUnread) recentUnread(conv) else 0
         val hasNew = tipVisible || unread > 0
-        val gap = GAP_DP.dpToPx(tip.context)
-
-        // 悬浮输入框会压掉页底 ~240px（实测顶掉 241px，挂件贴底 85px 完全被盖住）。
-        // 让出这段高度：提示条与挂件一起浮在卡片上沿之上；底栏没开时为 0，行为与从前一致。
-        val zone = if (FloatingChatFooter.isActive) FloatingChatFooter.reservedBottomPx else 0
-        val slot = base + zone
-
-        // 提示条在下、挂件紧贴它上方（用户 2026-09-24 要求「放在 N条新消息 上方靠近」）；
-        // 提示条隐藏时挂件独占这一行。
-        setBottomMargin(tip, slot)
-        setBottomMargin(pill, if (tipVisible) slot + tip.height + gap else slot)
-
-        // 尺寸与提示条等高：提示条被测量过就用它，否则 40dp 兜底（真机实测提示条高 ≈40dp）。
-        // 背景已是蓝色渐变，故不能再用原 9-patch 的 minimumHeight 撑高。
-        val wantH = if (tip.height > 0) tip.height else PILL_HEIGHT_DP.dpToPx(tip.context)
-        if (pill.minimumHeight != wantH) pill.minimumHeight = wantH
-        applyPillSkin(pill, wantH)
         WeLogger.i(
             TAG,
-            "pill placed: zone=$zone slot=$slot tipVisible=$tipVisible tipH=${tip.height} h=$wantH " +
-                    "base=$base conv=$conv unread=$unread"
+            "pill placed: side=${if (useTop) "top" else "bottom"} anchorId=0x${Integer.toHexString(anchor.id)} " +
+                    "zone=$zone anchorEdge=$anchorEdge gap=$gap tipVisible=$tipVisible " +
+                    "tipW=${anchor.width} tipH=${anchor.height} pillW=${pillW ?: -1} pillH=$pillH " +
+                    "conv=$conv unread=$unread"
         )
 
         pill.visibility = if (!onlyWhenUnread || hasNew) View.VISIBLE else View.GONE
         // 隐藏后安排一次有界复查：刚进群那一刻未读数可能还没落到库里
-        if (onlyWhenUnread && !hasNew) schedulePillRecheck(host, tip) else pendingRecheck.remove(host)
+        if (onlyWhenUnread && !hasNew) schedulePillRecheck(host, anchor) else pendingRecheck.remove(host)
         pill.setOnClickListener { onPillClick(host, conv) }
     }
 
-    private fun restoreTipMargin(tip: View) {
-        val base = tipBaseBottomMargins[tip] ?: return
-        setBottomMargin(tip, base)
+    /**
+     * 挪胶囊并返回它当前生效的边距（挂件按它算位置）：
+     * 上支 ⇒ 不动（返回它的 `topMargin`，由 `FloatingChatHeader` 维护）；下支 ⇒ 抬 `zone` 并返回 `bottomMargin`。
+     */
+    private fun moveTip(tip: View, zone: Int): Int {
+        val lp = tip.layoutParams as? ViewGroup.MarginLayoutParams ?: return 0
+        if (WeChatNewMsgTipApi.isTopAnchored(tip)) return lp.topMargin
+        val base = tipBaseBottomMargins.getOrPut(tip) { lp.bottomMargin }
+        setMargin(tip, bottom = base + zone)
+        return base + zone
     }
 
-    private fun setBottomMargin(view: View, margin: Int) {
+    /** 非群聊 / 退出时还原我们抬过的下支（上支的 margin 归 FloatingChatHeader，别碰）。 */
+    private fun restoreMovedTips(host: View) {
+        for (t in WeChatNewMsgTipApi.candidatesOf(host)) {
+            if (WeChatNewMsgTipApi.isTopAnchored(t)) continue
+            val base = tipBaseBottomMargins[t] ?: continue
+            setMargin(t, bottom = base)
+        }
+    }
+
+    private fun setMargin(view: View, top: Int? = null, bottom: Int? = null) {
         val lp = view.layoutParams as? ViewGroup.MarginLayoutParams ?: return
-        if (lp.bottomMargin == margin) return
-        lp.bottomMargin = margin
-        view.layoutParams = lp
+        var changed = false
+        if (top != null && lp.topMargin != top) {
+            lp.topMargin = top; changed = true
+        }
+        if (bottom != null && lp.bottomMargin != bottom) {
+            lp.bottomMargin = bottom; changed = true
+        }
+        if (changed) view.layoutParams = lp
+    }
+
+    /**
+     * 挂件落位：上支 ⇒ `gravity=TOP|END` + `topMargin`（挂在胶囊下方）；下支 ⇒ `BOTTOM|END` + `bottomMargin`（挂上方）。
+     * 宽高按胶囊实测值写死（`null` = `WRAP_CONTENT`）⇒ 与胶囊同形状。
+     */
+    private fun placePill(pill: TextView, useTop: Boolean, width: Int?, height: Int, edge: Int) {
+        val lp = pill.layoutParams as? FrameLayout.LayoutParams
+        if (lp == null) {
+            // 宿主不是 FrameLayout 系的兜底：只调底边距（保持旧行为）
+            setMargin(pill, bottom = edge)
+            return
+        }
+        val gravity = if (useTop) (Gravity.TOP or Gravity.END) else (Gravity.BOTTOM or Gravity.END)
+        val wantW = width ?: ViewGroup.LayoutParams.WRAP_CONTENT
+        val wantTop = if (useTop) edge else 0
+        val wantBottom = if (useTop) 0 else edge
+        var changed = false
+        if (lp.gravity != gravity) {
+            lp.gravity = gravity; changed = true
+        }
+        if (lp.width != wantW) {
+            lp.width = wantW; changed = true
+        }
+        if (lp.height != height) {
+            lp.height = height; changed = true
+        }
+        if (lp.topMargin != wantTop) {
+            lp.topMargin = wantTop; changed = true
+        }
+        if (lp.bottomMargin != wantBottom) {
+            lp.bottomMargin = wantBottom; changed = true
+        }
+        if (changed) pill.layoutParams = lp
     }
 
     private fun createPill(host: View, tip: View): TextView? {
@@ -301,10 +387,11 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             }
         pills[host] = pill
         pill.addOnLayoutChangeListener { v, l, t, r, b, _, _, _, _ ->
+            val lp = v.layoutParams as? FrameLayout.LayoutParams
             WeLogger.i(
                 TAG,
-                "AI pill laid out: ${r - l}x${b - t} visibility=${v.visibility} " +
-                        "margin=${(v.layoutParams as? ViewGroup.MarginLayoutParams)?.bottomMargin}"
+                "AI pill laid out: ${r - l}x${b - t} visibility=${v.visibility} gravity=${lp?.gravity} " +
+                        "topMargin=${lp?.topMargin} margin=${lp?.bottomMargin}"
             )
         }
         WeLogger.i(TAG, "AI pill added: parent=${parent.javaClass.simpleName} host=${host.javaClass.simpleName}")
@@ -377,15 +464,18 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /**
      * 读取该群「新消息」→ 分块总结 → 汇总成报告。
      *
-     * 范围随挂件模式（用户 2026-09-24 指定）：
-     * - 打开「只在有「N条新消息」时显示挂件」→ 分析**全部未读新消息**（上限 [UNREAD_MAX] = 1000 条）
-     * - 未打开（常显）→ 默认只分析**当天**的消息（上限 = 设置里的条数，默认 200）
+     * 分析范围（用户 2026-09-25 定稿）：**与「N条新消息」绑定** ——
+     * - 该群**有未读** → 分析**全部未读新消息**（上限 [UNREAD_MAX] = 1000 条）＝「分析内容为新消息」；
+     * - 没有未读 → 回退分析**当天**的消息（上限 = 设置里的条数，默认 200）。
+     * ⚠️ 范围**不再跟「只在有未读时显示挂件」开关走**：那个开关只管挂件显隐。旧实现把两者绑在一起，
+     *    结果默认模式下胶囊写着 33 条、实际分析的是当天的 18 条文本消息（用户报「判断有误」）。
      */
     private fun analyzeNewMessages(convId: String, params: AiParams, onStage: (String) -> Unit): String {
-        val raw = if (onlyWhenUnread) collectUnread(convId, onStage) else collectToday(convId, onStage)
+        val unread = runCatching { queryUnread(convId) }.getOrDefault(0)
+        val raw = if (unread > 0) collectUnread(convId, unread, onStage) else collectToday(convId, onStage)
         val messages = raw.filter { it.type?.isText == true }.reversed()
         if (messages.isEmpty()) {
-            return if (onlyWhenUnread) "该群当前没有未读的新消息。"
+            return if (unread > 0) "该群当前没有未读的新消息。"
             else "今天这个群还没有可分析的文本消息。"
         }
 
@@ -419,12 +509,12 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         )
     }
 
-    /** 该群**全部未读**新消息（上限 [UNREAD_MAX]）；没有未读则返回空。 */
-    private fun collectUnread(convId: String, onStage: (String) -> Unit): List<WeMessage> {
-        val unread = queryUnread(convId).coerceIn(0, UNREAD_MAX)
-        if (unread <= 0) return emptyList()
-        onStage("读取该群全部未读新消息（$unread 条）…")
-        return WeDatabaseApi.getMessages(convId, pageIndex = 1, pageSize = unread)
+    /** 该群**全部未读**新消息（上限 [UNREAD_MAX]）；[unread] <= 0 则返回空。 */
+    private fun collectUnread(convId: String, unread: Int, onStage: (String) -> Unit): List<WeMessage> {
+        val n = unread.coerceIn(0, UNREAD_MAX)
+        if (n <= 0) return emptyList()
+        onStage("读取该群全部未读新消息（$n 条）…")
+        return WeDatabaseApi.getMessages(convId, pageIndex = 1, pageSize = n)
     }
 
     /**
@@ -1066,7 +1156,11 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                             },
                             headlineContent = { Text("只在有「N条新消息」时显示挂件") },
                             supportingContent = {
-                                Text("关（默认）＝群聊页常显，只分析当天消息；开＝有未读才显示，分析全部新消息（上限 1000 条）")
+                                Text(
+                                    "关（默认）＝群聊页常显；开＝有未读才显示。" +
+                                            "点挂件时的分析范围：该群有未读 → 分析全部未读（上限 1000 条），" +
+                                            "没有未读 → 分析当天消息"
+                                )
                             }
                         )
                         ListItem(
