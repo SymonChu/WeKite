@@ -195,6 +195,18 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** 该会话页上次见到的胶囊**实测宽高**（px）：胶囊 gone 时靠它保持「同形状」 */
     private val lastTipSizes = WeakHashMap<View, Pair<Int, Int>>()
 
+    /**
+     * conv -> **进入会话那一刻**看到的未读数（用户 2026-09-25 要求：点挂件＝分析那批新消息）。
+     * ⚠️ 为什么不能在点击时才查：微信在你进会话/浏览后会把未读清零（08:31 日志实录：进群 unread=33 →
+     * 44 秒后 unread=0），点击时通常已经是 0 ⇒ 老实现永远落到「当天」分支（用户日志实证：6 次点击
+     * `today range:` 6 条、`读取该群全部未读新消息` **0 条**）。所以必须在**进会话时**就抓住这个数字。
+     * 只增不减：胶囊显示更大的数字（新消息陆续到达）时刷新为更大的值。
+     */
+    private val capturedUnread = HashMap<String, Int>()
+
+    /** ChattingContent -> 上次捕获时对应的会话（会话变了 ⇒ 重新捕获） */
+    private val capturedFor = WeakHashMap<View, String>()
+
     @Volatile
     private var clientCache: Pair<AiParams, OkHttpClient>? = null
 
@@ -219,6 +231,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         tipBaseBottomMargins.clear()
         lastTopAnchored.clear()
         lastTipSizes.clear()
+        capturedUnread.clear()
+        capturedFor.clear()
     }
 
     /** 底栏占用高度变了（进聊天页 / 展开面板 / 关掉悬浮）⇒ 挂件重新贴到卡片上沿。 */
@@ -272,6 +286,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             lastTopAnchored[host] = topAnchored
             lastTipSizes[host] = anchor.width to anchor.height
         }
+        captureUnreadIfNeeded(host, conv, anchor, tipVisible)
         // 锚点侧：可见时按它自己的 gravity；不可见时沿用上次那一侧（默认上支）
         val useTop = if (tipVisible) topAnchored else (lastTopAnchored[host] ?: true)
         // 用户 2026-09-25：胶囊不在屏幕上 ⇒ 挂件走常驻位（屏幕右侧垂直居中），不再贴着已消失的位置
@@ -490,15 +505,27 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /**
      * 读取该群「新消息」→ 分块总结 → 汇总成报告。
      *
-     * 分析范围（用户 2026-09-25 定稿）：**与「N条新消息」绑定** ——
-     * - 该群**有未读** → 分析**全部未读新消息**（上限 [UNREAD_MAX] = 1000 条）＝「分析内容为新消息」；
-     * - 没有未读 → 回退分析**当天**的消息（上限 = 设置里的条数，默认 200）。
-     * ⚠️ 范围**不再跟「只在有未读时显示挂件」开关走**：那个开关只管挂件显隐。旧实现把两者绑在一起，
-     *    结果默认模式下胶囊写着 33 条、实际分析的是当天的 18 条文本消息（用户报「判断有误」）。
+     * 分析范围（用户 2026-09-25 定稿）：**「进会话时那批新消息」优先** ——
+     * - 该会话**进会话时看到的未读**（`capturedUnread`，在 `ChatFooter.setUserName` 之后首次 syncPill 时抓）
+     *   或**当前未读**，两者取大 → 分析最近的 N 条（上限 [UNREAD_MAX] = 1000 条）＝用户要的「只分析新消息」；
+     * - 两者都为 0（进会话时本来就没有未读）→ 回退分析**当天**的消息（上限 = 设置里的条数，默认 200）。
+     * ⚠️ 为什么必须「进会话时」抓：微信在你浏览之后会把未读清零（08:31 日志实录：进群 unread=33 →
+     *    44s 后 0）。老实现只在**点击那一刻**查 ⇒ 用户日志实证 6 次点击全落到当天分支
+     *    （`today range:` 6 条、`读取该群全部未读新消息` **0 条**），报告里混进已读消息。
+     * ⚠️ 范围**不跟「只在有未读时显示挂件」开关走**：那个开关只管挂件显隐。
      */
     private fun analyzeNewMessages(convId: String, params: AiParams, onStage: (String) -> Unit): String {
-        val unread = runCatching { queryUnread(convId) }.getOrDefault(0)
+        // 范围 = max(进会话时捕获的未读数, 当前未读数)：前者是「你进来时那批新消息」（用户 2026-09-25 定稿），
+        // 后者兜住「进会话后又有新消息」的情况。
+        val captured = capturedUnread[convId] ?: 0
+        val current = runCatching { queryUnread(convId) }.getOrDefault(0)
+        val unread = maxOf(captured, current)
         val raw = if (unread > 0) collectUnread(convId, unread, onStage) else collectToday(convId, onStage)
+        WeLogger.i(
+            TAG,
+            "analyze scope: ${if (unread > 0) "unread n=$unread" else "today"} " +
+                    "(captured=$captured current=$current) conv=$convId"
+        )
         val messages = raw.filter { it.type?.isText == true }.reversed()
         if (messages.isEmpty()) {
             return if (unread > 0) "该群当前没有未读的新消息。"
@@ -614,6 +641,46 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** 日志用的可读时间（0 显示为 `-`）。 */
     private fun readableTime(epochMs: Long): String =
         if (epochMs <= 0L) "-" else runCatching { formatEpoch(epochMs, "MM-dd HH:mm:ss") }.getOrDefault("$epochMs")
+
+    /** 从胶囊文案（`33条新消息` / `999+条新消息`）里取数字用的正则。 */
+    private val TIP_NUMBER = Regex("""(\d+)\s*条新消息""")
+
+    /**
+     * **进会话那一刻**把未读数抓下来（用户 2026-09-25 要求：「点挂件＝分析那批新消息」）。
+     *
+     * 时机必须是「进会话时」：微信在你浏览之后会把未读清零（08:31 日志实录：进群 unread=33 → 44s 后 0），
+     * 点击那一刻再查通常已是 0 ⇒ 老实现永远落到「当天」分支。另外胶囊在屏幕上时，它的数字就是
+     * 「N条新消息」⇒ 取更大值（会话期间新消息陆续到达时会刷新）。
+     */
+    private fun captureUnreadIfNeeded(host: View, conv: String, tip: View, tipVisible: Boolean) {
+        if (conv.isEmpty() || !conv.isGroupChatWxId) return
+        if (capturedFor[host] != conv) {
+            capturedFor[host] = conv
+            capturedUnread.remove(conv)
+            val n = runCatching { queryUnread(conv) }.getOrDefault(0)
+            if (n > 0) {
+                capturedUnread[conv] = n
+                WeLogger.i(TAG, "entry unread captured: n=$n conv=$conv")
+            }
+            return
+        }
+        if (!tipVisible) return
+        val shown = tipNumber(tip)
+        if (shown > (capturedUnread[conv] ?: 0)) {
+            capturedUnread[conv] = shown
+            WeLogger.i(TAG, "entry unread updated from capsule: n=$shown conv=$conv")
+        }
+    }
+
+    /** 从胶囊里的 TextView 文案读出数字；读不到返回 0（只作增强，失败不影响主流程）。 */
+    private fun tipNumber(tip: View): Int {
+        val group = tip as? ViewGroup ?: return 0
+        val text = (0 until group.childCount)
+            .map { group.getChildAt(it) }
+            .filterIsInstance<TextView>()
+            .firstOrNull()?.text?.toString() ?: return 0
+        return TIP_NUMBER.find(text)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+    }
 
     /** 该会话的未读数（群聊取 `unReadCount` / `unReadMuteCount` 较大者）。 */
     private fun queryUnread(convId: String): Int = runCatching {
@@ -1185,8 +1252,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                                 Text(
                                     "关（默认）＝群聊页常显（没有「N条新消息」胶囊时停在屏幕右侧居中）；" +
                                             "开＝只在屏幕上有「N条新消息」胶囊时显示。" +
-                                            "点挂件时的分析范围：该群有未读 → 分析全部未读（上限 1000 条），" +
-                                            "没有未读 → 分析当天消息"
+                                            "点挂件时的分析范围：进会话时看到的未读数（那批新消息，上限 1000 条）；" +
+                                            "进会话时没有未读，才分析当天消息"
                                 )
                             }
                         )
