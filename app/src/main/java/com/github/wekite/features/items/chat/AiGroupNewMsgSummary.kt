@@ -87,8 +87,10 @@ import kotlin.math.abs
  * - 锚点 = `WeChatNewMsgTipApi` 给出的**当前可见的那一支**胶囊容器；尺寸照抄它的实测宽高 ⇒ 才「同形状」。
  * - ⚠️ **别只挑一支容器**（2026-09-25 定案）：旧实现只把「下支」当锚点，而那支在真机日志里恒
  *   `visibility=8 h=0`（09-24 / 09-25 两份日志全部样本 `tipVisible=true` 出现 0 次）⇒ 挂件位置退化成死常量、
- *   永远固定贴右下角（用户报「位置不正确」）。现在两支都试、谁可见贴谁；都不可见时沿用上次那一侧。
- * - 「只在有『N条新消息』时显示挂件」开关只管**显隐**（亮 = 跟随胶囊；灭 = 群聊页常显）；
+ *   永远固定贴右下角（用户报「位置不正确」）。现在两支都试、谁可见贴谁；都不可见时走常驻位（屏幕右侧居中）。
+ * - 「只在有『N条新消息』时显示挂件」开关只管**显隐**：**开 = 严格跟随胶囊**（屏幕上没有那枚胶囊就隐藏，
+ *   用户 2026-09-25 定稿 —— v3.26 那条「有未读也显示」的兜底是锚点找错容器时的权宜之计，已删）；
+ *   关（默认）= 群聊页常显（胶囊不在时停在屏幕右侧居中）。
  *   **分析范围不再跟开关走** —— 有未读就分析未读，没有才回退当天（旧实现默认模式下胶囊写 33 条、
  *   实际分析的是当天的 18 条文本消息，用户报「判断有误」）。
  * - 接口/Key/模型/请求头全部用户自填，支持各类反代与公益站（自定义 URL、Key 头名与前缀、
@@ -293,9 +295,11 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         applyPillSkin(pill, pillH)
         placePill(pill, useTop, centered, pillW, pillH, pillEdge)
 
-        // ⚠️ 只有开了「只在有『N条新消息』时显示挂件」才查未读（syncPill 被底栏/提示条事件频繁触发）
+        // ⚠️ 只有开了「只在有『N条新消息』时显示挂件」才查未读 —— **只为诊断日志**（`unread=`）。
+        //    显隐判据已不看它：开关开着时**严格跟随胶囊**（用户 2026-09-25 定稿：去掉 v3.26 那条
+        //    「有未读但胶囊没显示也显示」的兜底 —— 那是锚点只认下支、那支恒不可见时的权宜之计）。
         val unread = if (onlyWhenUnread) recentUnread(conv) else 0
-        val hasNew = tipVisible || unread > 0
+        val hasNew = tipVisible
         WeLogger.i(
             TAG,
             "pill placed: side=${if (centered) "center" else if (useTop) "top" else "bottom"} " +
@@ -1180,7 +1184,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                             supportingContent = {
                                 Text(
                                     "关（默认）＝群聊页常显（没有「N条新消息」胶囊时停在屏幕右侧居中）；" +
-                                            "开＝有未读才显示。" +
+                                            "开＝只在屏幕上有「N条新消息」胶囊时显示。" +
                                             "点挂件时的分析范围：该群有未读 → 分析全部未读（上限 1000 条），" +
                                             "没有未读 → 分析当天消息"
                                 )
