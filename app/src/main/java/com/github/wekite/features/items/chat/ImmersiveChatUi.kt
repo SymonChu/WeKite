@@ -44,6 +44,9 @@ object ImmersiveChatUi : SwitchFeature() {
 
     private const val TAG = "ImmersiveChatUi"
 
+    /** 整树扫「系统栏色块容器」最多扫几帧（首帧未挂全时不把「n=0」缓存死, 见 stripHostsFor）。 */
+    private const val STRIP_SCAN_MAX_FRAMES = 20
+
     /** 每个窗口是否已应用聊天 edge-to-edge (只应用一次, 不恢复)。 */
     private val edgeToEdgeApplied = WeakHashMap<Window, Boolean>()
 
@@ -88,6 +91,19 @@ object ImmersiveChatUi : SwitchFeature() {
 
     /** 每个会话页整树扫出的「系统栏色块容器」列表（一次性, 之后每帧只复检 Paint）。 */
     private val stripHostsByLayout = WeakHashMap<View, List<View>>()
+
+    /**
+     * 已被判定为「自绘系统栏色块」的容器 —— 它们的 `willNotDraw()` 由钩子强制返回 true
+     * （8.0.77 反编译：`DrawStatusBarFrameLayout.dispatchDraw` 开头就用 `willNotDraw()` 当绘制闸门，
+     * 而微信把 `setWillNotDraw()` 覆写成空实现 ⇒ 这是唯一能关掉那条色块的入口）。
+     */
+    private val stripDrawSuppressed = WeakHashMap<View, Boolean>()
+
+    /** 只记一次「钩子真的拦下绘制」的日志（`willNotDraw()` 每帧可能被问多次）。 */
+    private val stripSuppressLogged = WeakHashMap<View, Boolean>()
+
+    /** 整树扫描过的帧数（扫到东西才缓存, 否则最多试 [STRIP_SCAN_MAX_FRAMES] 帧）。 */
+    private val stripScanAttempts = WeakHashMap<View, Int>()
 
     /** 已 dump 过窗口结构的窗口（每次进聊天页一行, 用来判状态栏区域到底是谁在画）。 */
     private val stackDumpedWindows = WeakHashMap<Window, Boolean>()
@@ -185,6 +201,28 @@ object ImmersiveChatUi : SwitchFeature() {
                 result = null
             }
         } ?: WeLogger.w(TAG, "PhoneWindow.setStatusBarColor hook target not found")
+
+        // ⭐ 关掉微信自绘的状态栏色块（用户在「从搜索进入的聊天页」反复看到的那一条）。
+        //
+        // 8.0.77 反编译（classes7.dex）定案：
+        //   · `DrawStatusBarFrameLayout.dispatchDraw` 开头就是闸门 ——
+        //       if (h > 0 && v && n && !willNotDraw()) { paint.setColor(i); canvas.drawRect(0,0,w,h,paint) }
+        //   · 同一类把 `setWillNotDraw(boolean)` 覆写成 **空实现**（`public final`、body 只有 return-void）
+        //     ⇒ 外界**没有任何 API** 能设那个框架标志；而 `willNotDraw()` 只是转调 `View.willNotDraw()`。
+        //   · 色块颜色 i 每帧由 `setColor(i)` 现场写入 ⇒ 之前「把 Paint alpha 压 0」的做法必然被覆盖
+        //     （v3.33 真机无效的真因）。
+        // ⇒ 唯一入口 = **钩住 `willNotDraw()`，对我们标记过的容器强制返回 true**。
+        //   只标记「聊天页所在窗口里扫到的那些」⇒ 其它页面不受影响。
+        "com.tencent.mm.ui.statusbar.DrawStatusBarFrameLayout".toClass().reflekt()
+            .firstMethodOrNull { name = "willNotDraw" }?.hookAfter {
+                val v = thisObject as? View ?: return@hookAfter
+                if (stripDrawSuppressed[v] == true) {
+                    result = true
+                    if (stripSuppressLogged.put(v, true) == null) {
+                        WeLogger.d(TAG, "strip container drawing suppressed: ${v.javaClass.simpleName}")
+                    }
+                }
+            } ?: WeLogger.w(TAG, "DrawStatusBarFrameLayout.willNotDraw hook target not found")
     }
 
     /** 悬浮标题栏读取当前状态栏偏移 (本特性未启用时返回 0, 悬浮标题栏退化为非沉浸布局)。 */
@@ -295,24 +333,40 @@ object ImmersiveChatUi : SwitchFeature() {
             }
             suppressStripPaint(wrapper)
             neutralizeWrapperStripsOnce(wrapper)
+            // 关键：钩子据此把 willNotDraw() 强制为 true ⇒ dispatchDraw 里的状态栏色块不再画。
+            stripDrawSuppressed[wrapper] = true
         }
         // 独立 ChattingUI（搜索/通知半屏等入口）下, 画色块的 wrapper **不保证**是 ChattingUILayout
-        // 的祖先 —— 整树扫一次（按类名链判, 不跨 ClassLoader 判类型）, 结果缓存; 之后每帧只复检
-        // Paint（微信自己的 setColor 会把 alpha 一并写回）。
-        val hosts = stripHostsByLayout.getOrPut(layout) {
-            // allViews 是 Sequence：一次性物化成 List，别留懒序列（否则每帧重走整树）。
-            val found = layout.rootView.allViews.filter { it.looksLikeStatusBarStripHost() }.toList()
+        // 的祖先 —— 整树扫一次（按类名链判, 不 import 宿主类/不用 is, 避免跨 ClassLoader 恒假）,
+        // 结果缓存; 之后每帧只复检 Paint（微信自己的 setColor 会把 alpha 一并写回）。
+        for (host in stripHostsFor(layout)) {
+            suppressStripPaint(host)
+            neutralizeWrapperStripsOnce(host)
+            stripDrawSuppressed[host] = true
+        }
+    }
+
+    /**
+     * 整树扫「系统栏色块容器」。
+     *
+     * ⚠️ **只在扫到东西（或已扫够 [STRIP_SCAN_MAX_FRAMES] 帧）时才缓存** —— 首帧时视图树可能还没
+     * 挂全（wrapper 由微信在内容 inflate 前后创建）, 若把「n=0」缓存下来就永远不会重扫,
+     * 等于这个兜底静默失效。返回值每帧都要用, 但扫描本身最多 [STRIP_SCAN_MAX_FRAMES] 次。
+     */
+    private fun stripHostsFor(layout: View): List<View> {
+        stripHostsByLayout[layout]?.let { return it }
+        val attempts = (stripScanAttempts[layout] ?: 0) + 1
+        stripScanAttempts[layout] = attempts
+        val found = layout.rootView.allViews.filter { it.looksLikeStatusBarStripHost() }.toList()
+        if (found.isNotEmpty() || attempts >= STRIP_SCAN_MAX_FRAMES) {
+            stripHostsByLayout[layout] = found
             WeLogger.d(
                 TAG,
                 "chat strip hosts: n=${found.size} [" +
                     found.joinToString(",") { it.javaClass.simpleName } + "]"
             )
-            found
         }
-        for (host in hosts) {
-            suppressStripPaint(host)
-            neutralizeWrapperStripsOnce(host)
-        }
+        return found
     }
 
     /** 一次性的「颜色字段」中和（策略驱动的绘制关不掉, 但颜色仍按旧语义留着, 一并压透明）。 */
@@ -346,16 +400,15 @@ object ImmersiveChatUi : SwitchFeature() {
     }
 
     /**
-     * 把「画状态栏色块」的那支 Paint 置全透明。
+     * 把「画状态栏色块」的那支 Paint 置全透明（**辅助手段**，主力是 willNotDraw 钩子）。
      *
-     * 8.0.77 实测（反编译 `DrawStatusBarFrameLayout`）：该类持有一个 public `Paint` 字段
-     * （混淆名 `g`）, 色块由它在 dispatchDraw 里画出; 子类 `EdgeToEdgeWrapperLayout` 新增
-     * `setStatusBarStrategy/getEffectiveStrategy` 后, 是否绘制改由策略决定, 父类的
-     * `setStatusBarColor(int)` 不再能关掉绘制 —— 这就是 v2.18 及此前所有「压状态栏颜色」的
-     * 修法在 8.0.77 上全部无效的原因。
+     * 8.0.77 反编译 `DrawStatusBarFrameLayout.dispatchDraw`：每次绘制前都会
+     * `iget i` + `Paint.setColor(i)` —— **颜色（含 alpha）每帧被现场写回**，所以这里的 alpha=0
+     * 只在微信停止重设颜色时才有意义（v3.33 只做了这一步 ⇒ 真机无效）。保留它是因为成本极低，
+     * 且对「不再 setColor 的版本/路径」仍能兜住。
      *
-     * 按**字段类型**找 Paint（不碰混淆名）并缓存; 每帧复查是因为微信会在自己的布局/策略刷新里
-     * `setColor()` 把 alpha 一并写回（与底条 paint 同一行为）。
+     * 按**字段类型**找 Paint（不碰混淆名）并缓存; 沿类链找（Paint 声明在父类
+     * `DrawStatusBarFrameLayout.g` 上）。
      */
     private fun suppressStripPaint(wrapper: View) {
         val fields = stripPaintFields.getOrPut(wrapper.javaClass) {
@@ -398,7 +451,13 @@ object ImmersiveChatUi : SwitchFeature() {
         var depth = 0
         while (cur != null && depth < 12) {
             chain.append(cur.javaClass.simpleName)
-            chain.append("(pt=").append(cur.paddingTop)
+            chain.append("(t=").append(cur.top)
+            chain.append(",pt=").append(cur.paddingTop)
+            // 几何三件套一起打：只打 padding 无法区分「内容被 inset 顶下去」与「色块被画出来」。
+            chain.append(",mt=").append(
+                (cur.layoutParams as? ViewGroup.MarginLayoutParams)?.topMargin ?: 0
+            )
+            chain.append(",ty=").append(cur.translationY.toInt())
             chain.append(",nd=").append(if (cur.willNotDraw()) 1 else 0)
             chain.append(",bg=").append(cur.background?.javaClass?.simpleName ?: "-")
             chain.append(") ")
