@@ -136,6 +136,18 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** 挂件隐藏后的复查延迟（毫秒） */
     private const val RECHECK_DELAY_MS = 1500L
 
+    /**
+     * 单轮连续复查的上限次数（用户 2026-09-25 日志暴露的问题）。
+     *
+     * 原实现是**无限**重排：隐藏挂件 → 1.5s 后复查 → 仍隐藏 → 再排 1.5s……
+     * 只要「只在有未读时显示」开着且屏幕上没有胶囊，就永久 1.5s 一轮。
+     * 实测后果（2026-09-25 那份 3.86MB 日志）：`pill placed` 14708 行 / 全文 20016 行
+     * = **73.5%**，且每轮都会清缓存重打一次 SQLite 查未读 —— 既是日志膨胀源也是空转开销。
+     * 复查的原意只是「刚进群那一刻未读数可能还没落库」，3 轮 × 1.5s = 4.5s 足够覆盖；
+     * 之后靠真实事件（胶囊布局变化 / 底栏占用变化）重新给一轮额度，见 recheckTries 用法。
+     */
+    private const val MAX_PILL_RECHECKS = 3
+
     // 报告弹窗与屏幕的间距（用户 2026-09-24 指定：左右各 12dp，上留 20mm、下留 15mm）
     private const val DIALOG_SIDE_DP = 12
     private const val DIALOG_TOP_MM = 20f
@@ -233,6 +245,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         lastTipSizes.clear()
         capturedUnread.clear()
         capturedFor.clear()
+        recheckTries.clear()
     }
 
     /** 底栏占用高度变了（进聊天页 / 展开面板 / 关掉悬浮）⇒ 挂件重新贴到卡片上沿。 */
@@ -240,6 +253,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         pills.forEach { (host, pill) ->
             if (pill.parent == null) return@forEach
             val tip = tipForHost[host] ?: return@forEach
+            recheckTries.remove(host)
             runCatching { syncPill(host, tip) }
                 .onFailure { WeLogger.e(TAG, "re-sync after bottom zone change failed", it) }
         }
@@ -248,6 +262,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     // ==================== 挂件同步 ====================
 
     override fun onTipChanged(host: View, tip: View) {
+        // 胶囊本身动了（显示/隐藏/改尺寸）= 真实事件 ⇒ 重新给一轮有界复查额度。
+        recheckTries.remove(host)
         runCatching { syncPill(host, tip) }
             .onFailure { WeLogger.e(TAG, "syncPill failed", it) }
     }
@@ -698,6 +714,9 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** 已排了复查的宿主，避免重复 post。 */
     private val pendingRecheck = WeakHashMap<View, Boolean>()
 
+    /** 宿主当前这一轮已经复查了几次（有界重排用）；真实事件发生时清零，重新给一轮额度。 */
+    private val recheckTries = WeakHashMap<View, Int>()
+
     /** 该会话真实未读数（带短 TTL 缓存）。 */
     private fun recentUnread(conv: String): Int {
         val now = System.currentTimeMillis()
@@ -708,9 +727,18 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         return value
     }
 
-    /** 隐藏挂件后 1.5s 复查一次（先清缓存）：刚进群那一刻未读数可能还没落库。 */
+    /** 隐藏挂件后 1.5s 复查一次（先清缓存）：刚进群那一刻未读数可能还没落库。
+     *
+     *  ⚠️ **有界**（2026-09-25 修）：原实现无限重排 ⇒ 开关打开且屏幕上没有胶囊时，
+     *  `syncPill`（隐藏分支）→ 排复查 → 复查里再 `syncPill` → 又排复查…… 永久 1.5s 一轮，
+     *  每轮打一条 `pill placed` 并重查一次 SQLite。实测把日志刷到 3.86MB（73.5% 是这行）。
+     *  现在每轮最多排 [MAX_PILL_RECHECKS] 次，真实事件（胶囊布局变化/底栏占用变化）清零额度。
+     */
     private fun schedulePillRecheck(host: View, tip: View) {
         if (pendingRecheck[host] == true) return
+        val tries = recheckTries[host] ?: 0
+        if (tries >= MAX_PILL_RECHECKS) return
+        recheckTries[host] = tries + 1
         pendingRecheck[host] = true
         host.postDelayed({
             pendingRecheck.remove(host)

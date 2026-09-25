@@ -29,6 +29,7 @@ import com.github.wekite.features.core.SwitchFeature
 import com.github.wekite.ui.utils.allViews
 import com.github.wekite.ui.utils.findViewWhich
 import com.github.wekite.utils.WeLogger
+import java.lang.reflect.Field
 import java.lang.reflect.Modifier
 import java.util.WeakHashMap
 
@@ -81,6 +82,15 @@ object ImmersiveChatUi : SwitchFeature() {
 
     /** 已把微信 EdgeToEdgeWrapperLayout 的底条颜色/状态栏色块压透明的窗口包装, 避免每帧反射。 */
     private val wrapperStripsNeutralized = WeakHashMap<View, Boolean>()
+
+    /** 每个 wrapper 类上「画状态栏色块的 Paint」字段（按类型找, 不碰混淆名）, 避免每帧重扫。 */
+    private val stripPaintFields = WeakHashMap<Class<*>, List<Field>>()
+
+    /** 每个会话页整树扫出的「系统栏色块容器」列表（一次性, 之后每帧只复检 Paint）。 */
+    private val stripHostsByLayout = WeakHashMap<View, List<View>>()
+
+    /** 已 dump 过窗口结构的窗口（每次进聊天页一行, 用来判状态栏区域到底是谁在画）。 */
+    private val stackDumpedWindows = WeakHashMap<Window, Boolean>()
 
     override fun onEnable() {
         // 聊天页 attach 时把所在窗口切成 edge-to-edge: 内容延伸到状态栏背后。
@@ -203,6 +213,7 @@ object ImmersiveChatUi : SwitchFeature() {
             layout.setPadding(layout.paddingLeft, layout.paddingTop, layout.paddingRight, keep)
         }
         suppressNavBarStrip(layout)
+        dumpChatWindowStack(layout)
         WeLogger.d(TAG, "chat edge-to-edge applied")
     }
 
@@ -278,10 +289,34 @@ object ImmersiveChatUi : SwitchFeature() {
      * 把 wrapper 的四边 padding 归零, 并把它的状态栏/导航栏色块压成透明, 保证沉浸不被打回。
      */
     private fun neutralizeChatWrapper(layout: View) {
-        val wrapper = layout.findEdgeToEdgeWrapper() ?: return
-        if (wrapper.paddingTop != 0 || wrapper.paddingBottom != 0) {
-            wrapper.setPadding(wrapper.paddingLeft, 0, wrapper.paddingRight, 0)
+        layout.findEdgeToEdgeWrapper()?.let { wrapper ->
+            if (wrapper.paddingTop != 0 || wrapper.paddingBottom != 0) {
+                wrapper.setPadding(wrapper.paddingLeft, 0, wrapper.paddingRight, 0)
+            }
+            suppressStripPaint(wrapper)
+            neutralizeWrapperStripsOnce(wrapper)
         }
+        // 独立 ChattingUI（搜索/通知半屏等入口）下, 画色块的 wrapper **不保证**是 ChattingUILayout
+        // 的祖先 —— 整树扫一次（按类名链判, 不跨 ClassLoader 判类型）, 结果缓存; 之后每帧只复检
+        // Paint（微信自己的 setColor 会把 alpha 一并写回）。
+        val hosts = stripHostsByLayout.getOrPut(layout) {
+            // allViews 是 Sequence：一次性物化成 List，别留懒序列（否则每帧重走整树）。
+            val found = layout.rootView.allViews.filter { it.looksLikeStatusBarStripHost() }.toList()
+            WeLogger.d(
+                TAG,
+                "chat strip hosts: n=${found.size} [" +
+                    found.joinToString(",") { it.javaClass.simpleName } + "]"
+            )
+            found
+        }
+        for (host in hosts) {
+            suppressStripPaint(host)
+            neutralizeWrapperStripsOnce(host)
+        }
+    }
+
+    /** 一次性的「颜色字段」中和（策略驱动的绘制关不掉, 但颜色仍按旧语义留着, 一并压透明）。 */
+    private fun neutralizeWrapperStripsOnce(wrapper: View) {
         if (wrapperStripsNeutralized[wrapper] != null) return
         runCatching {
             wrapper.javaClass.getMethod(
@@ -292,6 +327,94 @@ object ImmersiveChatUi : SwitchFeature() {
                 .invoke(wrapper, Color.TRANSPARENT)
         }
         wrapperStripsNeutralized[wrapper] = true
+        WeLogger.d(TAG, "chat wrapper strips neutralized: ${wrapper.javaClass.simpleName}")
+    }
+
+    /** 按类名链判「微信自绘系统栏色块的容器」（不 import 宿主类, 避免跨 ClassLoader 判类型恒假）。 */
+    private fun View.looksLikeStatusBarStripHost(): Boolean {
+        var cls: Class<*>? = javaClass
+        while (cls != null && cls != View::class.java) {
+            val name = cls.name
+            if (name == "com.tencent.mm.ui.statusbar.DrawStatusBarFrameLayout" ||
+                name == "com.tencent.mm.ui.widget.EdgeToEdgeWrapperLayout"
+            ) {
+                return true
+            }
+            cls = cls.superclass
+        }
+        return false
+    }
+
+    /**
+     * 把「画状态栏色块」的那支 Paint 置全透明。
+     *
+     * 8.0.77 实测（反编译 `DrawStatusBarFrameLayout`）：该类持有一个 public `Paint` 字段
+     * （混淆名 `g`）, 色块由它在 dispatchDraw 里画出; 子类 `EdgeToEdgeWrapperLayout` 新增
+     * `setStatusBarStrategy/getEffectiveStrategy` 后, 是否绘制改由策略决定, 父类的
+     * `setStatusBarColor(int)` 不再能关掉绘制 —— 这就是 v2.18 及此前所有「压状态栏颜色」的
+     * 修法在 8.0.77 上全部无效的原因。
+     *
+     * 按**字段类型**找 Paint（不碰混淆名）并缓存; 每帧复查是因为微信会在自己的布局/策略刷新里
+     * `setColor()` 把 alpha 一并写回（与底条 paint 同一行为）。
+     */
+    private fun suppressStripPaint(wrapper: View) {
+        val fields = stripPaintFields.getOrPut(wrapper.javaClass) {
+            val found = ArrayList<Field>(2)
+            var cls: Class<*>? = wrapper.javaClass
+            while (cls != null && cls != View::class.java) {
+                for (f in cls.declaredFields) {
+                    if (!Modifier.isStatic(f.modifiers) && f.type == Paint::class.java) {
+                        found.add(f)
+                    }
+                }
+                cls = cls.superclass
+            }
+            found
+        }
+        for (f in fields) {
+            runCatching {
+                f.isAccessible = true
+                val paint = f.get(wrapper) as? Paint ?: return@runCatching
+                if (paint.alpha != 0) paint.alpha = 0
+            }
+        }
+    }
+
+    /**
+     * 每次进聊天页 dump 一次窗口结构（一行）——用来判定「状态栏区域那条东西」到底是谁在画。
+     *
+     * 背景：搜索等入口进入的聊天窗口, 模块内部状态全部健康（`chat edge-to-edge applied` 有、
+     * `statusBarOffset=140` 有）, 但用户仍看到一条非沉浸的顶部区域 ⇒ 画它的一定是模块之外的
+     * 视图。这一行把从 ChattingUILayout 到窗口根的每一层（类名 / paddingTop / willNotDraw /
+     * 背景类型）打出来, 外加窗口根的直接子（含 `statusBarBackground`）, 一次装机即可定案。
+     */
+    private fun dumpChatWindowStack(layout: View) {
+        val activity = layout.context.activityOrNull() ?: return
+        val window = activity.window ?: return
+        if (stackDumpedWindows[window] == true) return
+        stackDumpedWindows[window] = true
+        val chain = StringBuilder()
+        var cur: View? = layout
+        var depth = 0
+        while (cur != null && depth < 12) {
+            chain.append(cur.javaClass.simpleName)
+            chain.append("(pt=").append(cur.paddingTop)
+            chain.append(",nd=").append(if (cur.willNotDraw()) 1 else 0)
+            chain.append(",bg=").append(cur.background?.javaClass?.simpleName ?: "-")
+            chain.append(") ")
+            cur = cur.parent as? View
+            depth++
+        }
+        WeLogger.d(TAG, "chat window stack: $chain")
+        val root = layout.rootView as? ViewGroup ?: return
+        val kids = StringBuilder()
+        for (i in 0 until root.childCount) {
+            val c = root.getChildAt(i)
+            kids.append(c.javaClass.simpleName)
+            kids.append("#0x").append(Integer.toHexString(c.id))
+            kids.append("(vis=").append(c.visibility).append(",pt=").append(c.paddingTop).append(") ")
+        }
+        WeLogger.d(TAG, "chat window decor children: $kids")
     }
 
     private fun View.findEdgeToEdgeWrapper(): View? {
