@@ -32,6 +32,7 @@ import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.findActivityOwningView
 import com.github.wekite.utils.android.getTopMostActivity
 import java.lang.reflect.Field
+import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 import java.util.WeakHashMap
 
@@ -78,6 +79,19 @@ object ImmersiveChatUi : SwitchFeature() {
 
     /** 只记一次「把微信设回的 decorFits=true 再压回 false」的日志。 */
     private val decorFitsForcedLogged = WeakHashMap<Window, Boolean>()
+
+    /** 只记一次「把会话页 wrapper 的状态栏策略锁成 ALWAYS_HIDE」的日志。 */
+    private val strategyForcedLogged = WeakHashMap<View, Boolean>()
+
+    /** 只记一次「清掉会话页容器链上非 0 的顶部 padding」的日志（附类名与清掉前的值）。 */
+    private val shellPaddingClearedLogged = WeakHashMap<View, Boolean>()
+
+    /** 「状态栏策略 = ALWAYS_HIDE」的强制入口（setter/getter/常量），按类缓存。 */
+    private class StatusBarStrategyForce(val setter: Method, val getter: Method?, val hide: Any)
+
+    /** 解析结果缓存（未识别到用 [NO_STRATEGY_FORCE] 占位，避免每帧重扫 declaredMethods）。 */
+    private val strategyForces = WeakHashMap<Class<*>, Any>()
+    private val NO_STRATEGY_FORCE = Any()
 
     /** ConvBox 页面激活的窗口, 期间拦截微信控制器对状态栏颜色的每帧重设。 */
     private val convBoxWindows = WeakHashMap<Window, Boolean>()
@@ -274,6 +288,39 @@ object ImmersiveChatUi : SwitchFeature() {
             WeLogger.w(TAG, "Window.setDecorFitsSystemWindows hook target not found")
         }
 
+        // ⭐⭐ 会话页 wrapper 的状态栏策略必须恒为 ALWAYS_HIDE。
+        //
+        // 8.0.77 反编译 `EdgeToEdgeWrapperLayout.applyStatusBarHeight()`（混淆名 V）里的算式：
+        //     targetPaddingTop = (statusBarStrategy === ALWAYS_AVOID) ? mStatusBarHeight : 0
+        //     this.setPadding(targetPaddingLeft, targetPaddingTop, targetPaddingRight, targetPaddingBottom)
+        // ⇒ 微信**自己**按策略给会话页内容加状态栏 padding（v3.35 真机日志实测
+        //   `EdgeToEdgeWrapperLayout.pt=140` + 会话页布局的父 `RelativeLayout.pt=171`），
+        //   顶部于是露出窗口底色（浅色主题 #EDEDED）—— 那才是用户看到的那条带，
+        //   不是状态栏颜色（Android 16 早已忽略 setStatusBarColor）。
+        // 在 pre-draw 里清零是「事后擦」，微信下一次 applyStatusBarHeight 又会加回来；
+        // 把策略锁成 ALWAYS_HIDE 才是从源头让它算出 0。
+        runCatching {
+            "com.tencent.mm.ui.widget.EdgeToEdgeWrapperLayout".toClass().reflekt()
+                .firstMethodOrNull {
+                    name = "setStatusBarStrategy"
+                    parameterCount(1)
+                }
+        }.getOrNull()?.hookBefore {
+            val wrapper = thisObject as? View ?: return@hookBefore
+            // 只对「聊天页所在窗口里识别到的 wrapper」生效 ⇒ 其它页面不受影响。
+            if (stripDrawSuppressed[wrapper] != true) return@hookBefore
+            val force = immersiveStrategyOf(wrapper.javaClass) ?: return@hookBefore
+            if (args[0] !== force.hide) {
+                args[0] = force.hide
+                if (strategyForcedLogged.put(wrapper, true) == null) {
+                    WeLogger.d(
+                        TAG,
+                        "chat wrapper strategy forced ALWAYS_HIDE: ${wrapper.javaClass.simpleName}"
+                    )
+                }
+            }
+        } ?: WeLogger.w(TAG, "EdgeToEdgeWrapperLayout.setStatusBarStrategy hook target not found")
+
         // ⭐ 关掉微信自绘的状态栏色块（用户在「从搜索进入的聊天页」反复看到的那一条）。
         //
         // 8.0.77 反编译（classes7.dex）定案：
@@ -450,14 +497,36 @@ object ImmersiveChatUi : SwitchFeature() {
 
     /**
      * 微信自己的 EdgeToEdgeWrapperLayout 会按 statusBarStrategy 重新给整个聊天内容加状态栏
-     * padding, 半屏切全屏时还会从 ALWAYS_HIDE 切回 ALWAYS_AVOID 再刷一次 padding。这里每帧
-     * 把 wrapper 的四边 padding 归零, 并把它的状态栏/导航栏色块压成透明, 保证沉浸不被打回。
+     * padding, 半屏切全屏时还会从 ALWAYS_HIDE 切回 ALWAYS_AVOID 再刷一次 padding。这里每帧:
+     * ① 把**整条会话页容器链**（从会话页布局向上到窗口根为止，不含窗口根）的顶部 padding 清零
+     *    —— 微信 8.0.77 实测把 inset 加在这些容器上（`EdgeToEdgeWrapperLayout.pt=140` +
+     *    会话页布局的父 `RelativeLayout.pt=171`），只清会话页布局自己那层是漏的；
+     * ② 把 wrapper 的状态栏策略锁回 ALWAYS_HIDE —— 让它自己算出 targetPaddingTop=0（根治重加）；
+     * ③ 把它画的状态栏/导航栏色块中和掉, 并标记给 willNotDraw 钩子。
      */
     private fun neutralizeChatWrapper(layout: View) {
+        // ① 容器链顶部 padding 归零（窗口根不吃 inset，不能动）。
+        var cursor: View? = layout
+        while (cursor != null) {
+            val parent = cursor.parent as? View ?: break
+            if (parent.parent !is View) break // parent 是窗口根 (DecorView)
+            if (parent.paddingTop != 0) {
+                val before = parent.paddingTop
+                parent.setPadding(parent.paddingLeft, 0, parent.paddingRight, parent.paddingBottom)
+                if (shellPaddingClearedLogged.put(parent, true) == null) {
+                    WeLogger.d(
+                        TAG,
+                        "chat shell top padding cleared: ${parent.javaClass.simpleName} pt=$before"
+                    )
+                }
+            }
+            cursor = parent
+        }
         layout.findEdgeToEdgeWrapper()?.let { wrapper ->
             if (wrapper.paddingTop != 0 || wrapper.paddingBottom != 0) {
                 wrapper.setPadding(wrapper.paddingLeft, 0, wrapper.paddingRight, 0)
             }
+            forceImmersiveStrategy(wrapper)
             suppressStripPaint(wrapper)
             neutralizeWrapperStripsOnce(wrapper)
             // 关键：钩子据此把 willNotDraw() 强制为 true ⇒ dispatchDraw 里的状态栏色块不再画。
@@ -470,6 +539,58 @@ object ImmersiveChatUi : SwitchFeature() {
             suppressStripPaint(host)
             neutralizeWrapperStripsOnce(host)
             stripDrawSuppressed[host] = true
+        }
+    }
+
+    /**
+     * 会话页 wrapper 的「状态栏策略 = ALWAYS_HIDE」的反射入口（按类缓存）。
+     *
+     * 8.0.77 反编译 `EdgeToEdgeWrapperLayout.applyStatusBarHeight()`（混淆名 `V`）：
+     * ```
+     *   statusBarStrategy = this.D                     // mr5/r 枚举
+     *   targetPaddingTop  = (D === mr5/r.e /*ALWAYS_AVOID*/) ? mStatusBarHeight : 0
+     *   this.setPadding(targetPaddingLeft, targetPaddingTop, targetPaddingRight, targetPaddingBottom)
+     * ```
+     * ⇒ 策略是 ALWAYS_AVOID 时微信自己给会话页内容加状态栏 padding（顶部露出窗口底色）。
+     *
+     * ⚠️ **不硬编码混淆名**：从 `setStatusBarStrategy` 的**参数类型**取出那个枚举
+     * （该枚举只有 ALWAYS_HIDE / ALWAYS_AVOID 两个常量，可与恰好 5 个常量的导航策略枚举区分，
+     * 见 `mr5/q` vs `mr5/r`），再按**枚举常量名**取 `ALWAYS_HIDE`（常量名在 DEX 里是明文）。
+     */
+    private fun immersiveStrategyOf(cls: Class<*>): StatusBarStrategyForce? {
+        val cached = strategyForces[cls]
+        if (cached != null) return cached as? StatusBarStrategyForce
+        val resolved = runCatching {
+            var c: Class<*>? = cls
+            var setter: Method? = null
+            while (c != null && setter == null) {
+                setter = c.declaredMethods.firstOrNull {
+                    it.name == "setStatusBarStrategy" && it.parameterCount == 1
+                }
+                c = c.superclass
+            }
+            val setterMethod = setter ?: return@runCatching null
+            val enumClass = setterMethod.parameterTypes.firstOrNull() ?: return@runCatching null
+            val hide = enumClass.enumConstants
+                ?.firstOrNull { (it as? Enum<*>)?.name == "ALWAYS_HIDE" }
+                ?: return@runCatching null
+            setterMethod.isAccessible = true
+            val getter = cls.methods.firstOrNull { it.name == "getStatusBarStrategy" }
+            getter?.isAccessible = true
+            StatusBarStrategyForce(setterMethod, getter, hide)
+        }.getOrNull() ?: NO_STRATEGY_FORCE
+        strategyForces[cls] = resolved
+        return resolved as? StatusBarStrategyForce
+    }
+
+    /** 每帧把 wrapper 的状态栏策略锁回 ALWAYS_HIDE（已是 HIDE 时一次反射读都不做额外开销最大也就一次 getter）。 */
+    private fun forceImmersiveStrategy(wrapper: View) {
+        val force = immersiveStrategyOf(wrapper.javaClass) ?: return
+        val current = force.getter?.let { runCatching { it.invoke(wrapper) }.getOrNull() }
+        if (current === force.hide) return
+        runCatching { force.setter.invoke(wrapper, force.hide) }
+        if (strategyForcedLogged.put(wrapper, true) == null) {
+            WeLogger.d(TAG, "chat wrapper strategy forced ALWAYS_HIDE: ${wrapper.javaClass.simpleName}")
         }
     }
 
