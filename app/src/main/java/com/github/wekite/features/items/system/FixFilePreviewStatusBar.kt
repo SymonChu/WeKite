@@ -2,6 +2,7 @@ package com.github.wekite.features.items.system
 
 import android.app.Activity
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Rect
 import android.content.Intent
 import android.os.Build
@@ -252,66 +253,156 @@ object FixFilePreviewStatusBar : SwitchFeature() {
     /**
      * 把补出来的那条 140px 带涂成预览页顶栏自己的颜色（v3.40）。
      *
-     * 为什么取样而不是写死颜色：顶栏色随文档类型/主题变（实测 PDF 版浅色、表格版深色）。
-     * 取样窗口坐标 = 紧贴补丁下沿、**最左边缘**的窄列 —— 这一列没有图标/文字，众数色就是顶栏底色；
-     * 取众数而非均值，是为了不被抗锯齿的边缘像素带偏。占比 < 25% 视为取样位置不对，宁可不涂。
+     * ## ⚠️ v3.40 装机实测：PixelCopy 取样拿到 **#00000000**（全透明），还被当成有效颜色涂了上去
+     * 日志：`strip painted: … color=#00000000 pad=140` ×7（每打开一次预览一行）⇒ 屏幕上毫无变化。
+     * 两条教训：**空/全透明采样必须判失败**（我漏了这一步）；**失败结果绝不能缓存**（缓存成 0 后
+     * 永不重试）。⇒ v3.41 改为**确定性取样**：不依赖窗口表面/合成器，直接把 `content` 从 y=pad 起的
+     * 那一条**软件渲染**进 Bitmap（`content.draw(Canvas)` 画出来的就是 App 自己画的东西），
+     * 在 `[pad+16, pad+112)`（顶栏内部）取**不透明像素**的众数色；占比 <30% 或没有不透明像素 ⇒ 判失败。
+     * PixelCopy 降为退路，且同样要过「不透明 + 占比」双判定。
      */
-    private fun paintStrip(activity: Activity, decor: View, content: ViewGroup, pad: Int, proc: String) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return    // PixelCopy 从 O 起
+    private fun paintStrip(
+        activity: Activity,
+        decor: View,
+        content: ViewGroup,
+        pad: Int,
+        proc: String,
+        attempt: Int = 0,
+    ) {
         if (stripPainted.containsKey(decor)) return
-        val window = activity.window ?: return
-        val rect = Rect(0, pad + 8, 8, pad + 120)
-        var attempts = 0
-        fun request() {
-            if (stripPainted.containsKey(decor)) return
-            val bitmap = Bitmap.createBitmap(rect.width(), rect.height(), Bitmap.Config.ARGB_8888)
+        // ① 确定性：把 content 顶部那一条自己画一遍再取众数色（不依赖窗口表面/合成器）
+        val render = renderBandStat(content, pad)
+        if (render.color != null) {
+            commitStrip(activity, decor, content, render, "render", proc, pad)
+            return
+        }
+        // ② 退路：从窗口表面取样（同样要过「不透明 + 占比」双判定）
+        val window = activity.window
+        if (window != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && content.width > 0) {
+            val rect = Rect(0, pad + 16, content.width, pad + 112)
             runCatching {
+                val bitmap = Bitmap.createBitmap(rect.width(), rect.height(), Bitmap.Config.ARGB_8888)
                 PixelCopy.request(window, rect, bitmap, { result ->
-                    val color = if (result == PixelCopy.SUCCESS) dominantColor(bitmap) else null
-                    if (color == null) {
-                        if (++attempts <= 2) {
-                            content.postDelayed({ request() }, 120)
-                        } else {
-                            WeLogger.d(
-                                TAG,
-                                "file preview status bar strip sample skipped: proc=$proc " +
-                                    "act=${activity.javaClass.name} result=$result"
-                            )
-                        }
+                    val stat = if (result == PixelCopy.SUCCESS) bandStatOf(bitmap) else BandStat(null, 0, 0)
+                    bitmap.recycle()
+                    if (stat.color != null) {
+                        commitStrip(activity, decor, content, stat, "pcopy", proc, pad)
                     } else {
-                        stripPainted[decor] = color
-                        content.setBackgroundColor(color)
-                        WeLogger.d(
-                            TAG,
-                            "file preview status bar strip painted: proc=$proc " +
-                                "act=${activity.javaClass.name} color=#${String.format("%08X", color)} pad=$pad"
+                        retryStrip(
+                            activity, decor, content, pad, proc, attempt,
+                            "render[${render.describe()}] pcopy[${stat.describe()}] result=$result"
                         )
                     }
                 }, Handler(Looper.getMainLooper()))
             }.onFailure {
-                WeLogger.d(
-                    TAG,
-                    "file preview status bar strip sample threw: proc=$proc ${it.javaClass.simpleName}"
+                retryStrip(
+                    activity, decor, content, pad, proc, attempt,
+                    "render[${render.describe()}] pcopy threw ${it.javaClass.simpleName}"
                 )
             }
+            return
         }
-        content.postDelayed({ request() }, 48)
+        retryStrip(activity, decor, content, pad, proc, attempt, "render[${render.describe()}] no-window")
     }
 
-    /** 位图里出现次数最多的颜色（窄列取样 ⇒ 众数即底色）；底色占比 < 25% 时返回 null（不猜）。 */
-    private fun dominantColor(bitmap: Bitmap): Int? {
-        val w = bitmap.width
-        val h = bitmap.height
-        if (w <= 0 || h <= 0) return null
-        val counts = HashMap<Int, Int>()
-        for (y in 0 until h) {
-            for (x in 0 until w) {
-                val pixel = bitmap.getPixel(x, y)
-                counts[pixel] = (counts[pixel] ?: 0) + 1
-            }
+    /** 取样失败时的重试/放弃（**绝不缓存失败结果**，否则永远不再尝试）。 */
+    private fun retryStrip(
+        activity: Activity,
+        decor: View,
+        content: ViewGroup,
+        pad: Int,
+        proc: String,
+        attempt: Int,
+        detail: String,
+    ) {
+        if (attempt >= 3) {
+            WeLogger.d(
+                TAG,
+                "file preview status bar strip paint skipped (no opaque band color): proc=$proc " +
+                    "act=${activity.javaClass.name} $detail"
+            )
+            return
         }
-        val entry = counts.maxByOrNull { it.value } ?: return null
-        return if (entry.value * 100 / (w * h) >= 25) entry.key else null
+        content.postDelayed({ paintStrip(activity, decor, content, pad, proc, attempt + 1) }, 220)
+    }
+
+    private fun commitStrip(
+        activity: Activity,
+        decor: View,
+        content: ViewGroup,
+        stat: BandStat,
+        src: String,
+        proc: String,
+        pad: Int,
+    ) {
+        val color = stat.color ?: return
+        stripPainted[decor] = color
+        content.setBackgroundColor(color)
+        WeLogger.d(
+            TAG,
+            "file preview status bar strip painted: proc=$proc act=${activity.javaClass.name} " +
+                "color=#${String.format("%08X", color)} src=$src pad=$pad (${stat.describe()})"
+        )
+    }
+
+    /** 把 `content` 从 y=pad 起的那一条软件渲染出来做统计（= App 自己画的东西，不依赖合成器）。 */
+    private fun renderBandStat(content: ViewGroup, pad: Int): BandStat {
+        val width = content.width
+        val height = content.height
+        if (width <= 0 || height <= pad + 36) return BandStat(null, 0, 0)
+        val top = pad + 16                                  // 再往下 16px：避开圆角/阴影过渡带
+        val bandHeight = minOf(96, height - top)
+        if (bandHeight <= 8) return BandStat(null, 0, 0)
+        val bitmap = Bitmap.createBitmap(width, bandHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.translate(0f, -top.toFloat())
+        content.draw(canvas)
+        val stat = bandStatOf(bitmap)
+        bitmap.recycle()
+        return stat
+    }
+
+    /** 一条取样带的统计：众数色（**不透明且占比 ≥30%** 才算数）+ 不透明占比 + 众数占比。 */
+    private class BandStat(val color: Int?, val opacity: Int, val share: Int) {
+        fun describe(): String {
+            val top = color?.let { "#" + String.format("%08X", it) } ?: "-"
+            return "opacity=$opacity% top=$top share=$share%"
+        }
+    }
+
+    /**
+     * 位图取样统计。
+     *
+     * ⚠️ **空采样（全透明）必须判失败** —— v3.40 把 `#00000000` 当有效颜色涂上去，等于没涂
+     * （用户 2026-09-27 05:01 日志报 `strip painted: … color=#00000000` ×7，屏幕上毫无变化）。
+     * 众数占比 <30% 也算失败：宁可退回 v3.39 的样子，也不涂一个错颜色。
+     */
+    private fun bandStatOf(bitmap: Bitmap): BandStat {
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width <= 0 || height <= 0) return BandStat(null, 0, 0)
+        val counts = HashMap<Int, Int>()
+        var sampled = 0
+        var opaque = 0
+        var y = 0
+        while (y < height) {
+            var x = 0
+            while (x < width) {
+                sampled++
+                val pixel = bitmap.getPixel(x, y)
+                if (pixel ushr 24 == 0xFF) {
+                    counts[pixel] = (counts[pixel] ?: 0) + 1
+                    opaque++
+                }
+                x += 2
+            }
+            y += 2
+        }
+        val entry = counts.maxByOrNull { it.value }
+        val share = if (entry != null && opaque > 0) entry.value * 100 / opaque else 0
+        val opacity = if (sampled > 0) opaque * 100 / sampled else 0
+        val color = if (entry != null && share >= 30) entry.key else null
+        return BandStat(color, opacity, share)
     }
 
     /** 把命中窗口里微信自己的状态栏色块容器的策略从 ALWAYS_HIDE 改成 ALWAYS_AVOID（让微信自己补 padding）。 */
