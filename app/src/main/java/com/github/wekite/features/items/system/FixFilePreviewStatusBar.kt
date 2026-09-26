@@ -27,10 +27,25 @@ import java.util.WeakHashMap
  * ## ⚠️ v3.37 装机实测（用户日志 `wekite-2026-09-26.log`）：预览页**根本没出现在主进程**
  * 开关确实开了（`enabling 系统与隐私/修复文件预览状态栏遮挡`），钩子也确实工作
  * （主进程里 `LauncherUI`、模块设置页都打出了 probe 行），**但整份日志里没有任何一条属于预览页的
- * probe 行** ⇒ 预览页的窗口不在主进程。旁证：用户三次点开预览的时间点
- * （19:11:14 / 19:12:11 / 19:13:28）与日志里 `:appbrand0/:appbrand1`（type=4）**三次进程冷启动
- * 逐一对应** ⇒ 预览是**小程序/liteapp**，跑在 appbrand 进程里，而 v3.37 的特性只加载主进程。
- * ⇒ 本版第一件事：**在所有进程都加载**；第二件事：把每个 Activity 的窗口形态完整打出来，一次装机定案。
+ * probe 行** ⇒ 预览页的窗口不在主进程（v3.37 只加载主进程，这个判断是错的）。
+ *
+ * ## ✅ v3.38 装机实测（全进程加载后一次照出来）：预览页 = `MiniQBReaderUI`，跑在 `:tools` 进程
+ * ```
+ * file preview probe: proc=com.tencent.mm:tools act=com.tencent.mm.pluginsdk.ui.tools.MiniQBReaderUI
+ *   comp=com.tencent.mm.pluginsdk.ui.tools.MiniQBReaderUI
+ *   extra=[file_name=…F.pdf,file_path=/data/user/0/com.tencent.mm/MicroMsg/…,file_ext=pdf]
+ *   insetTop=140 childTop=0 overlap=140 child=FrostedContentView kids=1 contentPt=0 decorPt=0
+ *   flags=0x81810100 decorKids=[LinearLayout(id=0xffffffff,pt=0,vis=0)] strips=[] loader=PathClassLoader
+ * ```
+ * · 真身 = `com.tencent.mm.pluginsdk.ui.tools.MiniQBReaderUI`（微信用 QQ 浏览器内核读文档的那套），
+ *   **在 `:tools` 进程**（`PROC_TOOLS`，日志 `loading in process name=com.tencent.mm:tools, type=8`）；
+ * · `insetTop=140 childTop=0` ⇒ 内容确实从屏幕最顶端画，被状态栏盖住；用户 19:54 截图逐像素吻合
+ *   （返回箭头/标题/`…` 都在 y≈20–65，与状态栏时间/信号同带，`…` 被电量图标盖住）；
+ * · `strips=[]` ⇒ 这个窗口里**没有**微信自绘状态栏的容器（`EdgeToEdgeWrapperLayout` 等），
+ *   所以 v3.38 那条「把策略从 ALWAYS_HIDE 改 ALWAYS_AVOID」的兜底在这里没有作用对象，
+ *   **只能自己补 padding**。
+ * ⇒ v3.39 就是把 `miniqb` / `qbreader` 加进判据关键词（这条链上的名字变不了：
+ *   组件名由宿主 manifest 决定，实现由 QQ 浏览器内核那套读文档的组件承载）。
  *
  * ## 修法（v3.38 = 取证版 + 两条有界修复）
  * 1. 记：每个进程里每个 Activity 类一条 `file preview probe:` 行（进程名 / 组件 / extras /
@@ -52,6 +67,11 @@ object FixFilePreviewStatusBar : SwitchFeature() {
 
     /** 判「这是文件预览页」的关键词（小写比对：类名 / 组件名 / action / data / extras）。 */
     private val PREVIEW_KEYWORDS = listOf(
+        // ⭐ v3.38 实测命中的真身：com.tencent.mm.pluginsdk.ui.tools.MiniQBReaderUI（:tools 进程）
+        "miniqb",
+        "qbreader",
+        // 兜底：文件类 Intent 一定会带这些 extra（`file_ext` 比 `file_path` 更专一，后者分享/保存流程也用）
+        "file_ext",
         "fileexplorer",
         "filepreview",
         "filebrowser",
