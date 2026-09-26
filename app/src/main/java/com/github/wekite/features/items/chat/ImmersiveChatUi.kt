@@ -29,6 +29,8 @@ import com.github.wekite.features.core.SwitchFeature
 import com.github.wekite.ui.utils.allViews
 import com.github.wekite.ui.utils.findViewWhich
 import com.github.wekite.utils.WeLogger
+import com.github.wekite.utils.android.findActivityOwningView
+import com.github.wekite.utils.android.getTopMostActivity
 import java.lang.reflect.Field
 import java.lang.reflect.Modifier
 import java.util.WeakHashMap
@@ -49,6 +51,33 @@ object ImmersiveChatUi : SwitchFeature() {
 
     /** 每个窗口是否已应用聊天 edge-to-edge (只应用一次, 不恢复)。 */
     private val edgeToEdgeApplied = WeakHashMap<Window, Boolean>()
+
+    /**
+     * 已确认承载会话页的窗口 —— 它们的 `setStatusBarColor` 由钩子直接拦掉。
+     *
+     * 微信（控制器/EdgeToEdgeWrapperLayout）会在我们把状态栏压透明之后**每帧再写回页面底色**
+     * （浅色主题 = #EDEDED）。对「搜索入口的独立 ChattingUI 窗口」这一写回没有被挡住，
+     * 于是状态栏区露出那条实色带（用户看到的「多了一条原生状态栏」）。
+     *
+     * ⚠️ 标记必须随会话页 attach/detach **武装与撤销**：会话列表/「我」/朋友圈与聊天页可能
+     * 共用同一个窗口（主窗口），若标记不撤销，那些页面也再设不了自己的状态栏颜色。
+     */
+    private val chatWindows = WeakHashMap<Window, Boolean>()
+
+    /** 每个会话页布局解析到的承载窗口（detach 时按它撤销 [chatWindows] 标记）。 */
+    private val hostingWindows = WeakHashMap<View, Window>()
+
+    /** 只记一次「拦下微信对会话页窗口的状态栏颜色写入」的日志。 */
+    private val statusBarSuppressLogged = WeakHashMap<Window, Boolean>()
+
+    /** 只记一次「会话页窗口的状态栏颜色不是透明」的日志（诊断：说明还有别的写入源）。 */
+    private val statusBarReassertLogged = WeakHashMap<Window, Boolean>()
+
+    /** 只记一次「该窗口的归属解析」日志（会话页被复用/换 Activity 后会针对新窗口再打一行）。 */
+    private val resolveLoggedWindows = WeakHashMap<Window, Boolean>()
+
+    /** 只记一次「把微信设回的 decorFits=true 再压回 false」的日志。 */
+    private val decorFitsForcedLogged = WeakHashMap<Window, Boolean>()
 
     /** ConvBox 页面激活的窗口, 期间拦截微信控制器对状态栏颜色的每帧重设。 */
     private val convBoxWindows = WeakHashMap<Window, Boolean>()
@@ -122,7 +151,12 @@ object ImmersiveChatUi : SwitchFeature() {
                     trackStatusBarOffset(layout)
                 }
 
-                override fun onViewDetachedFromWindow(v: View) {}
+                override fun onViewDetachedFromWindow(v: View) {
+                    // 离开会话页 ⇒ 撤销「会话页窗口」拦截标记，把状态栏颜色的控制权还给微信：
+                    // 会话列表 /「我」/ 朋友圈可能与聊天页共用同一个窗口（主窗口），标记不撤销
+                    // 它们就再也设不了自己的状态栏颜色（修 A 变 B）。
+                    hostingWindows.remove(v)?.let { chatWindows.remove(it) }
+                }
             })
         } ?: WeLogger.w(TAG, "ChattingUILayout constructor hook target not found")
 
@@ -197,10 +231,48 @@ object ImmersiveChatUi : SwitchFeature() {
             name = "setStatusBarColor"
         }?.hookBefore {
             val window = thisObject as? Window ?: return@hookBefore
-            if (convBoxWindows[window] == true && !settingConvBoxColor) {
+            if (chatWindows[window] == true) {
+                // 会话页窗口：任何来源的写入都拦掉，状态栏保持透明。否则搜索入口那个独立
+                // ChattingUI 窗口会被写回 #EDEDED（页面底色），顶部露出实色条。
+                result = null
+                if (statusBarSuppressLogged.put(window, true) == null) {
+                    WeLogger.d(TAG, "chat status bar color write suppressed: win=${System.identityHashCode(window)}")
+                }
+            } else if (convBoxWindows[window] == true && !settingConvBoxColor) {
                 result = null
             }
         } ?: WeLogger.w(TAG, "PhoneWindow.setStatusBarColor hook target not found")
+
+        // 会话页窗口恒不 fit system windows：微信（EdgeToEdgeWrapperLayout 按策略刷新布局时）
+        // 可能把 decorFits 再设回 true —— 一旦设回，内容就被 inset 到状态栏下方，顶部露出
+        // 窗口底色（浅色主题 #EDEDED），用户看到的就是「多了一条原生状态栏」。
+        // 这里只改参数（不改走原方法）：原方法仍需执行以刷新 DecorView 的 inset 行为。
+        // 方法可能声明在 PhoneWindow，也可能只在基类 android.view.Window 上，两个都试。
+        var decorFitsHookInstalled = false
+        for (className in listOf("com.android.internal.policy.PhoneWindow", "android.view.Window")) {
+            val method = runCatching {
+                className.toClass().reflekt().firstMethodOrNull {
+                    name = "setDecorFitsSystemWindows"
+                    parameterCount(1)
+                }
+            }.getOrNull() ?: continue
+            method.hookBefore {
+                val window = thisObject as? Window ?: return@hookBefore
+                if (chatWindows[window] == true && args[0] == true) {
+                    args[0] = false
+                    if (decorFitsForcedLogged.put(window, true) == null) {
+                        WeLogger.d(
+                            TAG,
+                            "chat decorFits re-forced to false: win=${System.identityHashCode(window)}"
+                        )
+                    }
+                }
+            }
+            decorFitsHookInstalled = true
+        }
+        if (!decorFitsHookInstalled) {
+            WeLogger.w(TAG, "Window.setDecorFitsSystemWindows hook target not found")
+        }
 
         // ⭐ 关掉微信自绘的状态栏色块（用户在「从搜索进入的聊天页」反复看到的那一条）。
         //
@@ -233,14 +305,27 @@ object ImmersiveChatUi : SwitchFeature() {
     /**
      * 聊天页进入时把所在窗口切成 edge-to-edge: 内容延伸到状态栏背后, 消息可以滚到
      * 状态栏下方。每个窗口只应用一次, 不做恢复。
+     *
+     * ⚠️ 窗口用 [hostWindowOf] 按**视图树归属**解析, 不信 `layout.context` —— 见那里的注释。
+     * 每帧 pre-draw 会再调一次本函数（幂等）：会话页被微信复用到新窗口时当场补应用。
      */
     private fun applyChatEdgeToEdge(layout: View) {
-        val activity = layout.context.activityOrNull() ?: return
-        val window = activity.window ?: return
-        if (edgeToEdgeApplied[window] == true) return
+        val window = hostWindowOf(layout, logResolve = true) ?: return
+        if (edgeToEdgeApplied[window] == true) {
+            // 幂等：窗口已经切过 edge-to-edge。但「会话页窗口」拦截标记可能已被摘掉
+            // （离开会话页时撤销、再进来要重新武装）⇒ 补写一次透明再武装。
+            if (chatWindows[window] != true) {
+                runCatching { window.statusBarColor = Color.TRANSPARENT }
+                chatWindows[window] = true
+            }
+            return
+        }
         edgeToEdgeApplied[window] = true
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        // 先自己压一次透明, 再把窗口登记进 chatWindows —— 登记后 PhoneWindow.setStatusBarColor
+        // 钩子会把**所有**写入（包括我们自己的这句）拦掉, 所以顺序不能反。
         runCatching { window.statusBarColor = Color.TRANSPARENT }
+        chatWindows[window] = true
         zeroChatLayoutTopPadding(layout)
         // 运行中才开启本特性时, 会话页可能已经吃下了导航栏 padding 并画上了底条,
         // 当场把导航栏那部分 padding 去掉, 并把底条画笔调成透明; 之后的每次
@@ -252,12 +337,45 @@ object ImmersiveChatUi : SwitchFeature() {
         }
         suppressNavBarStrip(layout)
         dumpChatWindowStack(layout)
-        WeLogger.d(TAG, "chat edge-to-edge applied")
+        WeLogger.d(
+            TAG,
+            "chat edge-to-edge applied: win=${System.identityHashCode(window)} sbColor=" +
+                (runCatching { window.statusBarColor }.getOrNull()?.let { Integer.toHexString(it) } ?: "?")
+        )
+    }
+
+    /**
+     * 解析**真正承载该会话页**的窗口。
+     *
+     * ⚠️ 不能只信 `layout.context`：微信用 `MutableContextWrapper` 的子类（`hq5/f`）复用会话页布局，
+     * `baseContext` 可能仍指向别的 Activity（搜索页/主界面）。按 context 解析时，我们会把
+     * 「压透明状态栏 / 切 decorFits」应用到**别的窗口**上，而屏幕上那个（搜索入口的独立
+     * ChattingUI 窗口）状态栏颜色一直是微信设的页面底色 ⇒ 顶部露出实色带，用户看到
+     * 「多了一条原生状态栏」。
+     *
+     * 判据顺序：① 视图树归属（窗口 token → Activity）② 栈顶 Activity ③ 最后才退到 context。
+     */
+    private fun hostWindowOf(layout: View, logResolve: Boolean): Window? {
+        val ctxWindow = layout.context.activityOrNull()?.window
+        val treeWindow = findActivityOwningView(layout.rootView)?.window
+        val window = treeWindow ?: getTopMostActivity()?.window ?: ctxWindow ?: return null
+        hostingWindows[layout] = window
+        if (logResolve && resolveLoggedWindows.put(window, true) == null) {
+            WeLogger.d(
+                TAG,
+                "chat window resolve: win=${System.identityHashCode(window)} " +
+                    "tree=${treeWindow?.let { System.identityHashCode(it) }} " +
+                    "ctx=${ctxWindow?.let { System.identityHashCode(it) }} " +
+                    "ctxIsTree=${treeWindow != null && treeWindow === ctxWindow} " +
+                    "decorPt=${layout.rootView.paddingTop} sdk=${Build.VERSION.SDK_INT}"
+            )
+        }
+        return window
     }
 
     private fun isChatEdgeToEdge(layout: View): Boolean {
-        val activity = layout.context.activityOrNull() ?: return false
-        return edgeToEdgeApplied[activity.window] == true
+        val window = hostWindowOf(layout, logResolve = false) ?: return false
+        return edgeToEdgeApplied[window] == true
     }
 
     /** 聊天页当前应补偿的状态栏偏移: edge-to-edge 生效时消息列表从屏幕顶开始, 卡片/间距要加回 inset。 */
@@ -293,15 +411,21 @@ object ImmersiveChatUi : SwitchFeature() {
         }
     }
 
-    /** 微信会在聊天页里自己设置状态栏颜色, 会盖住背后的消息; 聊天页在台上时压回透明。 */
+    /**
+     * 诊断：会话页窗口的状态栏颜色应当保持透明（写入门已由 PhoneWindow.setStatusBarColor
+     * 钩子对 [chatWindows] 关死）。这里只**发现**颜色又变成非透明（说明还有别的写入源，
+     * 例如 WindowInsetsController/宿主直接改 LayoutParams），不在这里重写。
+     */
     private fun reassertEdgeToEdgeStatusBar(layout: View) {
-        val activity = layout.context.activityOrNull() ?: return
-        val window = activity.window
+        val window = hostWindowOf(layout, logResolve = false) ?: return
         if (edgeToEdgeApplied[window] != true) return
-        runCatching {
-            if (window.statusBarColor != Color.TRANSPARENT) {
-                window.statusBarColor = Color.TRANSPARENT
-            }
+        val current = runCatching { window.statusBarColor }.getOrNull() ?: return
+        if (current != Color.TRANSPARENT && statusBarReassertLogged.put(window, true) == null) {
+            WeLogger.d(
+                TAG,
+                "chat status bar color off-transparent: win=${System.identityHashCode(window)} " +
+                    "color=${Integer.toHexString(current)}"
+            )
         }
     }
 
@@ -312,6 +436,9 @@ object ImmersiveChatUi : SwitchFeature() {
             runCatching { layout.viewTreeObserver.removeOnPreDrawListener(listener) }
         }
         val listener = ViewTreeObserver.OnPreDrawListener {
+            // 会话页可能被微信复用到另一个窗口（context 指向的 Activity 会变）⇒ 每帧
+            // 复核「承载窗口是否已切 edge-to-edge」，没切就当场补上（幂等，已应用则直接返回）。
+            applyChatEdgeToEdge(layout)
             statusBarOffsets[layout] = currentStatusBarOffset(layout)
             reassertEdgeToEdgeStatusBar(layout)
             neutralizeChatWrapper(layout)
@@ -442,8 +569,7 @@ object ImmersiveChatUi : SwitchFeature() {
      * 背景类型）打出来, 外加窗口根的直接子（含 `statusBarBackground`）, 一次装机即可定案。
      */
     private fun dumpChatWindowStack(layout: View) {
-        val activity = layout.context.activityOrNull() ?: return
-        val window = activity.window ?: return
+        val window = hostWindowOf(layout, logResolve = false) ?: return
         if (stackDumpedWindows[window] == true) return
         stackDumpedWindows[window] = true
         val chain = StringBuilder()
@@ -474,6 +600,17 @@ object ImmersiveChatUi : SwitchFeature() {
             kids.append("(vis=").append(c.visibility).append(",pt=").append(c.paddingTop).append(") ")
         }
         WeLogger.d(TAG, "chat window decor children: $kids")
+        // 窗口本身的可观测状态：fits（看 decor 的 paddingTop）、状态栏颜色、SDK。
+        // 判「状态栏那条是谁画的」时这三项比视图树更直接：decorPt=0 + sbColor=透明 ⇒
+        // 该窗口已是 edge-to-edge，顶部再有不透明条就只能是宿主自绘或系统栏。
+        val decor = layout.rootView
+        WeLogger.d(
+            TAG,
+            "chat window state: win=${System.identityHashCode(window)} decorPt=${decor.paddingTop} " +
+                "decorVis=${decor.visibility} sbColor=" +
+                (runCatching { window.statusBarColor }.getOrNull()?.let { Integer.toHexString(it) } ?: "?") +
+                " sdk=${Build.VERSION.SDK_INT}"
+        )
     }
 
     private fun View.findEdgeToEdgeWrapper(): View? {
