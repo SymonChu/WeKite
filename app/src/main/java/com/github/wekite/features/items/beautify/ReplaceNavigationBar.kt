@@ -1046,8 +1046,10 @@ object ReplaceNavigationBar : ClickableFeature(), IResolveDex {
                             overCount[c] = n
                             if (n >= 2) {
                                 shouldHide = true
-                                // 诊断: 记录触发时真实几何, 手感不对时据此调阈值(别再靠猜)
-                                WeLogger.i(
+                                // 诊断: 记录触发时真实几何, 手感不对时据此调阈值(别再靠猜)。
+                                // D 级：一天能打 500+ 条（每次下拉手势一条），默认不落盘；
+                                // 要调手感/阈值时先开「详细日志」再复现。
+                                WeLogger.d(
                                     TAG,
                                     "pull-down hide trigger: top=$top base=$base shift=${top - base} thr=$shiftThresholdPx screenH=$screenH panelLike=${panelLike.size}/${candidates.size}"
                                 )

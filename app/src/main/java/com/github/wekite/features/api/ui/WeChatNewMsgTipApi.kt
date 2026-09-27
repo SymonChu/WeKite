@@ -145,8 +145,9 @@ object WeChatNewMsgTipApi : ApiFeature() {
         tipCandidates[content] = tips
         // ⭐ 一次性 dump：把两支候选的 id / gravity / 边距 / 初始可见性全打出来 ——
         // 「哪一支才是微信真正在显示的那枚」靠这条日志钉死，不用反复装机试。
-        WeLogger.i(TAG, "tip candidates: " + tips.joinToString(" || ") { describe(it) })
-        WeLogger.i(TAG, "content children: ${describeChildren(content)}")
+        // D 级：每次进会话都打（一次两条），默认不落盘，排障时开「详细日志」看。
+        WeLogger.d(TAG, "tip candidates: " + tips.joinToString(" || ") { describe(it) })
+        WeLogger.d(TAG, "content children: ${describeChildren(content)}")
         for (tip in tips) {
             if (observed.add(tip)) {
                 tip.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->

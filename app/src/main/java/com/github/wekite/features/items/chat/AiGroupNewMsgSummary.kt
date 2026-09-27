@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -148,6 +149,15 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
      */
     private const val MAX_PILL_RECHECKS = 3
 
+    /**
+     * `pill placed` 日志的最小间隔（毫秒）：定位**状态**没变时按这个频率封顶。
+     *
+     * 实测（2026-09-27 那份 1.76MB / 9617 行日志）：`pill placed` 一只手占 5504 行
+     * （55%），其中 4690 条与前一条同毫秒 —— 底栏 padding 与挂件重排互相追着跑时
+     * 每个宿主每帧一条。它是 D 级（默认不落盘），但开着「详细日志」排障时也一样读不动。
+     */
+    private const val PLACEMENT_LOG_MIN_INTERVAL_MS = 1000L
+
     // 报告弹窗与屏幕的间距（用户 2026-09-24 指定：左右各 12dp，上留 20mm、下留 15mm）
     private const val DIALOG_SIDE_DP = 12
     private const val DIALOG_TOP_MM = 20f
@@ -207,6 +217,29 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** 该会话页上次见到的胶囊**实测宽高**（px）：胶囊 gone 时靠它保持「同形状」 */
     private val lastTipSizes = WeakHashMap<View, Pair<Int, Int>>()
 
+    /** 该会话页上次打 `pill placed` 的时刻（见 [logPlacement]，只为限频） */
+    private val placementLogAt = WeakHashMap<View, Long>()
+
+    /** 该会话页上次打 `pill placed` 时的定位状态签名（见 [logPlacement]） */
+    private val placementLogState = WeakHashMap<View, String>()
+
+    /**
+     * 打一条挂件定位日志（D 级 ⇒ 默认不落盘，开「详细日志」才写文件）。
+     *
+     * **状态变了立即打，其余限频**：`state` 传定位状态签名（side|tipVisible|conv）。
+     * 实测同一毫秒能连打十几条（[PLACEMENT_LOG_MIN_INTERVAL_MS] 有出处），限频后
+     * 排障仍能看到每次真实定位变化，只是看不到每帧的 zone 抖动（那部分看
+     * `FloatingChatFooter: chat list bottom padding` 更直观）。
+     */
+    private fun logPlacement(host: View, state: String, msg: String) {
+        val now = SystemClock.elapsedRealtime()
+        val changed = placementLogState.put(host, state) != state
+        val last = placementLogAt[host] ?: 0L
+        if (!changed && now - last < PLACEMENT_LOG_MIN_INTERVAL_MS) return
+        placementLogAt[host] = now
+        WeLogger.d(TAG, msg)
+    }
+
     /**
      * conv -> **进入会话那一刻**看到的未读数（用户 2026-09-25 要求：点挂件＝分析那批新消息）。
      * ⚠️ 为什么不能在点击时才查：微信在你进会话/浏览后会把未读清零（08:31 日志实录：进群 unread=33 →
@@ -246,6 +279,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         capturedUnread.clear()
         capturedFor.clear()
         recheckTries.clear()
+        placementLogAt.clear()
+        placementLogState.clear()
     }
 
     /** 底栏占用高度变了（进聊天页 / 展开面板 / 关掉悬浮）⇒ 挂件重新贴到卡片上沿。 */
@@ -331,9 +366,13 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         //    「有未读但胶囊没显示也显示」的兜底 —— 那是锚点只认下支、那支恒不可见时的权宜之计）。
         val unread = if (onlyWhenUnread) recentUnread(conv) else 0
         val hasNew = tipVisible
-        WeLogger.i(
-            TAG,
-            "pill placed: side=${if (centered) "center" else if (useTop) "top" else "bottom"} " +
+        val side = if (centered) "center" else if (useTop) "top" else "bottom"
+        // ⚠️ 限频（见 logPlacement）：底栏占用高度变化 / 胶囊布局变化都会触发 syncPill，
+        //    同一毫秒能连打十几条。定位**状态**变了立即打，否则每宿主最多 1 秒一条。
+        logPlacement(
+            host,
+            "$side|$tipVisible|$conv",
+            "pill placed: side=$side " +
                     "anchorId=0x${Integer.toHexString(anchor.id)} " +
                     "zone=$zone anchorEdge=$anchorEdge gap=$gap tipVisible=$tipVisible " +
                     "tipW=${anchor.width} tipH=${anchor.height} pillW=${pillW ?: -1} pillH=$pillH " +
@@ -441,7 +480,8 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         pills[host] = pill
         pill.addOnLayoutChangeListener { v, l, t, r, b, _, _, _, _ ->
             val lp = v.layoutParams as? FrameLayout.LayoutParams
-            WeLogger.i(
+            // D 级：挂件每次布局都会回调（跟着底栏 padding 抖动时会连打），别落盘
+            WeLogger.d(
                 TAG,
                 "AI pill laid out: ${r - l}x${b - t} visibility=${v.visibility} gravity=${lp?.gravity} " +
                         "topMargin=${lp?.topMargin} margin=${lp?.bottomMargin}"

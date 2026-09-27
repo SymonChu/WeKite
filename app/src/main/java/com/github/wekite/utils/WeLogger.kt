@@ -2,6 +2,7 @@ package com.github.wekite.utils
 
 import android.util.Log
 import com.github.wekite.BuildConfig
+import com.github.wekite.constants.Preferences
 import com.github.wekite.preferences.WePrefs
 import com.github.wekite.utils.fs.KnownPaths
 import com.github.wekite.utils.fs.createDirsSafe
@@ -26,6 +27,15 @@ object WeLogger {
     private const val RESERVED_IMPORTANT_CAPACITY = 128
     private const val BATCH_SIZE = 64
     private const val FLUSH_TIMEOUT_MILLIS = 3000L
+
+    /** 「详细日志」开关的读取缓存窗口（毫秒）——避免每条 D 都去读一次 MMKV。 */
+    private const val VERBOSE_CHECK_INTERVAL_MILLIS = 1000L
+
+    @Volatile
+    private var verboseCheckedAt = 0L
+
+    @Volatile
+    private var verboseCheckedValue = false
 
     private val timestampFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS")
     private val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
@@ -329,7 +339,36 @@ object WeLogger {
         writer?.runCatching { flush() }
     }
 
+    /**
+     * D/V 级记录**默认不落盘**（logcat 照常输出），只有设置页「详细日志」
+     * ([Preferences.verboseLog]) 打开时才写文件。
+     *
+     * 为什么必须有这道闸（2026-09-27 实测）：定位/几何类的诊断日志全在每帧的 pre-draw、
+     * 布局回调里，某次进聊天页连打 5456 条 `pill placed` + 300 多条 padding/边距，
+     * 12 小时 9617 行 / 1.76 MB（对照健康基线 < 500 行 / 2.5h）。D 级闸掉后同一份日志
+     * 预计 ~600 行。
+     *
+     * ⚠️ **不能直接读 `Preferences.verboseLog`**：WeLogger 在 MMKV 初始化之前就被调用
+     * （ZygiskEntry / UnifiedEntryPoint 早于 `NativeLoader.init`），裸读会走
+     * `WePrefs.default` 的 lazy 初始化 → 未初始化崩溃 → 模块整个不生效（v1.5 的真实事故，
+     * 见技能 module-runtime-pitfalls.md ①）。必须 runCatching 包住、失败按「没开」处理。
+     * ⚠️ release 构建里 `Log.d` 也可能被 R8 去掉，但 `enqueue` 是输出到**文件**的主路径，
+     * 与 logcat 无关，别把它误判成多余的。
+     */
+    private fun verboseFileLogging(): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - verboseCheckedAt < VERBOSE_CHECK_INTERVAL_MILLIS) return verboseCheckedValue
+        val value = runCatching { Preferences.verboseLog }.getOrDefault(false)
+        verboseCheckedValue = value
+        verboseCheckedAt = now
+        return value
+    }
+
     private fun enqueue(record: WriteTask.Record) {
+        // 高频诊断日志的闸门：D/V 只在「详细日志」打开时落盘
+        if (record.level == "D" || record.level == "V") {
+            if (!verboseFileLogging()) return
+        }
         val isImportant = record.level == "E" || record.level == "W" || record.level == "A"
         val hasRoom = isImportant || writeQueue.remainingCapacity() > RESERVED_IMPORTANT_CAPACITY
         if (!hasRoom || !writeQueue.offer(record)) {

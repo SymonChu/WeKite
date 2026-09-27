@@ -148,7 +148,8 @@ object SkipRewardedAds : SwitchFeature(), IResolveDex {
                 method.hookBefore {
                     val path = args.getOrNull(0) as? String ?: return@hookBefore
                     if (isSdkCandidate(path)) {
-                        WeLogger.i(TAG, "H0 blocked path=$path (force text inject)")
+                        // D 级：每次 WebView 读 SDK 文件都命中（实测一天 ~160 次），别落盘
+                        WeLogger.d(TAG, "H0 blocked path=$path (force text inject)")
                         result = null
                     }
                 }
@@ -163,7 +164,8 @@ object SkipRewardedAds : SwitchFeature(), IResolveDex {
             val patched = patchMbSdk(path, script)
             if (patched != script) {
                 args[6] = patched
-                WeLogger.i(
+                // D 级：每次注入都打，一天 ~160 次
+                WeLogger.d(
                     TAG,
                     "inject SDK path=$path size=${script.length} " +
                         "delta=${patched.length - script.length}"
@@ -184,7 +186,16 @@ object SkipRewardedAds : SwitchFeature(), IResolveDex {
                 adEventSessionUntil.set(now + SESSION_WINDOW_MS)
             }
             if (looksAd || inSession) {
-                WeLogger.i(TAG, "bridge event type=$type data=${data.take(500)}")
+                // ⚠️ 广告会话窗口（SESSION_WINDOW_MS）里**所有** bridge 事件都会走到这里 ——
+                //    小程序一开传感器就刷爆：实测 2026-09-26 那天 onCompassChange 1403 条 +
+                //    onAccelerometerChange 759 条 = 全文 9%。所以只有**判据命中广告特征**
+                //    （mbAd_* / AD_EVENT_MARKERS）的事件才留在 I 级（默认落盘），
+                //    仅仅「在广告窗口内」的其它事件降 D（开「详细日志」才写文件）。
+                if (looksAd) {
+                    WeLogger.i(TAG, "bridge event type=$type data=${data.take(500)}")
+                } else {
+                    WeLogger.d(TAG, "bridge event type=$type data=${data.take(500)}")
+                }
             }
         }
     }
@@ -240,7 +251,7 @@ object SkipRewardedAds : SwitchFeature(), IResolveDex {
             return unsupported(path, content, "首帧注入点 emitter.emit($ox);break;")
         }
 
-        WeLogger.i(
+        WeLogger.d(
             TAG,
             "sdk patch symbols path=$path ox=$ox reward=$reward close=$close " +
                 "req=${req ?: "N/A"} sites=$sites"
