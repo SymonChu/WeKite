@@ -63,8 +63,9 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
     override fun onDisable() {
         WeChatMessageViewApi.removeListener(this)
         ChatAiEngine.stop()
-        SuggestionPanel.detach()
-        ChatHeaderToggle.remove()
+        AnalysisDialog.close()
+        ChatHeaderStatus.remove()
+        ChatUi.unbind()
     }
 
     override fun onClick(context: ComponentActivity) = showSettingsDialog(context)
@@ -79,16 +80,8 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
         if (activity != null && lifecycleInstalled.compareAndSet(false, true)) {
             ChatPageLifecycle.install(activity)
         }
-        if (WeCurrentConversationApi.value.isBlank()) return
-        val msgInfo = try {
-            WeChatMessageViewApi.getMsgInfoFromParam(param)
-        } catch (_: Exception) {
-            return
-        }
         // 标识改由「消息表里的系统提示行」承担（防撤回同款机制），此处只负责挂面板
-        if (msgInfo.isSend == 0 && activity != null) {
-            SuggestionPanel.attach(activity, WeCurrentConversationApi.value)
-        }
+        // 面板已改为弹窗（见 AnalysisDialog）；此处只负责首次安装聊天页生命周期
     }
 
     // ==================== 设置弹窗 ====================
@@ -96,7 +89,7 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
     private fun showSettingsDialog(activity: ComponentActivity, explicitTalker: String? = null) {
         // 从聊天页进入 ⇒ 用该聊天；从模块设置页进入 ⇒ 用最近跟踪到的会话
         val targetTalker = explicitTalker?.takeIf { it.isNotBlank() }
-            ?: ChatSessionWatcher.currentTalker()
+            ?: ChatUi.talker
             ?: WeCurrentConversationApi.value
         showComposeDialog(activity, directlyDismissable = false) {
             // 弹窗限高 + 底部留白：条目多时下方不再被屏幕裁掉（用户反馈过）

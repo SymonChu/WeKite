@@ -38,6 +38,11 @@ object WeContactPrefsScreenApi : ApiFeature() {
 
     private val providers = CopyOnWriteArrayList<IContactInfoProvider>()
 
+    /** 每页已插入的 Preference（key → 实例），供 [refresh] 原地更新副标题。 */
+    private val storedPrefs = java.util.Collections.synchronizedMap(
+        java.util.WeakHashMap<Activity, MutableMap<String, Any>>()
+    )
+
     fun addProvider(provider: IContactInfoProvider) {
         providers.addIfAbsent(provider)
     }
@@ -79,6 +84,7 @@ object WeContactPrefsScreenApi : ApiFeature() {
                                     val adapter = adapterInstance as BaseAdapter
                                     val pos = item.position.coerceIn(0, adapter.count)
                                     addPreferenceMethod.invoke(adapter, pref, pos)
+                                    storedPrefs.getOrPut(thisObject as Activity) { mutableMapOf() }[item.key] = pref
                                 }
                             } catch (ex: Exception) {
                                 WeLogger.e(
@@ -99,6 +105,7 @@ object WeContactPrefsScreenApi : ApiFeature() {
                         try {
                             if (provider.onItemClick(thisObject as Activity, key)) {
                                 result = true
+                                refresh(thisObject as Activity)   // 状态写副标题 ⇒ 点按后原地刷新
                                 return@hookBefore
                             }
                         } catch (ex: Exception) {
@@ -111,6 +118,23 @@ object WeContactPrefsScreenApi : ApiFeature() {
                     }
                 }
             }
+        }
+    }
+
+    /** 重新读取各 provider 的内容，更新已插入条目的标题/副标题并刷新列表。 */
+    fun refresh(activity: Activity) {
+        val prefs = storedPrefs[activity] ?: return
+        try {
+            for (provider in providers) {
+                for (item in provider.getContactInfoItem(activity)) {
+                    val pref = prefs[item.key] ?: continue
+                    setTitleMethod.invoke(pref, item.title)
+                    item.summary?.let { setSummaryMethod.invoke(pref, it) }
+                }
+            }
+            (adapterField.get(activity) as? BaseAdapter)?.notifyDataSetChanged()
+        } catch (ex: Exception) {
+            WeLogger.e(TAG, "refresh failed", ex)
         }
     }
 

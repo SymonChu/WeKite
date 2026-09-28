@@ -140,7 +140,8 @@ object ChatAiEngine {
 
     private suspend fun runAnalyze(talker: String, msgId: Long, auto: Boolean) {
         states[talker] = State.Working
-        SuggestionPanel.refresh(talker)
+        AnalysisDialog.update(talker)
+        AnalysisDialog.show(talker)
         try {
             slots.withPermit { runPipeline(talker, msgId, auto) }
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -148,7 +149,7 @@ object ChatAiEngine {
         } catch (e: Throwable) {
             WeLogger.e(TAG, "pipeline failed talker=$talker", e)
             states[talker] = State.Failed(e.message ?: "分析失败")
-            SuggestionPanel.refresh(talker)
+            AnalysisDialog.update(talker)
         } finally {
             running.remove(talker)
         }
@@ -161,7 +162,7 @@ object ChatAiEngine {
         if (latest == null) {
             WeLogger.i(TAG, "no readable incoming message talker=$talker")
             states[talker] = State.Failed("没有可分析的文本消息")
-            SuggestionPanel.refresh(talker)
+            AnalysisDialog.update(talker)
             return
         }
         // 目标消息按 msgId 从上下文里排除（否则同一条既当「目标」又当「前文」）
@@ -183,7 +184,7 @@ object ChatAiEngine {
         // 2) LLM 解读 + 建议回复
         if (!AiChatConfig.llmConfigured) {
             states[talker] = State.Failed("请先在设置里配置 LLM 接口（分析：$emotionLine）")
-            SuggestionPanel.refresh(talker)
+            AnalysisDialog.update(talker)
             return
         }
         val knowledge = ReplyKnowledge.load(isGroup)
@@ -234,7 +235,7 @@ object ChatAiEngine {
         }
 
         states[talker] = State.Done(Result(latest.first, emotionLine, parsed.reading, parsed.replies, autoSent, note))
-        SuggestionPanel.refresh(talker)
+        AnalysisDialog.update(talker)
         WeLogger.i(
             TAG,
             "done talker=$talker emotion=$emotionLine replies=${parsed.replies.size} autoSent=$autoSent"
