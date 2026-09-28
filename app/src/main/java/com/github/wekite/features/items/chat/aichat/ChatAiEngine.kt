@@ -63,7 +63,6 @@ object ChatAiEngine {
     private val running = ConcurrentHashMap<String, Job>()
     private val lastReplyAt = ConcurrentHashMap<String, Long>()
     private val dailyCount = ConcurrentHashMap<String, MutableMap<String, Int>>()
-    private val awaitingMark = ConcurrentHashMap<String, List<String>>()
 
     private val insertListener = WeDatabaseListenerApi.IInsertListener { table, values ->
         if (table != TABLE_MESSAGE) return@IInsertListener
@@ -84,6 +83,9 @@ object ChatAiEngine {
 
     fun stateOf(talker: String): State? = states[talker]
 
+    /** 当前是否值得展示面板（有结果或正在跑）。 */
+    fun hasPanelContent(talker: String): Boolean = states[talker] != null
+
     fun clear(talker: String) {
         states.remove(talker)
         running.remove(talker)?.cancel()
@@ -98,11 +100,8 @@ object ChatAiEngine {
 
     private fun onIncoming(values: ContentValues) {
         val talker = values.getAsString("talker") ?: return
-        if (values.getAsInteger("isSend") == 1) {
-            // 自己发出的消息：命中等待队列就打「AI」标记（自动回复发的）
-            maybeMarkOutgoing(talker, values)
-            return
-        }
+        // 自己发出的消息不触发分析（自动回复的打标在发送时就已登记，见 AutoReplyMarker）
+        if (values.getAsInteger("isSend") == 1) return
         val type = values.getAsInteger("type") ?: return
         if (type != TYPE_TEXT && type != TYPE_VOICE) return
 
@@ -189,21 +188,20 @@ object ChatAiEngine {
             val base = AiChatConfig.autoReplyDelaySec.coerceIn(3, 60) * 1000L
             delay(base + (0L..2000L).random())
             if (AiChatStore.isAutoReplyOn(talker)) {
-                awaitingMark[talker] = parsed.replies
                 var sent = 0
                 for (r in parsed.replies) {
                     if (sent > 0) delay(1200L + (0L..1300L).random())
                     val ok = WeMessageApi.sendText(talker, r)
                     WeLogger.i(TAG, "AUDIT auto send talker=$talker ok=$ok text=${r.take(40)}")
                     if (!ok) break
+                    // 发送成功即登记「这条是我自动发的」：徽标按「聊天+正文」哈希比对
+                    AutoReplyMarker.mark(talker, r)
                     sent++
                 }
                 if (sent > 0) {
                     lastReplyAt[talker] = System.currentTimeMillis()
                     bumpDaily(talker)
                     autoSent = true
-                } else {
-                    awaitingMark.remove(talker)
                 }
             }
         }
@@ -257,19 +255,6 @@ object ChatAiEngine {
 
     private fun todayKey(): String = SimpleDateFormat("yyyyMMdd", Locale.US).format(Calendar.getInstance().time)
 
-    // ==================== 标注「AI」徽标 ====================
-
-    private fun maybeMarkOutgoing(talker: String, values: ContentValues) {
-        val pending = awaitingMark[talker] ?: return
-        val content = values.getAsString("content").orEmpty()
-        if (pending.none { it == content || content.endsWith(it) }) return
-        val svrId = values.getAsLong("msgSvrId") ?: 0L
-        if (svrId > 0) {
-            AutoReplyMarker.mark(svrId)
-            awaitingMark.remove(talker)
-            WeLogger.i(TAG, "marked auto-sent message svrId=$svrId talker=$talker")
-        }
-    }
 
     // ==================== 上下文辅助 ====================
 

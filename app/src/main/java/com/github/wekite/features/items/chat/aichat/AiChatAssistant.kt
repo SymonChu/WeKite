@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -23,8 +25,11 @@ import com.github.wekite.features.api.ui.WeCurrentConversationApi
 import com.github.wekite.features.core.ClickableFeature
 import com.github.wekite.features.core.Feature
 import com.github.wekite.features.items.chat.aichat.net.AiChatHttp
+import com.github.wekite.features.items.chat.aichat.protocol.ChoiceProtocol
+import com.github.wekite.features.items.chat.aichat.protocol.IntentQuestions
 import com.github.wekite.ui.content.AlertDialogContent
 import com.github.wekite.ui.content.Button
+import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
@@ -37,12 +42,11 @@ import kotlinx.coroutines.withContext
 /**
  * AI 聊天助手。
  *
- * 工作方式（v3.44 起）：
+ * 工作方式：
  * - 聊天右上角「AI」开关打开 ⇒ 该聊天的**新消息自动分析**，结果与建议回复显示在**输入框上方**面板
- * - 全自动回复：右上角长按「AI」→ 自动回复（双闸：设置页总闸 + 每聊天开关）
- * - 不再需要长按消息取菜单（v3.43 的「翻译意图 / 帮我回」已移除）
+ * - 全自动回复：设置页全局总闸 + 每聊天开关（双闸）；发出的消息带「AI」小徽标（仅本机可见）
  *
- * 配置在 WeKite 设置 → 聊天 → AI 聊天助手（点条目进配置弹窗）。
+ * 配置：WeKite 设置 → 聊天 → AI 聊天助手（点条目进配置弹窗）。
  */
 @Feature(name = "AI 聊天助手", categories = ["聊天"], description = "新消息自动分析并给出建议回复，可全自动回复")
 object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewListener {
@@ -69,22 +73,29 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
         (activity as? ComponentActivity)?.let { showSettingsDialog(it) }
     }
 
-    /** 借消息 View 创建回调拿到宿主 Activity 与聊天页，用于安装页面监听 + 维护面板。 */
     override fun onCreateView(param: com.github.wekite.utils.HookParam, view: View) {
         if (!isEnabled) return
-        (view.context as? android.app.Activity)?.let { activity ->
-            if (lifecycleInstalled.compareAndSet(false, true)) ChatPageLifecycle.install(activity)
+        val activity = view.context as? android.app.Activity
+        if (activity != null && lifecycleInstalled.compareAndSet(false, true)) {
+            ChatPageLifecycle.install(activity)
         }
-        val talker = WeCurrentConversationApi.value
-        if (talker.isBlank()) return
-        // 自动回复发出的消息 → 气泡旁「AI」小徽标（仅本机可见）
+        if (WeCurrentConversationApi.value.isBlank()) return
         val msgInfo = try {
             WeChatMessageViewApi.getMsgInfoFromParam(param)
         } catch (_: Exception) {
             return
         }
-        if (msgInfo.isSend == 1 && AutoReplyMarker.isMarked(msgInfo.serverId)) {
-            AiBadge.attach(view)
+        // 全自动回复发出的消息 → 气泡旁「AI」小徽标（按「聊天 + 正文」哈希比对，不依赖 msgSvrId）
+        if (msgInfo.isSend == 1) {
+            val body = msgInfo.actualContent.trim()
+            if (body.isNotEmpty() && AutoReplyMarker.isMarked(msgInfo.talker, body)) {
+                AiBadge.attach(view)
+            } else {
+                AiBadge.detach(view)
+            }
+        } else if (activity != null) {
+            // 借「有消息在渲染」这个时机尽力挂面板（此时 ChatFooter 通常已就绪）
+            SuggestionPanel.attach(activity, WeCurrentConversationApi.value)
         }
     }
 
@@ -92,6 +103,10 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
 
     private fun showSettingsDialog(activity: ComponentActivity) {
         showComposeDialog(activity, directlyDismissable = false) {
+            // 弹窗限高 + 底部留白：条目多时下方不再被屏幕裁掉（用户反馈过）
+            val dm = activity.resources.displayMetrics
+            val h = (dm.heightPixels * 0.66f).toInt()
+            window.setLayout((dm.widthPixels * 0.92f).toInt(), h)
             AlertDialogContent(
                 title = { Text("AI 聊天助手") },
                 text = { SettingsContent() },
@@ -100,177 +115,136 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
         }
     }
 
-    /** 供设置弹窗内的「测试连接」使用。 */
+    /** 供「测试连接」按钮使用。 */
     suspend fun testConnection(kind: String): String = withContext(Dispatchers.IO) {
         try {
-            when (kind) {
-                "jev" -> {
-                    check(AiChatConfig.jevConfigured) { "请先填 JEV 地址与 Key" }
-                    val state = com.github.wekite.features.items.chat.aichat.protocol.ChoiceProtocol.contextBlock(
-                        "你好", "对方", System.currentTimeMillis(), emptyList()
-                    )
-                    val body = AiChatHttp.jevExchange(
-                        com.github.wekite.features.items.chat.aichat.protocol.IntentQuestions
-                            .payload(state, AiChatConfig.jevModel)
-                    )
-                    val r = com.github.wekite.features.items.chat.aichat.protocol.IntentQuestions.parse(body)
-                    "✅ JEV 可用：${com.github.wekite.features.items.chat.aichat.protocol.IntentQuestions.formatOutcome(r)}"
-                }
-                else -> {
-                    check(AiChatConfig.llmConfigured) { "请先填 LLM 地址、Key 与模型" }
-                    val body = AiChatHttp.llmExchange(
-                        listOf("system" to "你是连通性测试助手。", "user" to "只回复两个字：可用"),
-                        temperature = 0.0,
-                    )
-                    val text = org.json.JSONObject(body).optJSONArray("choices")
-                        ?.optJSONObject(0)?.optJSONObject("message")?.optString("content").orEmpty()
-                    "✅ LLM 可用：${text.take(40)}"
-                }
+            if (kind == "jev") {
+                check(AiChatConfig.jevConfigured) { "请先填 JEV 地址与 Key" }
+                val state = ChoiceProtocol.contextBlock("你好", "对方", System.currentTimeMillis(), emptyList())
+                val body = AiChatHttp.jevExchange(IntentQuestions.payload(state, AiChatConfig.jevModel))
+                "✅ JEV 可用：${IntentQuestions.formatOutcome(IntentQuestions.parse(body))}"
+            } else {
+                check(AiChatConfig.llmConfigured) { "请先填 LLM 地址、Key 与模型" }
+                val body = AiChatHttp.llmExchange(
+                    listOf("system" to "你是连通性测试助手。", "user" to "只回复两个字：可用"),
+                    temperature = 0.0,
+                )
+                val content = org.json.JSONObject(body).optJSONArray("choices")
+                    ?.optJSONObject(0)?.optJSONObject("message")?.optString("content").orEmpty()
+                "✅ LLM 可用：${content.take(40)}"
             }
         } catch (e: Exception) {
             WeLogger.e(TAG, "test connection failed ($kind)", e)
-            "❌ 失败：${e.message?.take(200)}"
+            "❌ 失败：${e.message?.take(160)}"
         }
     }
 
-    private fun toast(activity: android.app.Activity, text: String) =
-        android.widget.Toast.makeText(activity, text, android.widget.Toast.LENGTH_SHORT).show()
-
     @Composable
     private fun SettingsContent() {
-        Column {
-            val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
-            var jevKey by remember { mutableStateOf(AiChatConfig.jevApiKey) }
-            var llmEndpoint by remember { mutableStateOf(AiChatConfig.llmEndpoint) }
-            var llmKey by remember { mutableStateOf(AiChatConfig.llmApiKey) }
-            var llmModel by remember { mutableStateOf(AiChatConfig.llmModel) }
-            var testResult by remember { mutableStateOf("") }
-            val talker = WeCurrentConversationApi.value
-            // 粘贴的 Key 常带换行（Authorization 报 0x0a）⇒ 一律清洗空白
-            fun cleanKey(v: String) = v.filterNot { it.isWhitespace() }
-            fun test(kind: String) {
-                testResult = "测试中…（用地址：${if (kind == "jev") AiChatConfig.jevUrl else AiChatConfig.llmUrl}）"
-                scope.launch { testResult = testConnection(kind) }
-            }
+        val talker = WeCurrentConversationApi.value
+        // 粘贴的 Key 常带换行（Authorization 报 0x0a）⇒ 一律清洗空白
+        fun cleanKey(v: String) = v.filterNot { it.isWhitespace() }
 
+        var llmEndpoint by remember { mutableStateOf(AiChatConfig.llmEndpoint) }
+        var llmKey by remember { mutableStateOf(AiChatConfig.llmApiKey) }
+        var llmModel by remember { mutableStateOf(AiChatConfig.llmModel) }
+        var jevKey by remember { mutableStateOf(AiChatConfig.jevApiKey) }
+        var testResult by remember { mutableStateOf("") }
+
+        fun test(kind: String) {
+            testResult = "测试中…（${if (kind == "jev") AiChatConfig.jevUrl else AiChatConfig.llmUrl}）"
+            scope.launch { testResult = testConnection(kind) }
+        }
+
+        DefaultColumn(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+            scrollable = true,
+        ) {
+            // ---- 主线路：LLM（分析 + 建议回复都用它）----
+            Text("对话模型（必填）", style = MaterialTheme.typography.titleSmall)
             OutlinedTextField(
                 value = llmEndpoint,
                 onValueChange = { llmEndpoint = it; AiChatConfig.llmEndpoint = it.trim() },
-                label = { Text("LLM 接口地址（可只填 base，如 https://openrouter.ai/api/v1）") },
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                label = { Text("接口地址（可只填 base 网址）") },
+                modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
             OutlinedTextField(
                 value = llmKey,
                 onValueChange = { llmKey = it; AiChatConfig.llmApiKey = cleanKey(it) },
-                label = { Text("LLM API Key") },
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                label = { Text("API Key") },
+                modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
             OutlinedTextField(
                 value = llmModel,
                 onValueChange = { llmModel = it; AiChatConfig.llmModel = it.trim() },
-                label = { Text("LLM 模型 ID（如 deepseek-v4-flash）") },
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                label = { Text("模型 ID") },
+                modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
-            Row(modifier = Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton({ test("llm") }) { Text("测试 LLM") }
-                androidx.compose.material3.Text(
-                    "  实际请求：${AiChatConfig.llmUrl}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton({ test("llm") }) { Text("测试") }
+                Text("实际请求：${AiChatConfig.llmUrl}", style = MaterialTheme.typography.bodySmall)
             }
 
+            // ---- 情绪线路：JEV（可选）----
+            Text("情绪概率（可选，OpenRouter Key 即可）", style = MaterialTheme.typography.titleSmall)
             OutlinedTextField(
                 value = jevKey,
                 onValueChange = { jevKey = it; AiChatConfig.jevApiKey = cleanKey(it) },
-                label = { Text("JEV / OpenRouter Key（情绪概率线路，可留空）") },
-                modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                label = { Text("OpenRouter / JEV Key") },
+                modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
-            Row(modifier = Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton({ test("jev") }) { Text("测试 JEV") }
-                androidx.compose.material3.Text(
-                    "  实际请求：${AiChatConfig.jevUrl}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton({ test("jev") }) { Text("测试") }
+                Text("实际请求：${AiChatConfig.jevUrl}", style = MaterialTheme.typography.bodySmall)
             }
 
             if (testResult.isNotBlank()) {
-                androidx.compose.material3.Text(
-                    testResult,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
+                Text(testResult, style = MaterialTheme.typography.bodySmall)
             }
 
-            androidx.compose.material3.Text(
-                "自动回复总开关（还需在聊天里单独开启）",
-                modifier = Modifier.padding(top = 12.dp),
-            )
+            // ---- 开关 ----
+            Text("开关", style = MaterialTheme.typography.titleSmall)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 var consent by remember { mutableStateOf(AiChatConfig.autoReplyConsent) }
                 Switch(
                     checked = consent,
                     onCheckedChange = { checked ->
-                        if (checked && !AiChatConfig.autoReplyConsent) {
-                            AiChatConfig.autoReplyConsent = true
-                            consent = true
-                            if (AiChatConfig.autoReplyConsent) { /* engine 常驻监听，无需重启 */ }
-                        } else if (!checked) {
-                            AiChatConfig.autoReplyConsent = false
-                            consent = false
-                        }
+                        AiChatConfig.autoReplyConsent = checked
+                        consent = checked
                     },
                 )
-                androidx.compose.material3.Text(
-                    "允许全自动回复（全局）",
-                    modifier = Modifier.padding(start = 8.dp),
-                )
+                Text("允许全自动回复（全局总闸）", modifier = Modifier.padding(start = 8.dp))
             }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                var useJev by remember { mutableStateOf(AiChatConfig.useJev) }
-                Switch(
-                    checked = useJev,
-                    onCheckedChange = { AiChatConfig.useJev = it; useJev = it },
-                )
-                androidx.compose.material3.Text("启用 JEV 情绪概率", modifier = Modifier.padding(start = 8.dp))
-            }
-
             if (talker.isNotBlank()) {
-                androidx.compose.material3.Text("当前聊天：$talker", modifier = Modifier.padding(top = 12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     var on by remember { mutableStateOf(AiChatStore.isAnalyzeOn(talker)) }
                     Switch(
                         checked = on,
                         onCheckedChange = { AiChatStore.setAnalyzeOn(talker, it); on = it },
                     )
-                    androidx.compose.material3.Text("自动分析并在输入框上方给建议", modifier = Modifier.padding(start = 8.dp))
+                    Text("本聊天：自动分析 + 输入框上方建议", modifier = Modifier.padding(start = 8.dp))
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     var on by remember { mutableStateOf(AiChatStore.isAutoReplyOn(talker)) }
                     Switch(
                         checked = on,
                         onCheckedChange = { checked ->
-                            if (checked && !AiChatConfig.autoReplyConsent) {
-                                AiChatConfig.autoReplyConsent = true
-                            }
+                            if (checked && !AiChatConfig.autoReplyConsent) AiChatConfig.autoReplyConsent = true
                             AiChatStore.setAutoReplyOn(talker, checked)
                             on = AiChatStore.isAutoReplyOn(talker)
                         },
                     )
-                    androidx.compose.material3.Text(
-                        "全自动回复本聊天（${AiChatConfig.autoReplyDelaySec}s 内可撤回）",
-                        modifier = Modifier.padding(start = 8.dp),
-                    )
+                    Text("本聊天：全自动回复", modifier = Modifier.padding(start = 8.dp))
                 }
             } else {
-                androidx.compose.material3.Text(
-                    "打开一个聊天后，这里会出现该聊天的开关",
-                    modifier = Modifier.padding(top = 12.dp),
-                )
+                Text("打开一个聊天后，这里会出现该聊天的开关", style = MaterialTheme.typography.bodySmall)
             }
+            // 底部余量：卡片底边与最后一个控件之间留距离
+            androidx.compose.foundation.layout.Spacer(Modifier.height(12.dp))
         }
     }
 }
