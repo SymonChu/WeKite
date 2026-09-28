@@ -124,6 +124,13 @@ object ChatAiEngine {
             }
         }
 
+        // 只开了自动回复、而当前规则不允许发送（冷却/日限额/免打扰）⇒ 不必跑模型，省一次调用
+        // （09-28 日志实测：一条群消息触发整套分析后才发现被冷却拦下）
+        if (!analyze && !canAutoSend(talker)) {
+            WeLogger.i(TAG, "skip: auto not allowed now (cooldown/limit/quiet) talker=$talker")
+            return
+        }
+
         if (running[talker]?.isActive == true) {
             // 同一聊天同时只跑一个：自动回复必须处理，纯分析可跳过
             if (!auto) { WeLogger.i(TAG, "skip: previous still running talker=$talker"); return }

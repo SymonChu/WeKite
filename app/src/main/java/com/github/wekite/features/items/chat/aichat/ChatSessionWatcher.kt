@@ -38,6 +38,7 @@ object ChatSessionWatcher {
                 ChatHeaderToggle.sync(activity, current)
                 SuggestionPanel.attach(activity, current)
             }
+            SuggestionPanel.ensureAboveFooter()
             main.postDelayed(this, INTERVAL_MS)
         }
     }

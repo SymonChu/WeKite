@@ -34,6 +34,7 @@ object SuggestionPanel {
     private var attachedActivity: WeakReference<Activity>? = null
     private var boundTalker: String? = null
     private var retries = 0
+    private var footerRef: WeakReference<View>? = null
 
     val talker: String? get() = boundTalker
 
@@ -170,8 +171,45 @@ object SuggestionPanel {
         }
         if (!placed) return null
         panelRef = WeakReference(root)
+        footerRef = WeakReference(footer)
         WeLogger.i(TAG, "panel attached (parent=${parent.javaClass.simpleName})")
+        root.post { ensureAboveFooter() }
         return root
+    }
+
+    /**
+     * 把面板抬到输入框上方（解决「面板底部被浮动输入框压住」，2026-09-28 用户截图实测）。
+     *
+     * 输入框在 WeKite 里是悬浮卡片、会浮在内容之上；面板若只按父容器顺序摆放就会露出下半截在外面。
+     * 做法：量两者在屏幕上的实际位置，差多少就补多少下边距；幂等，可由 ticker 反复调用。
+     */
+    fun ensureAboveFooter() {
+        val root = panelRef?.get() ?: return
+        val footer = footerRef?.get() ?: return
+        if (root.parent == null || footer.parent == null) return
+        if (root.width == 0 || root.height == 0 || footer.height == 0) return
+        val gapPx = (6 * root.resources.displayMetrics.density).toInt()
+        val rootPos = IntArray(2).also { root.getLocationOnScreen(it) }
+        val footPos = IntArray(2).also { footer.getLocationOnScreen(it) }
+        val rootBottom = rootPos[1] + root.height
+        val need = rootBottom - (footPos[1] - gapPx)
+        if (need <= 1) return
+        when (val lp = root.layoutParams) {
+            is LinearLayout.LayoutParams -> {
+                lp.bottomMargin += need
+                root.layoutParams = lp
+            }
+            is RelativeLayout.LayoutParams -> {
+                lp.bottomMargin += need
+                root.layoutParams = lp
+            }
+            is FrameLayout.LayoutParams -> {
+                lp.bottomMargin += need
+                root.layoutParams = lp
+            }
+            else -> return
+        }
+        WeLogger.i(TAG, "panel lifted by ${need}px (overlap with floating chat footer)")
     }
 
     private fun removePanel() {
