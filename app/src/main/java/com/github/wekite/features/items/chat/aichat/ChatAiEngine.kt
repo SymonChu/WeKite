@@ -191,8 +191,15 @@ object ChatAiEngine {
                 var sent = 0
                 for (r in parsed.replies) {
                     if (sent > 0) delay(1200L + (0L..1300L).random())
-                    val ok = WeMessageApi.sendText(talker, r)
-                    WeLogger.i(TAG, "AUDIT auto send talker=$talker ok=$ok text=${r.take(40)}")
+                    var ok = WeMessageApi.sendText(talker, r)
+                    if (!ok) {
+                        // 偶发失败（09-28 日志实测 3 条里 1 条 ok=false）：等一拍重试一次再放弃
+                        delay(1000)
+                        ok = WeMessageApi.sendText(talker, r)
+                        WeLogger.i(TAG, "AUDIT auto send retried talker=$talker ok=$ok text=${r.take(40)}")
+                    } else {
+                        WeLogger.i(TAG, "AUDIT auto send talker=$talker ok=true text=${r.take(40)}")
+                    }
                     if (!ok) break
                     // 发送成功即登记「这条是我自动发的」：徽标按「聊天+正文」哈希比对
                     AutoReplyMarker.mark(talker, r)
