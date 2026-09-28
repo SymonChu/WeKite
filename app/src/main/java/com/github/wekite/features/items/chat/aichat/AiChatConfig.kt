@@ -4,53 +4,69 @@ import com.github.wekite.preferences.WePrefs
 import com.github.wekite.preferences.WePrefs.Companion.prefOption
 
 /**
- * AI 聊天助手配置。全部走 WePrefs；每聊天开关单独存 [AiChatStore]。
+ * AI 聊天助手配置。
  *
- * 双线路（吸收自 yanwai 的思路，独立实现）：
- * - JEV 情绪线路：OpenRouter systemone 端点，结构化 choice 协议，出概率分布
- * - LLM 意图线路：任意 OpenAI 兼容 chat/completions，出自由文本解读
- * 情绪概率永远来自 JEV；LLM 只做补充解读（与 yanwai 2.1.x 行为一致）。
+ * 双线路：
+ * - JEV 情绪线路：OpenRouter systemone 端点（结构化 choice 协议，出概率分布）
+ * - LLM 线路：任意 OpenAI 兼容 chat/completions（意图解读 + 建议回复）
+ *
+ * ⚠️ 地址一律走 [resolveEndpoint] 归一化：用户填 base URL 也能用
+ * （v3.43 用户实测踩坑：填 `https://openrouter.ai/api/v1` → HTTP 404，因为要求填完整路径）。
  */
 object AiChatConfig {
     // ---------- JEV 线路 ----------
-    /** OpenRouter JEV 完整地址；留空 = 未配置情绪线路 */
-    var jevEndpoint by WePrefs.prefOption("ai_chat_jev_endpoint", "https://openrouter.ai/api/v1/systemone")
-    var jevModel by WePrefs.prefOption("ai_chat_jev_model", "typesafe/jev-1.13")
-    var jevApiKey by WePrefs.prefOption("ai_chat_jev_key", "")
+    var jevEndpoint by prefOption("ai_chat_jev_endpoint", "https://openrouter.ai/api/v1/systemone")
+    var jevModel by prefOption("ai_chat_jev_model", "typesafe/jev-1.13")
+    var jevApiKey by prefOption("ai_chat_jev_key", "")
 
-    // ---------- LLM 线路（意图解读 + 回复生成共用） ----------
-    /** OpenAI 兼容 chat/completions 完整地址；留空 = 未配置 */
-    var llmEndpoint by WePrefs.prefOption("ai_chat_llm_endpoint", "")
-    var llmApiKey by WePrefs.prefOption("ai_chat_llm_key", "")
-    var llmModel by WePrefs.prefOption("ai_chat_llm_model", "")
+    // ---------- LLM 线路 ----------
+    var llmEndpoint by prefOption("ai_chat_llm_endpoint", "")
+    var llmApiKey by prefOption("ai_chat_llm_key", "")
+    var llmModel by prefOption("ai_chat_llm_model", "")
 
     // ---------- 分析 ----------
-    /** 自动分析可见消息（默认关，只保留长按单条） */
-    var autoAnalyze by WePrefs.prefOption("ai_chat_auto_analyze", false)
-    /** 组装上下文的最大条数 */
-    var contextLimit by WePrefs.prefOption("ai_chat_context_limit", 30)
-    /** 组装上下文的最大字符预算 */
-    var contextBudget by WePrefs.prefOption("ai_chat_context_budget", 8000)
+    /** JEV 情绪概率（默认开；关掉则只走 LLM 或都不走） */
+    var useJev by prefOption("ai_chat_use_jev", true)
+    var contextLimit by prefOption("ai_chat_context_limit", 30)
+    var contextBudget by prefOption("ai_chat_context_budget", 8000)
+    /** 建议条数上限（面板里显示几条） */
+    var suggestionCount by prefOption("ai_chat_suggestion_count", 3)
 
-    // ---------- 二期：回复建议 ----------
-    var replyConsent by WePrefs.prefOption("ai_chat_reply_consent", false)
-    /** 默认参考条数 */
-    var replyContextLimit by WePrefs.prefOption("ai_chat_reply_context_limit", 50)
+    // ---------- 全自动回复 ----------
+    var autoReplyConsent by prefOption("ai_chat_auto_reply_consent", false)
+    var autoReplyDelaySec by prefOption("ai_chat_auto_reply_delay_sec", 5)
+    var autoReplyCooldownSec by prefOption("ai_chat_auto_reply_cooldown_sec", 60)
+    var autoReplyDailyLimit by prefOption("ai_chat_auto_reply_daily_limit", 20)
+    var autoReplyKeywords by prefOption("ai_chat_auto_reply_keywords", "")
+    var quietHoursStart by prefOption("ai_chat_quiet_start", "")
+    var quietHoursEnd by prefOption("ai_chat_quiet_end", "")
 
-    // ---------- 三期：自动回复 ----------
-    var autoReplyConsent by WePrefs.prefOption("ai_chat_auto_reply_consent", false)
-    /** 发送前延迟窗口（秒），窗口内可取消 */
-    var autoReplyDelaySec by WePrefs.prefOption("ai_chat_auto_reply_delay_sec", 5)
-    /** 同一聊天两次自动回复的最小间隔（秒） */
-    var autoReplyCooldownSec by WePrefs.prefOption("ai_chat_auto_reply_cooldown_sec", 60)
-    /** 每聊天每日自动回复上限 */
-    var autoReplyDailyLimit by WePrefs.prefOption("ai_chat_auto_reply_daily_limit", 20)
-    /** 触发关键词；逗号分隔，空 = 所有消息触发（仍受白名单/开关约束） */
-    var autoReplyKeywords by WePrefs.prefOption("ai_chat_auto_reply_keywords", "")
-    /** 免打扰时段起止（24h 制 "23:00"）；空 = 不限 */
-    var quietHoursStart by WePrefs.prefOption("ai_chat_quiet_start", "")
-    var quietHoursEnd by WePrefs.prefOption("ai_chat_quiet_end", "")
+    /** 归一化后的 JEV 完整地址 */
+    val jevUrl: String get() = resolveEndpoint(jevEndpoint, "/v1/systemone")
+    /** 归一化后的 LLM 完整地址 */
+    val llmUrl: String get() = resolveEndpoint(llmEndpoint, "/v1/chat/completions")
 
-    val jevConfigured: Boolean get() = jevEndpoint.isNotBlank() && jevApiKey.isNotBlank()
-    val llmConfigured: Boolean get() = llmEndpoint.isNotBlank() && llmApiKey.isNotBlank() && llmModel.isNotBlank()
+    val jevConfigured: Boolean get() = jevUrl.isNotBlank() && jevApiKey.isNotBlank() && jevModel.isNotBlank()
+    val llmConfigured: Boolean get() = llmUrl.isNotBlank() && llmApiKey.isNotBlank() && llmModel.isNotBlank()
+    /** 至少一条线路可用 */
+    val anyConfigured: Boolean get() = (useJev && jevConfigured) || llmConfigured
+
+    private val VERSION_TAIL = Regex("""/v\d+$""")
+
+    /**
+     * 用户填的地址 → 可直接请求的完整地址。
+     * - 已含 `/chat/completions` / `/completions` / `/systemone` ⇒ 原样用
+     * - 以 `/vN` 结尾 ⇒ 补 [defaultPath] 的末段（`/chat/completions` 或 `/systemone`）
+     * - 否则 ⇒ 补 [defaultPath] 全路径（缺省 `/v1/chat/completions`）
+     */
+    fun resolveEndpoint(raw: String, defaultPath: String): String {
+        val s = raw.trim()
+        if (s.isEmpty()) return ""
+        if (s.endsWith("/chat/completions") || s.endsWith("/completions") ||
+            s.endsWith("/systemone") || s.endsWith("/responses")
+        ) return s
+        val b = s.trimEnd('/')
+        val tail = defaultPath.substringAfterLast('/')  // chat/completions | systemone
+        return if (VERSION_TAIL.containsMatchIn(b)) "$b/$tail" else "$b$defaultPath"
+    }
 }

@@ -57,7 +57,7 @@ object ChatHeaderToggle {
                 if (syncing) return@setOnCheckedChangeListener
                 val t = currentTalker ?: return@setOnCheckedChangeListener
                 AiChatStore.setAnalyzeOn(t, checked)
-                if (!checked) AnalysisEngine.cancelConversation(t)
+                if (!checked) { ChatAiEngine.clear(t); SuggestionPanel.refresh(t) }
             }
             setOnLongClickListener {
                 showActions(activity, talker)
@@ -110,8 +110,8 @@ object ChatHeaderToggle {
 
     private fun showActions(activity: Activity, talker: String) {
         val items = arrayOf(
-            "自动回复：${if (AiChatStore.isAutoReplyOn(talker)) "已开" else "关"}",
-            "建议回复：${if (AiChatStore.isReplyOn(talker)) "已开" else "关"}",
+            "全自动回复：${if (AiChatStore.isAutoReplyOn(talker)) "已开" else "关"}",
+            "重新分析这条聊天",
             "助手设置",
         )
         AlertDialog.Builder(activity)
@@ -126,7 +126,7 @@ object ChatHeaderToggle {
                         }
                         sync(activity, talker)
                     }
-                    1 -> AiChatStore.setReplyOn(talker, !AiChatStore.isReplyOn(talker))
+                    1 -> ChatAiEngine.retry(talker)
                     2 -> AiChatAssistant.openSettingsDialog(activity)
                 }
             }

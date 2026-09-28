@@ -23,14 +23,15 @@ object ChatPageLifecycle {
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             override fun onActivityResumed(act: Activity) {
                 try {
-                    if (!AiChatAssistant.isEnabled) { ChatHeaderToggle.remove(); return }
+                    if (!AiChatAssistant.isEnabled) { ChatHeaderToggle.remove(); SuggestionPanel.detach(); return }
                     val talker = WeCurrentConversationApi.value
                     // ChatFooter.setUserName 在进入聊天时调用；resume 时序可能早于它 →
                     // 延迟两拍再取，取不到按非聊天页处理
                     act.window.decorView.postDelayed({
-                        if (!AiChatAssistant.isEnabled) { ChatHeaderToggle.remove(); return@postDelayed }
+                        if (!AiChatAssistant.isEnabled) { ChatHeaderToggle.remove(); SuggestionPanel.detach(); return@postDelayed }
                         val t = WeCurrentConversationApi.value.takeIf { it.isNotBlank() }
                         ChatHeaderToggle.sync(act, t)
+                        SuggestionPanel.attach(act, t)
                     }, 300)
                 } catch (e: Throwable) {
                     WeLogger.e(TAG, "onActivityResumed sync failed", e)
@@ -39,6 +40,7 @@ object ChatPageLifecycle {
 
             override fun onActivityPaused(act: Activity) {
                 ChatHeaderToggle.remove()
+                SuggestionPanel.detach()
             }
 
             override fun onActivityDestroyed(act: Activity) {

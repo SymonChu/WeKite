@@ -38,7 +38,7 @@ object AiChatHttp {
         val cfg = AiChatConfig
         check(cfg.jevConfigured) { "请先在设置中填写 JEV API Key" }
         return exchange(
-            url = cfg.jevEndpoint,
+            url = cfg.jevUrl,
             key = cfg.jevApiKey.filterNot { it.isWhitespace() },
             keyHeader = "Authorization",
             keyPrefix = "Bearer ",
@@ -59,7 +59,7 @@ object AiChatHttp {
             .put("stream", false)
             .put("temperature", temperature)
         return exchange(
-            url = cfg.llmEndpoint,
+            url = cfg.llmUrl,
             key = cleanKey,
             keyHeader = "Authorization",
             keyPrefix = "Bearer ",
