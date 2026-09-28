@@ -140,7 +140,6 @@ object ChatAiEngine {
     private suspend fun runPipeline(talker: String, triggerMsgId: Long, auto: Boolean) {
         val isGroup = ContextBuilder.isGroupTalker(talker)
         delay(800)  // 等 DB 行与语音转写稳定
-        val built = ContextBuilder.build(talker, beforeTimeMs = 0, isGroup = isGroup)
         val latest = latestIncoming(talker, isGroup)
         if (latest == null) {
             WeLogger.i(TAG, "no readable incoming message talker=$talker")
@@ -148,6 +147,8 @@ object ChatAiEngine {
             SuggestionPanel.refresh(talker)
             return
         }
+        // 目标消息按 msgId 从上下文里排除（否则同一条既当「目标」又当「前文」）
+        val built = ContextBuilder.build(talker, excludeMsgId = latest.first, isGroup = isGroup)
         val state = ChoiceProtocol.contextBlock(
             targetText = latest.second,
             speaker = latest.third,
