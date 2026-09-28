@@ -140,6 +140,33 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
         }
     }
 
+    /** 「标签  −  值单位  ＋」一行式步进器。 */
+    @Composable
+    private fun StepperRow(
+        label: String,
+        value: Int,
+        min: Int,
+        max: Int,
+        unit: String,
+        onCommit: (Int) -> Unit,
+    ) {
+        var v by remember { mutableStateOf(value) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, modifier = Modifier.weight(1f))
+            TextButton({
+                if (v > min) { v = v - 1; onCommit(v) }
+            }) { Text("−") }
+            Text(
+                "$v $unit",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(horizontal = 4.dp),
+            )
+            TextButton({
+                if (v < max) { v = v + 1; onCommit(v) }
+            }) { Text("＋") }
+        }
+    }
+
     @Composable
     private fun SettingsContent(talker: String) {
         // 粘贴的 Key 常带换行（Authorization 报 0x0a）⇒ 一律清洗空白
@@ -243,22 +270,19 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
             } else {
                 Text("打开一个聊天后，这里会出现该聊天的开关", style = MaterialTheme.typography.bodySmall)
             }
-            // 自动回复一次发几条（候选默认只发第一条，避免刷屏）
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("自动回复条数", style = MaterialTheme.typography.bodyMedium)
-                var sends by remember { mutableStateOf(AiChatConfig.autoReplySends) }
-                (1..3).forEach { n ->
-                    TextButton({
-                        AiChatConfig.autoReplySends = n
-                        sends = n
-                    }) {
-                        Text(
-                            if (sends == n) "●$n" else "○$n",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                }
-                Text("条", style = MaterialTheme.typography.bodySmall)
+            // ---- 自动回复参数（用户反馈「条数/时间设置看不到」⇒ 全部显式暴露）----
+            Text("自动回复参数", style = MaterialTheme.typography.titleSmall)
+            StepperRow("一次发送条数", AiChatConfig.autoReplySends, 1, 3, "条") {
+                AiChatConfig.autoReplySends = it
+            }
+            StepperRow("发送前等待", AiChatConfig.autoReplyDelaySec, 3, 60, "秒（可撤回窗口）") {
+                AiChatConfig.autoReplyDelaySec = it
+            }
+            StepperRow("同一聊天冷却", AiChatConfig.autoReplyCooldownSec, 10, 600, "秒") {
+                AiChatConfig.autoReplyCooldownSec = it
+            }
+            StepperRow("每日上限", AiChatConfig.autoReplyDailyLimit, 1, 200, "条/聊天") {
+                AiChatConfig.autoReplyDailyLimit = it
             }
             // 底部余量：卡片底边与最后一个控件之间留距离
             androidx.compose.foundation.layout.Spacer(Modifier.height(12.dp))
