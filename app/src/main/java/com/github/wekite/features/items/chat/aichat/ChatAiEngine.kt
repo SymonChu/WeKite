@@ -54,7 +54,7 @@ object ChatAiEngine {
     )
 
     sealed interface State {
-        data object Working : State
+        data class Working(val msgId: Long) : State
         data class Done(val result: Result) : State
         data class Failed(val message: String) : State
     }
@@ -83,11 +83,41 @@ object ChatAiEngine {
 
     fun stateOf(talker: String): State? = states[talker]
 
+    /** 「聊天#消息」→ 状态：气泡下的分析卡按消息取用（上游 append-only 同思路）。 */
+    private val byMsg = java.util.Collections.synchronizedMap(
+        object : LinkedHashMap<String, State>(64, 0.75f, false) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, State>?) = size > 200
+        }
+    )
+
+    private fun msgKey(talker: String, msgId: Long) = "$talker#$msgId"
+
+    private fun putMsgState(talker: String, msgId: Long, state: State) {
+        if (msgId > 0) byMsg[msgKey(talker, msgId)] = state
+    }
+
+    /** 该消息的分析状态（气泡卡渲染用）；null = 这条没分析过。 */
+    fun stateFor(talker: String, msgId: Long): State? = byMsg[msgKey(talker, msgId)]
+
+    /** 某聊天下所有「分析过」的消息 → 状态（气泡卡据此把卡片挂到已有行上）。 */
+    fun statesForTalker(talker: String): Map<Long, State> {
+        val prefix = "$talker#"
+        return synchronized(byMsg) {
+            byMsg.entries.filter { it.key.startsWith(prefix) }
+                .mapNotNull { e ->
+                    val id = e.key.removePrefix(prefix).toLongOrNull() ?: return@mapNotNull null
+                    id to e.value
+                }
+                .toMap()
+        }
+    }
+
     /** 当前是否值得展示面板（有结果或正在跑）。 */
     fun hasPanelContent(talker: String): Boolean = states[talker] != null
 
     fun clear(talker: String) {
         states.remove(talker)
+        BubbleCard.clear(talker)
         running.remove(talker)?.cancel()
     }
 
@@ -139,9 +169,9 @@ object ChatAiEngine {
     }
 
     private suspend fun runAnalyze(talker: String, msgId: Long, auto: Boolean) {
-        states[talker] = State.Working
-        AnalysisDialog.update(talker)
-        AnalysisDialog.show(talker)
+        states[talker] = State.Working(msgId)
+        putMsgState(talker, msgId, State.Working(msgId))
+        BubbleCard.refresh(talker)
         try {
             slots.withPermit { runPipeline(talker, msgId, auto) }
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -149,7 +179,7 @@ object ChatAiEngine {
         } catch (e: Throwable) {
             WeLogger.e(TAG, "pipeline failed talker=$talker", e)
             states[talker] = State.Failed(e.message ?: "分析失败")
-            AnalysisDialog.update(talker)
+            putMsgState(talker, msgId, State.Failed(e.message ?: "分析失败"))
         } finally {
             running.remove(talker)
         }
@@ -163,7 +193,7 @@ object ChatAiEngine {
         if (latest == null) {
             WeLogger.i(TAG, "no readable incoming message talker=$talker")
             states[talker] = State.Failed("没有可分析的文本消息")
-            AnalysisDialog.update(talker)
+            BubbleCard.refresh(talker)
             return
         }
         // 目标消息按 msgId 从上下文里排除（否则同一条既当「目标」又当「前文」）
@@ -187,7 +217,8 @@ object ChatAiEngine {
         // 2) LLM 解读 + 建议回复
         if (!AiChatConfig.llmConfigured) {
             states[talker] = State.Failed("请先在设置里配置 LLM 接口（分析：$emotionLine）")
-            AnalysisDialog.update(talker)
+            putMsgState(talker, latest.first, states[talker]!!)
+            BubbleCard.refresh(talker)
             return
         }
         val knowledge = ReplyKnowledge.load(isGroup)
@@ -239,7 +270,8 @@ object ChatAiEngine {
         }
 
         states[talker] = State.Done(Result(latest.first, emotionLine, parsed.reading, parsed.replies, autoSent, note))
-        AnalysisDialog.update(talker)
+        putMsgState(talker, latest.first, states[talker]!!)
+        BubbleCard.refresh(talker)
         WeLogger.i(
             TAG,
             "done talker=$talker emotion=$emotionLine replies=${parsed.replies.size} autoSent=$autoSent"

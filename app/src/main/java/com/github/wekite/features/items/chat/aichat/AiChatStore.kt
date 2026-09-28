@@ -18,7 +18,7 @@ object AiChatStore {
 
     fun setAnalyzeOn(talker: String, on: Boolean) {
         WePrefs.putBool(analyzeKey(talker), on)
-        if (!on) { ChatAiEngine.clear(talker); AnalysisDialog.update(talker) }
+        
     }
 
     /** 全自动回复：需要设置页全局总开关 [AiChatConfig.autoReplyConsent] 同时打开。 */

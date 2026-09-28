@@ -141,7 +141,7 @@ object ChatHeaderStatus {
                     which == 0 -> {
                         val on = !AiChatStore.isAnalyzeOn(talker)
                         AiChatStore.setAnalyzeOn(talker, on)
-                        if (!on) AnalysisDialog.close()
+                        if (!on) ChatAiEngine.clear(talker)
                     }
                     which == 1 -> {
                         val on = !AiChatStore.isAutoReplyOn(talker)

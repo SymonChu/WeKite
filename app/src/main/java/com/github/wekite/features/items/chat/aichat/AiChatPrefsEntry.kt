@@ -69,7 +69,6 @@ object AiChatPrefsEntry : IContactInfoProvider {
             KEY_ANALYZE -> {
                 val on = !AiChatStore.isAnalyzeOn(talker)
                 AiChatStore.setAnalyzeOn(talker, on)
-                if (!on) AnalysisDialog.close()
                 showToast(activity, if (on) "已开启自动分析" else "已关闭自动分析")
             }
             KEY_AUTO -> {

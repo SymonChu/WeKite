@@ -34,7 +34,6 @@ object ChatUi {
         main.post {
             if (talker.isNotBlank() && talker != this.talker) {
                 WeLogger.i(TAG, "conversation event: ${this.talker ?: "-"} -> $talker")
-                AnalysisDialog.close()
             }
             this.talker = talker
             activity?.let { ChatHeaderStatus.sync(it, talker) }
@@ -68,7 +67,6 @@ object ChatUi {
             retries = 0
             if (talker != null && talker != t) {
                 WeLogger.i(TAG, "chat page changed: $talker -> $t")
-                AnalysisDialog.close()
             }
             talker = t
             ChatHeaderStatus.sync(act, t)

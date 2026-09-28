@@ -65,7 +65,6 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
     override fun onDisable() {
         WeChatMessageViewApi.removeListener(this)
         ChatAiEngine.stop()
-        AnalysisDialog.close()
         ChatHeaderStatus.remove()
         AiChatPrefsEntry.unregister()
         ChatUi.uninstallListener()
@@ -85,7 +84,16 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
             ChatPageLifecycle.install(activity)
         }
         // 标识改由「消息表里的系统提示行」承担（防撤回同款机制），此处只负责挂面板
-        // 面板已改为弹窗（见 AnalysisDialog）；此处只负责首次安装聊天页生命周期
+        // 对方消息：登记行 View + 若已有分析状态就直接把卡片挂上（上游式「气泡下分析卡」）
+        val talker = ChatUi.talker ?: WeCurrentConversationApi.value.takeIf { it.isNotBlank() } ?: return
+        val msgInfo2 = try {
+            WeChatMessageViewApi.getMsgInfoFromParam(param)
+        } catch (_: Exception) {
+            return
+        }
+        if (msgInfo2.isSend != 0) return
+        BubbleCard.onRowBound(view, talker, msgInfo2.id)
+        BubbleCard.show(view, talker, msgInfo2.id)
     }
 
     // ==================== 设置弹窗 ====================
