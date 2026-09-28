@@ -1,58 +1,77 @@
 package com.github.wekite.features.items.chat.aichat
 
+import com.github.wekite.features.api.core.WeDatabaseApi
+import com.github.wekite.features.api.core.WeMessageApi
+import com.github.wekite.features.api.core.models.MessageType
 import com.github.wekite.preferences.WePrefs
-import java.security.MessageDigest
-import java.util.concurrent.ConcurrentHashMap
+import com.github.wekite.preferences.WePrefs.Companion.prefOption
+import com.github.wekite.utils.WeLogger
 
 /**
- * 自动回复消息的「仅自己可见」标记表。
+ * 自动回复消息的「仅自己可见」标识。
  *
- * ⚠️ 不能用 msgSvrId 做键（v3.44 实测踩坑）：**微信刚发出的消息在渲染时 msgSvrId 仍是 0**
- * （要等服务器回执才赋值），按它比对必然命中不了 → 徽标永不显示。
- * 改为：发送时按「聊天 + 正文」的哈希登记，渲染时用同一哈希比对，并限定时间窗
- * （超过 24h 的登记不再生效，避免很久以前发过同样的句子被误标）。
+ * ⚠️ 机制选择（2026-09-28 用户实测后的结论，**改用防撤回同款做法**）：
+ * - 视图层挂小徽标失败过两次：挂 RecyclerView 上不参与布局；改用浅蓝配色在浅色聊天背景上
+ *   几乎看不见（日志显示挂载成功但用户看不到）。
+ * - 现改为 **在消息表里插一条 SYSTEM 类型的系统提示行** —— 与 WeKite「防撤回」提示完全同款机制
+ *   （`WeMessageApi.createSimpleMsgInfoAndInsert`），微信自身会把它渲染成灰色居中的系统文案，
+ *   在任何聊天背景下都清晰可见；只写本地库、不发送 ⇒ 对方看不到。
  *
- * 存储：MMKV StringSet，条目形如 `<hash>|<epochMs>`；超过上限整体裁剪。
+ * 时间戳单位：插入时沿用刚发出的那条消息的 createTime（同库同单位）再 +1，
+ * 保证排在它后面；查不到时按库单位取当前时间的等效值。
  */
 object AutoReplyMarker {
-    private const val KEY = "ai_chat_auto_marks"
-    private const val MAX = 200
-    private const val WINDOW_MS = 24 * 60 * 60 * 1000L
+    private const val TAG = "AiAutoMarker"
+    private val recentlyMarked = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private const val DEDUP_MS = 120_000L
 
-    private var marks by WePrefs.prefOption(KEY, emptySet<String>())
-    private val cache = ConcurrentHashMap<String, Long>()
+    /** 系统提示文案（可配，占位：无）。 */
+    private var noticeText by prefOption("ai_chat_mark_text", "本条消息由 AI 自动回复（仅你可见）")
 
-    private fun hash(talker: String, content: String): String {
-        val md = MessageDigest.getInstance("MD5")
-        val bytes = md.digest("$talker\u0000${content.trim()}".toByteArray(Charsets.UTF_8))
-        return bytes.joinToString("") { "%02x".format(it) }.take(16)
-    }
-
-    /** 自动发送成功后登记；[content] 为该条的正文（原样，比对时会 trim）。 */
-    @Synchronized
-    fun mark(talker: String, content: String) {
-        if (talker.isBlank() || content.isBlank()) return
-        val h = hash(talker, content)
-        cache[h] = System.currentTimeMillis()
-        val next = marks + "$h|${cache[h]}"
-        marks = if (next.size > MAX) next.drop(next.size - MAX).toSet() else next
-    }
-
-    /** 该消息是否是我们全自动回复发出的（时间窗内）。 */
-    fun isMarked(talker: String, content: String): Boolean {
+    /**
+     * 自动发送成功后调用：在该消息下方插一条系统提示行。
+     * @return 是否插入成功
+     */
+    fun markSent(talker: String, content: String): Boolean {
         if (talker.isBlank() || content.isBlank()) return false
-        val h = hash(talker, content)
+        val key = "$talker\u0000${content.trim()}"
         val now = System.currentTimeMillis()
-        cache[h]?.let { return now - it <= WINDOW_MS }
-        // 进程重启后从落盘条目里恢复
-        val hit = marks.firstOrNull { it.startsWith("$h|") } ?: return false
-        val ts = hit.substringAfter('|').toLongOrNull() ?: return false
-        return now - ts <= WINDOW_MS
+        recentlyMarked.entries.removeAll { now - it.value > DEDUP_MS }
+        if (recentlyMarked.containsKey(key)) return false   // 同一条不重复标记（重试路径）
+        recentlyMarked[key] = now
+
+        val createTime = findCreateTime(talker, content)
+        val text = noticeText.ifBlank { "本条消息由 AI 自动回复（仅你可见）" }
+        return try {
+            WeMessageApi.createSimpleMsgInfoAndInsert(
+                MessageType.SYSTEM.code,
+                talker,
+                text,
+                (createTime ?: currentInDbUnit()) + 1,
+            )
+            WeLogger.i(TAG, "marker inserted talker=$talker text=${content.take(20)}")
+            true
+        } catch (e: Exception) {
+            WeLogger.e(TAG, "marker insert failed talker=$talker", e)
+            false
+        }
     }
 
-    @Synchronized
-    fun clear() {
-        marks = emptySet()
-        cache.clear()
+    /** 刚发出的那条（自己发的、正文匹配）的 createTime；查不到返回 null。 */
+    private fun findCreateTime(talker: String, content: String): Long? = try {
+        WeDatabaseApi.rawQuery(
+            "SELECT createTime FROM message WHERE talker = ? AND isSend = 1 AND content = ? " +
+                "ORDER BY msgId DESC LIMIT 1",
+            arrayOf<Any>(talker, content)
+        ).use { c -> if (c.moveToFirst()) c.getLong(0) else null }
+    } catch (e: Exception) {
+        WeLogger.w(TAG, "findCreateTime failed: ${e.message}")
+        null
+    }
+
+    /** 当前时间的「库单位」等效值（毫秒库直接返回，秒库返回秒）。 */
+    private fun currentInDbUnit(): Long {
+        val divisor = ContextBuilder.dbUnitDivisor()
+        return System.currentTimeMillis() / divisor
     }
 }

@@ -33,6 +33,9 @@ object ContextBuilder {
     @Volatile
     private var divisorCache: Long = 0L
 
+    /** 供其它组件换算时间单位（1=毫秒库，1000=秒库）。 */
+    fun dbUnitDivisor(): Long = divisor()
+
     /** 库里时间单位换算因子：1=已是毫秒，1000=是秒（探测法与 AiGroupNewMsgSummary 一致）。 */
     private fun divisor(): Long {
         divisorCache.takeIf { it != 0L }?.let { return it }

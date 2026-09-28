@@ -85,16 +85,8 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
         } catch (_: Exception) {
             return
         }
-        // 全自动回复发出的消息 → 气泡旁「AI」小徽标（按「聊天 + 正文」哈希比对，不依赖 msgSvrId）
-        if (msgInfo.isSend == 1) {
-            val body = msgInfo.actualContent.trim()
-            if (body.isNotEmpty() && AutoReplyMarker.isMarked(msgInfo.talker, body)) {
-                AiBadge.attach(view)
-            } else {
-                AiBadge.detach(view)
-            }
-        } else if (activity != null) {
-            // 借「有消息在渲染」这个时机尽力挂面板（此时 ChatFooter 通常已就绪）
+        // 标识改由「消息表里的系统提示行」承担（防撤回同款机制），此处只负责挂面板
+        if (msgInfo.isSend == 0 && activity != null) {
             SuggestionPanel.attach(activity, WeCurrentConversationApi.value)
         }
     }

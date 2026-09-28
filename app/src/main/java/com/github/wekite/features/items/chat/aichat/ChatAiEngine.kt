@@ -221,8 +221,8 @@ object ChatAiEngine {
                         WeLogger.i(TAG, "AUDIT auto send talker=$talker ok=true text=${r.take(40)}")
                     }
                     if (!ok) break
-                    // 发送成功即登记「这条是我自动发的」：徽标按「聊天+正文」哈希比对
-                    AutoReplyMarker.mark(talker, r)
+                    // 发送成功即在该消息下方插一条系统提示（防撤回同款机制，仅本机可见）
+                    AutoReplyMarker.markSent(talker, r)
                     sent++
                 }
                 if (sent > 0) {
