@@ -207,7 +207,9 @@ object ChatAiEngine {
             delay(base + (0L..2000L).random())
             if (AiChatStore.isAutoReplyOn(talker)) {
                 var sent = 0
-                for (r in parsed.replies) {
+                // 候选只挑前 N 条发（默认 1）——见 AiChatConfig.autoReplySends 的说明
+                val toSend = parsed.replies.take(AiChatConfig.autoReplySends.coerceIn(1, 3))
+                for (r in toSend) {
                     if (sent > 0) delay(1200L + (0L..1300L).random())
                     var ok = WeMessageApi.sendText(talker, r)
                     if (!ok) {

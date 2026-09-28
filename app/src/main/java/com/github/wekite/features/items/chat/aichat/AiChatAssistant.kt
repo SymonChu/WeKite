@@ -246,6 +246,23 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
             } else {
                 Text("打开一个聊天后，这里会出现该聊天的开关", style = MaterialTheme.typography.bodySmall)
             }
+            // 自动回复一次发几条（候选默认只发第一条，避免刷屏）
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("自动回复条数", style = MaterialTheme.typography.bodyMedium)
+                var sends by remember { mutableStateOf(AiChatConfig.autoReplySends) }
+                (1..3).forEach { n ->
+                    TextButton({
+                        AiChatConfig.autoReplySends = n
+                        sends = n
+                    }) {
+                        Text(
+                            if (sends == n) "●$n" else "○$n",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+                Text("条", style = MaterialTheme.typography.bodySmall)
+            }
             // 底部余量：卡片底边与最后一个控件之间留距离
             androidx.compose.foundation.layout.Spacer(Modifier.height(12.dp))
         }

@@ -36,6 +36,13 @@ object AiChatConfig {
     var autoReplyConsent by prefOption("ai_chat_auto_reply_consent", false)
     var autoReplyDelaySec by prefOption("ai_chat_auto_reply_delay_sec", 5)
     var autoReplyCooldownSec by prefOption("ai_chat_auto_reply_cooldown_sec", 60)
+
+    /**
+     * 全自动回复一次发几条。
+     * ⚠️ 建议回复里的多条是**候选**（用户挑一条发），不是要连着发 —— 默认 1 条（2026-09-28 用户实测纠正：
+     * 自动回复把 3 条候选全发出去了）。上限 3，避免刷屏。
+     */
+    var autoReplySends by prefOption("ai_chat_auto_reply_sends", 1)
     var autoReplyDailyLimit by prefOption("ai_chat_auto_reply_daily_limit", 20)
     var autoReplyKeywords by prefOption("ai_chat_auto_reply_keywords", "")
     var quietHoursStart by prefOption("ai_chat_quiet_start", "")
