@@ -57,6 +57,12 @@ object ChatHeaderStatus {
             setOnClickListener {
                 boundTalker?.let { AiChatAssistant.openSettingsDialog(activity, it) }
             }
+            // 兜底入口：你微信的「…」按钮不在标题栏容器里（日志 menu button not found），
+            // 长按 AI 标签同样能出本聊天菜单
+            setOnLongClickListener {
+                boundTalker?.let { showActions(activity, it) }
+                true
+            }
         }
         label = tv
         header.addView(

@@ -9,6 +9,7 @@ import android.widget.TextView
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.isDarkMode
 import java.util.Collections
+import java.util.LinkedHashSet
 import java.util.WeakHashMap
 
 /**
@@ -32,6 +33,8 @@ object BubbleCard {
     /** 锚点 → 它代表的消息（刷新时按消息取状态） */
     private val anchorMsg = Collections.synchronizedMap(WeakHashMap<View, Triple<String, Long, View>>())
     private val anchorKey = Collections.synchronizedMap(WeakHashMap<View, String>())
+    /** 「bind 时 parent 还没就绪」的去重日志（每 key 一次） */
+    private val quietSkip = Collections.synchronizedSet(LinkedHashSet<String>())
 
     /**
      * 消息行索引："聊天#消息" → 行 View。
@@ -47,8 +50,46 @@ object BubbleCard {
     /** 每次消息行绑定都登记（由 AiChatAssistant.onCreateView 调用，开销极小）。 */
     fun onRowBound(view: View, talker: String, msgId: Long) {
         if (talker.isBlank() || msgId <= 0) return
-        rows["$talker#$msgId"] = java.lang.ref.WeakReference(view)
+        val key = "$talker#$msgId"
+        rows[key] = java.lang.ref.WeakReference(view)
+
+        // 复用的行换了内容：摘掉上一条消息的卡（否则卡片跟错消息）
+        anchorKey[view]?.let { old ->
+            if (old != key) {
+                attached.remove(view)?.let { (it.parent as? ViewGroup)?.removeView(it) }
+                anchorMsg.remove(view)
+                quietSkip.remove(old)
+            }
+        }
+        anchorKey[view] = key
+
+        // 立即试挂（回收复用的行此时已 attach，能直接成功）
+        if (show(view, talker, msgId)) {
+            pendingAttach.remove(view)
+            return
+        }
+        // bind 时机 RecyclerView 还没 attach（新消息/预取绑定都如此，实测日志
+        // 「anchor has no parent」30+ 条）⇒ 挂一次性 attach 监听，真挂上屏幕后再挂卡。
+        // 监听按 key 防复用错挂：attach 时若该行已重绑成别的消息（anchorKey 变了）就放弃。
+        pendingAttach.remove(view)?.let { view.removeOnAttachStateChangeListener(it) }
+        val listener = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                v.removeOnAttachStateChangeListener(this)
+                pendingAttach.remove(v)
+                if (anchorKey[v] != key) return   // 已重绑成别的消息 ⇒ 新的监听会接管
+                if (show(v, talker, msgId)) quietSkip.remove(key)
+            }
+            override fun onViewDetachedFromWindow(v: View) {}
+        }
+        pendingAttach[view] = listener
+        view.addOnAttachStateChangeListener(listener)
+        if (quietSkip.add(key)) {
+            WeLogger.i(TAG, "row not attached yet at bind, waiting for attach msgId=$msgId")
+        }
     }
+
+    /** bind 时尚未 attach 的行 → 一次性 attach 监听 */
+    private val pendingAttach = Collections.synchronizedMap(WeakHashMap<View, View.OnAttachStateChangeListener>())
 
     /**
      * 在该消息气泡下挂/更新分析卡。
@@ -57,10 +98,7 @@ object BubbleCard {
      */
     fun show(anchor: View, talker: String, msgId: Long): Boolean {
         val state = ChatAiEngine.stateFor(talker, msgId) ?: return false
-        val parent = anchor.parent as? ViewGroup ?: run {
-            WeLogger.i(TAG, "anchor has no parent, skip msgId=$msgId")
-            return false
-        }
+        val parent = anchor.parent as? ViewGroup ?: return false   // 未 attach：由 attach 监听接管
         // 只挂进「竖直 LinearLayout + WRAP_CONTENT」的容器（上游同款判据，不满足就不强插）
         if (parent !is LinearLayout || parent.orientation != LinearLayout.VERTICAL) return false
         if (parent.layoutParams?.height != ViewGroup.LayoutParams.WRAP_CONTENT) return false
@@ -88,7 +126,9 @@ object BubbleCard {
     }
 
     /** 状态变化后刷新：① 已挂卡片更新内容；② 有状态但还没挂的（行先绑完、分析后到）补挂。 */
-    fun refresh(talker: String) {
+    fun refresh(talker: String) = android.os.Handler(android.os.Looper.getMainLooper()).post { refreshNow(talker) }
+
+    private fun refreshNow(talker: String) {
         // ① 更新已挂的
         val snapshot = synchronized(anchorMsg) { anchorMsg.entries.toList() }
         for ((anchor, meta) in snapshot) {
