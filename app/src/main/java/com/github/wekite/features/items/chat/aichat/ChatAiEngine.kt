@@ -114,6 +114,16 @@ object ChatAiEngine {
         // 诊断日志（I 级）：每聊天开关状态 + 收到的消息类型，排查「没反应」时看这行
         WeLogger.i(TAG, "incoming talker=$talker type=$type msgId=$msgId analyze=$analyze auto=$auto len=${content.length}")
 
+        // 群聊默认只在被 @（或 @所有人）时处理，避免在活跃群里见谁都插话；
+        // 「所有消息也处理」按群单独开（AiChatStore.isGroupAllMessages）
+        if (ContextBuilder.isGroupTalker(talker) && !AiChatStore.isGroupAllMessages(talker)) {
+            val body = stripGroupPrefix(content)
+            if (!GroupMention.isAddressedToMe(talker, msgId, body)) {
+                WeLogger.i(TAG, "skip group message (not addressed to me) talker=$talker msgId=$msgId")
+                return
+            }
+        }
+
         if (running[talker]?.isActive == true) {
             // 同一聊天同时只跑一个：自动回复必须处理，纯分析可跳过
             if (!auto) { WeLogger.i(TAG, "skip: previous still running talker=$talker"); return }
@@ -263,6 +273,16 @@ object ChatAiEngine {
 
     private fun todayKey(): String = SimpleDateFormat("yyyyMMdd", Locale.US).format(Calendar.getInstance().time)
 
+
+    /** 群消息正文去掉 `wxid_xxx:\n` 前缀。 */
+    private fun stripGroupPrefix(content: String): String {
+        val idx = content.indexOf(":\n")
+        if (idx in 1..64) {
+            val prefix = content.substring(0, idx)
+            if (prefix.matches(Regex("[A-Za-z0-9_@+-]+"))) return content.substring(idx + 2)
+        }
+        return content
+    }
 
     // ==================== 上下文辅助 ====================
 

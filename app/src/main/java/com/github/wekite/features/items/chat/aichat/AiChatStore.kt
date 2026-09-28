@@ -11,6 +11,7 @@ object AiChatStore {
 
     private fun analyzeKey(talker: String) = "ai_chat_analyze_on_$talker"
     private fun autoKey(talker: String) = "ai_chat_auto_on_$talker"
+    private fun groupAllKey(talker: String) = "ai_chat_group_all_$talker"
 
     fun isAnalyzeOn(talker: String): Boolean =
         talker.isNotBlank() && WePrefs.getBoolOrDef(analyzeKey(talker), false)
@@ -26,6 +27,17 @@ object AiChatStore {
 
     fun setAutoReplyOn(talker: String, on: Boolean) {
         WePrefs.putBool(autoKey(talker), on)
+    }
+
+    /**
+     * 群聊：是否连「没点我名」的消息也处理（默认关 ⇒ 只在被 @ 时触发）。
+     * 单聊无意义，恒 true。
+     */
+    fun isGroupAllMessages(talker: String): Boolean =
+        !ContextBuilder.isGroupTalker(talker) || WePrefs.getBoolOrDef(groupAllKey(talker), false)
+
+    fun setGroupAllMessages(talker: String, on: Boolean) {
+        WePrefs.putBool(groupAllKey(talker), on)
     }
 
     fun resetAll(talker: String) {

@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.Switch
+import com.github.wekite.utils.WeLogger
 import java.util.Collections
 import java.util.WeakHashMap
 
@@ -36,10 +37,12 @@ object ChatHeaderToggle {
         if (talker == null) { remove(); return }
 
         if (control?.parent === header && control?.isShown == true) {
-            // 已挂着：只刷新状态
+            // 已挂着：只刷新状态（切会话时走这里，必须按新 talker 重新读）
+            val on = AiChatStore.isAnalyzeOn(talker)
             syncing = true
-            control?.isChecked = AiChatStore.isAnalyzeOn(talker)
+            control?.isChecked = on
             syncing = false
+            WeLogger.i(TAG, "sync existing toggle talker=$talker on=$on")
             return
         }
         remove()
@@ -57,6 +60,7 @@ object ChatHeaderToggle {
                 if (syncing) return@setOnCheckedChangeListener
                 val t = currentTalker ?: return@setOnCheckedChangeListener
                 AiChatStore.setAnalyzeOn(t, checked)
+                WeLogger.i(TAG, "toggle clicked talker=$t enabled=$checked")
                 if (!checked) { ChatAiEngine.clear(t); SuggestionPanel.refresh(t) }
             }
             setOnLongClickListener {
@@ -109,9 +113,15 @@ object ChatHeaderToggle {
     }
 
     private fun showActions(activity: Activity, talker: String) {
-        val items = arrayOf(
+        val isGroup = ContextBuilder.isGroupTalker(talker)
+        val items = if (isGroup) arrayOf(
             "全自动回复：${if (AiChatStore.isAutoReplyOn(talker)) "已开" else "关"}",
-            "重新分析这条聊天",
+            "群里所有消息也处理：${if (AiChatStore.isGroupAllMessages(talker)) "开" else "关（只回@我）"}",
+            "重新分析最新一条",
+            "助手设置",
+        ) else arrayOf(
+            "全自动回复：${if (AiChatStore.isAutoReplyOn(talker)) "已开" else "关"}",
+            "重新分析最新一条",
             "助手设置",
         )
         AlertDialog.Builder(activity)
@@ -126,8 +136,13 @@ object ChatHeaderToggle {
                         }
                         sync(activity, talker)
                     }
-                    1 -> ChatAiEngine.retry(talker)
-                    2 -> AiChatAssistant.openSettingsDialog(activity)
+                    1 -> if (isGroup) {
+                        AiChatStore.setGroupAllMessages(talker, !AiChatStore.isGroupAllMessages(talker))
+                    } else {
+                        ChatAiEngine.retry(talker)
+                    }
+                    2 -> if (isGroup) ChatAiEngine.retry(talker) else AiChatAssistant.openSettingsDialog(activity, talker)
+                    3 -> AiChatAssistant.openSettingsDialog(activity, talker)
                 }
             }
             .setNegativeButton("关闭", null)

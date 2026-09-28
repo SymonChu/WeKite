@@ -69,8 +69,8 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
 
     override fun onClick(context: ComponentActivity) = showSettingsDialog(context)
 
-    fun openSettingsDialog(activity: android.app.Activity) {
-        (activity as? ComponentActivity)?.let { showSettingsDialog(it) }
+    fun openSettingsDialog(activity: android.app.Activity, talker: String? = null) {
+        (activity as? ComponentActivity)?.let { showSettingsDialog(it, talker) }
     }
 
     override fun onCreateView(param: com.github.wekite.utils.HookParam, view: View) {
@@ -101,7 +101,11 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
 
     // ==================== 设置弹窗 ====================
 
-    private fun showSettingsDialog(activity: ComponentActivity) {
+    private fun showSettingsDialog(activity: ComponentActivity, explicitTalker: String? = null) {
+        // 从聊天页进入 ⇒ 用该聊天；从模块设置页进入 ⇒ 用最近跟踪到的会话
+        val targetTalker = explicitTalker?.takeIf { it.isNotBlank() }
+            ?: ChatSessionWatcher.currentTalker()
+            ?: WeCurrentConversationApi.value
         showComposeDialog(activity, directlyDismissable = false) {
             // 弹窗限高 + 底部留白：条目多时下方不再被屏幕裁掉（用户反馈过）
             val dm = activity.resources.displayMetrics
@@ -109,7 +113,7 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
             window.setLayout((dm.widthPixels * 0.92f).toInt(), h)
             AlertDialogContent(
                 title = { Text("AI 聊天助手") },
-                text = { SettingsContent() },
+                text = { SettingsContent(targetTalker) },
                 confirmButton = { Button(onDismiss) { Text("关闭") } },
             )
         }
@@ -140,8 +144,7 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
     }
 
     @Composable
-    private fun SettingsContent() {
-        val talker = WeCurrentConversationApi.value
+    private fun SettingsContent(talker: String) {
         // 粘贴的 Key 常带换行（Authorization 报 0x0a）⇒ 一律清洗空白
         fun cleanKey(v: String) = v.filterNot { it.isWhitespace() }
 
