@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,24 +69,33 @@ object AnalysisDialog {
             if (showing) close()
             state.value = ChatAiEngine.stateOf(talker)
             shownTalker = talker
+            WeLogger.i(TAG, "dialog shown talker=$talker state=${ChatAiEngine.stateOf(talker)?.javaClass?.simpleName}")
             shownActivity = java.lang.ref.WeakReference(activity)
             showing = true
 
-            showComposeDialog(activity, directlyDismissable = true) {
+            // ⚠️ 点外部不关：用户实测「弹了一下就没了」——模态框默认点哪里都关，
+            //    而分析结果是要拿来看/点的，误触即消失等于没有。只按「关闭」关。
+            showComposeDialog(activity, directlyDismissable = false) {
                 dismissDialog = onDismiss
-                val dm = activity.resources.displayMetrics
-                val density = dm.density
-                val side = (SIDE_DP * density).toInt()
-                val gap = (GAP_DP * density).toInt()
-                val footerH = ChatUi.footerHeightPx().takeIf { it > 0 } ?: (56 * density).toInt()
-                // 贴输入框上方：底部对齐 + 向上偏移一个输入框高度
-                window.setLayout((dm.widthPixels - side * 2).coerceAtLeast(1), WindowManager.LayoutParams.WRAP_CONTENT)
-                window.setGravity(Gravity.BOTTOM)
-                window.attributes = window.attributes.apply { y = footerH + gap }
-                WeLogger.i(
-                    TAG,
-                    "dialog window w=${dm.widthPixels - side * 2} bottomOffset=${footerH + gap} (footer=$footerH)"
-                )
+                // ⚠️ 窗口几何必须放在 LaunchedEffect 里（写在组合期会被主题的居中覆盖 —— 实测位置不对）；
+                //    跟随 state 变化重算，键盘起落/输入框高度变化都能跟上。
+                LaunchedEffect(state.value) {
+                    val dm = activity.resources.displayMetrics
+                    val density = dm.density
+                    val side = (SIDE_DP * density).toInt()
+                    val gap = (GAP_DP * density).toInt()
+                    val footerH = ChatUi.footerHeightPx().takeIf { it > 0 } ?: (56 * density).toInt()
+                    val lp = window.attributes
+                    lp.width = (dm.widthPixels - side * 2).coerceAtLeast(1)
+                    lp.height = WindowManager.LayoutParams.WRAP_CONTENT
+                    lp.gravity = Gravity.BOTTOM
+                    lp.y = footerH + gap          // 贴输入框上方：距屏幕底部一个输入框高 + 间隙
+                    window.attributes = lp
+                    WeLogger.i(
+                        TAG,
+                        "dialog window w=${lp.width} bottomOffset=${lp.y} gravity=BOTTOM (footer=$footerH)"
+                    )
+                }
 
                 val s = state.value
                 AlertDialogContent(
@@ -101,6 +111,7 @@ object AnalysisDialog {
     fun close() {
         android.os.Handler(android.os.Looper.getMainLooper()).post {
             if (!showing) return@post
+            WeLogger.i(TAG, "dialog closed talker=${shownTalker ?: "-"}")
             showing = false
             shownTalker = null
             dismissDialog?.invoke()

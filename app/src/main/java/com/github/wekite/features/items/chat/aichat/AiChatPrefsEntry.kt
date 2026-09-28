@@ -4,9 +4,8 @@ import android.app.Activity
 import com.github.wekite.features.api.ui.WeContactPrefsScreenApi
 import com.github.wekite.features.api.ui.WeContactPrefsScreenApi.IContactInfoProvider
 import com.github.wekite.features.api.ui.WeContactPrefsScreenApi.PreferenceItem
-import com.github.wekite.features.core.Feature
-import com.github.wekite.features.core.SwitchFeature
 import com.github.wekite.utils.android.currentWxId
+import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.showToast
 
 /**
@@ -21,16 +20,21 @@ import com.github.wekite.utils.android.showToast
  * （`J` 布尔字段 / `P()Z` / `Q(Z)V` / `V(Z)V`），靠猜 setter 风险高 ⇒ 走仓库已验证的
  * `WeContactPrefsScreenApi` 文字行机制（同机制已有 5 个功能在跑）。
  */
-@Feature(name = "AI 助手开关（聊天/群详情）", categories = ["聊天"], description = "在聊天或群详情页单独开启该聊天的 AI 分析与自动回复")
-object AiChatPrefsEntry : SwitchFeature(), IContactInfoProvider {
+object AiChatPrefsEntry : IContactInfoProvider {
+
+    private const val TAG = "AiChatPrefsEntry"
 
     private const val KEY_ANALYZE = "wekite_ai_analyze"
     private const val KEY_AUTO = "wekite_ai_auto"
     private const val KEY_GROUP_ALL = "wekite_ai_group_all"
 
     override fun getContactInfoItem(activity: Activity): List<PreferenceItem> {
-        val talker = activity.currentWxId?.takeIf { it.isNotBlank() } ?: return emptyList()
+        val talker = activity.currentWxId?.takeIf { it.isNotBlank() } ?: run {
+            WeLogger.w(TAG, "asked for items but no talker in ${activity.javaClass.simpleName} intent")
+            return emptyList()
+        }
         val isGroup = ContextBuilder.isGroupTalker(talker)
+        WeLogger.i(TAG, "asked for items talker=$talker group=$isGroup")
         val items = mutableListOf(
             PreferenceItem(
                 key = KEY_ANALYZE,
@@ -86,11 +90,15 @@ object AiChatPrefsEntry : SwitchFeature(), IContactInfoProvider {
         return true
     }
 
-    override fun onEnable() {
+    /** 由 [AiChatAssistant] 在启用时注册（**不要**做成独立 @Feature：
+     *  SwitchFeature 默认关闭，用户不手动打开就永远不生效 —— v3.46 首次实现就栽在这，
+     *  真机日志里连一条注入记录都没有）。 */
+    fun register() {
         WeContactPrefsScreenApi.addProvider(this)
+        WeLogger.i(TAG, "provider registered")
     }
 
-    override fun onDisable() {
+    fun unregister() {
         WeContactPrefsScreenApi.removeProvider(this)
     }
 }

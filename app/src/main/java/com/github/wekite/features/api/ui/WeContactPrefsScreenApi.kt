@@ -61,6 +61,7 @@ object WeContactPrefsScreenApi : ApiFeature() {
 
     override fun onEnable() {
         initReflection()
+        WeLogger.i(TAG, "prefs screen hook installing for ContactInfoUI / ChatroomInfoUI")
 
         listOf(
             ContactInfoUI::class,
@@ -69,7 +70,12 @@ object WeContactPrefsScreenApi : ApiFeature() {
             it.reflekt().apply {
                 firstMethod { name = "initView" }
                     .hookAfter {
-                        val adapterInstance = adapterField.get(thisObject as Activity)
+                        val hostActivity = thisObject as Activity
+                        val adapterInstance = adapterField.get(hostActivity)
+                        WeLogger.i(
+                            TAG,
+                            "initView hooked: ${hostActivity.javaClass.simpleName} providers=${providers.size}"
+                        )
                         for (provider in providers) {
                             try {
                                 val items = provider.getContactInfoItem(thisObject as Activity)
@@ -85,6 +91,7 @@ object WeContactPrefsScreenApi : ApiFeature() {
                                     val pos = item.position.coerceIn(0, adapter.count)
                                     addPreferenceMethod.invoke(adapter, pref, pos)
                                     storedPrefs.getOrPut(thisObject as Activity) { mutableMapOf() }[item.key] = pref
+                                    WeLogger.i(TAG, "item injected key=${item.key} title=${item.title} pos=$pos")
                                 }
                             } catch (ex: Exception) {
                                 WeLogger.e(

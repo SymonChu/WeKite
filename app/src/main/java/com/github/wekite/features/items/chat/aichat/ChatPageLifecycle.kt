@@ -24,16 +24,17 @@ object ChatPageLifecycle {
         app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
             override fun onActivityResumed(act: Activity) {
                 try {
-                    if (!AiChatAssistant.isEnabled) { ChatHeaderStatus.remove(); ChatUi.unbind(); return }
+                    if (!AiChatAssistant.isEnabled) { ChatHeaderStatus.remove(); return }
+                    ChatUi.installListener()
                     ChatUi.bind(act)
-                    ChatHeaderStatus.sync(act, ChatUi.talker)
                 } catch (e: Throwable) {
                     WeLogger.e(TAG, "onActivityResumed sync failed", e)
                 }
             }
 
             override fun onActivityPaused(act: Activity) {
-                if (act === ChatUi.activity) { ChatHeaderStatus.remove(); ChatUi.unbind() }
+                // 只摘显示、**不清会话绑定**（切页瞬间清空会导致回来时状态/弹窗全没）
+                if (act === ChatUi.activity) ChatHeaderStatus.remove()
             }
 
             override fun onActivityDestroyed(act: Activity) {

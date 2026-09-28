@@ -1,6 +1,7 @@
 package com.github.wekite.features.items.chat.aichat
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -8,20 +9,17 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
 import com.github.wekite.utils.WeLogger
-import java.util.Collections
-import java.util.WeakHashMap
+import java.lang.ref.WeakReference
 
 /**
- * 聊天页右上角「AI 状态」显示（**只显示状态，不是开关**）。
+ * 聊天页右上角「AI 状态」显示 + 长按「…」出快捷菜单。
  *
- * 用户 2026-09-28 定案：开关放到「群详情 / 联系人详情」页，头部只保留一个状态提示。
- * - 灰 `AI` = 本聊天未开启
- * - 蓝 `AI` = 自动分析已开
- * - 蓝 `AI…` = 正在分析
- * - 蓝 `AI+` = 全自动回复已开（优先级最高）
- * - **点它 = 打开助手设置**
+ * - 状态（只显示，不是开关）：灰 `AI`=未开 / 蓝 `AI`=分析已开 / 蓝 `AI…`=分析中 / 蓝 `AI+`=全自动已开
+ * - **点状态文字 = 打开助手设置**
+ * - **长按标题栏「…」按钮 = 本聊天的快捷菜单**（用户 2026-09-28 指定的入口方式）
+ * - 本聊天的开关本体在「群详情 / 联系人聊天详情」页（见 `AiChatPrefsEntry`）
  *
- * 状态来源：`AiChatStore` 按 [ChatUi.talker]（页面 Intent 自带）读，不会错位。
+ * ⚠️ 会话 ID 一律来自 [ChatUi]（事件驱动 + 多源，见其注释）；此处绝不自行取会话。
  */
 object ChatHeaderStatus {
     private const val TAG = "AiHeaderStatus"
@@ -33,9 +31,8 @@ object ChatHeaderStatus {
     private var oldTitleWidth = Int.MAX_VALUE
     private var oldEllipsize: TextUtils.TruncateAt? = null
     private var boundTalker: String? = null
-    private val populated = Collections.synchronizedMap(WeakHashMap<Activity, Boolean>())
+    private var menuButton: WeakReference<View>? = null
 
-    /** resume 时调用：把状态贴到标题栏右侧。 */
     fun sync(activity: Activity, talker: String?) {
         if (talker.isNullOrBlank()) { remove(); return }
         boundTalker = talker
@@ -43,12 +40,14 @@ object ChatHeaderStatus {
         val density = activity.resources.displayMetrics.density
         fun dp(v: Int) = (v * density).toInt()
 
+        installMenuLongPress(header, activity, talker)
+
         val existing = label
         if (existing?.parent === header && existing.isShown) {
             refreshText()
             return
         }
-        remove()
+        removeLabelOnly()
 
         val tv = TextView(activity).apply {
             textSize = 12f
@@ -56,8 +55,7 @@ object ChatHeaderStatus {
             setPadding(dp(4), dp(6), dp(4), dp(6))
             isClickable = true
             setOnClickListener {
-                val t = boundTalker
-                if (t != null) AiChatAssistant.openSettingsDialog(activity, t)
+                boundTalker?.let { AiChatAssistant.openSettingsDialog(activity, it) }
             }
         }
         label = tv
@@ -79,13 +77,12 @@ object ChatHeaderStatus {
                 it.maxWidth = (header.width - 2 * (tv.width + dp(56))).coerceAtLeast(dp(60))
                 it.ellipsize = TextUtils.TruncateAt.END
             }
-            populated[activity] = true
         }
         refreshText()
         WeLogger.i(TAG, "status attached talker=$talker")
     }
 
-    /** 状态变化时刷新文字/颜色（分析开始/结束、设置里改开关后调用）。 */
+    /** 状态变化时刷新（分析开始/结束、开关改动后调用）。 */
     fun refreshText() {
         val tv = label ?: return
         val talker = boundTalker ?: return
@@ -100,15 +97,100 @@ object ChatHeaderStatus {
         }
         tv.text = text
         tv.setTextColor(color)
-        tv.contentDescription = "AI 聊天助手状态：$text（点击打开设置）"
+        tv.contentDescription = "AI 聊天助手：$text（点击设置，长按标题栏…出菜单）"
     }
 
+    // ==================== 长按「…」出菜单 ====================
+
+    private fun installMenuLongPress(header: FrameLayout, activity: Activity, talker: String) {
+        val btn = menuButtonOf(header) ?: run {
+            WeLogger.w(TAG, "menu button not found in header")
+            return
+        }
+        if (menuButton?.get() === btn) return
+        btn.isLongClickable = true
+        // 注意：View.setOnLongClickListener 不返回旧监听，无法还原 ⇒ 功能关闭时在回调里放行（不消费事件）
+        btn.setOnLongClickListener {
+            if (!AiChatAssistant.isEnabled) return@setOnLongClickListener false
+            showActions(activity, currentTalker() ?: talker)
+            true
+        }
+        menuButton = WeakReference(btn)
+        WeLogger.i(TAG, "menu long-press installed (button=${btn.javaClass.simpleName})")
+    }
+
+    private fun showActions(activity: Activity, talker: String) {
+        val isGroup = ContextBuilder.isGroupTalker(talker)
+        val items = if (isGroup) arrayOf(
+            "自动分析并给建议：${if (AiChatStore.isAnalyzeOn(talker)) "开" else "关"}",
+            "全自动回复：${if (AiChatStore.isAutoReplyOn(talker)) "开" else "关"}",
+            "群里所有消息也处理：${if (AiChatStore.isGroupAllMessages(talker)) "开" else "关（只回@我）"}",
+            "重新分析最新一条",
+            "助手设置",
+        ) else arrayOf(
+            "自动分析并给建议：${if (AiChatStore.isAnalyzeOn(talker)) "开" else "关"}",
+            "全自动回复：${if (AiChatStore.isAutoReplyOn(talker)) "开" else "关"}",
+            "重新分析最新一条",
+            "助手设置",
+        )
+        WeLogger.i(TAG, "actions shown talker=$talker group=$isGroup")
+        AlertDialog.Builder(activity)
+            .setTitle("AI 聊天助手")
+            .setItems(items) { _, which ->
+                when {
+                    which == 0 -> {
+                        val on = !AiChatStore.isAnalyzeOn(talker)
+                        AiChatStore.setAnalyzeOn(talker, on)
+                        if (!on) AnalysisDialog.close()
+                    }
+                    which == 1 -> {
+                        val on = !AiChatStore.isAutoReplyOn(talker)
+                        if (on && !AiChatConfig.autoReplyConsent) AiChatConfig.autoReplyConsent = true
+                        AiChatStore.setAutoReplyOn(talker, on)
+                    }
+                    isGroup && which == 2 ->
+                        AiChatStore.setGroupAllMessages(talker, !AiChatStore.isGroupAllMessages(talker))
+                    isGroup && which == 3 -> ChatAiEngine.retry(talker)
+                    isGroup && which == 4 -> AiChatAssistant.openSettingsDialog(activity, talker)
+                    !isGroup && which == 2 -> ChatAiEngine.retry(talker)
+                    !isGroup && which == 3 -> AiChatAssistant.openSettingsDialog(activity, talker)
+                }
+                refreshText()
+            }
+            .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun currentTalker(): String? = ChatUi.talker ?: boundTalker
+
     fun remove() {
+        removeLabelOnly()
+        menuButton?.get()?.let { runCatching { it.setOnLongClickListener(null) } }
+        menuButton = null
+        boundTalker = null
+    }
+
+    private fun removeLabelOnly() {
         label?.let { (it.parent as? ViewGroup)?.removeView(it) }
         label = null
-        boundTalker = null
         title?.let { it.maxWidth = oldTitleWidth; it.ellipsize = oldEllipsize }
         title = null
+    }
+
+    // ==================== 定位辅助 ====================
+
+    /** 标题栏右侧的「…」按钮：可点击、宽度小于标题栏 1/3、位于右半区且最靠右者。 */
+    private fun menuButtonOf(header: FrameLayout): View? {
+        val headerPos = IntArray(2).also { header.getLocationOnScreen(it) }
+        return descendants(header)
+            .filter { it.isClickable && it.isShown && it.width in 1..(header.width / 3) }
+            .mapNotNull { v ->
+                val p = IntArray(2).also { v.getLocationOnScreen(it) }
+                val x = p[0] - headerPos[0]
+                if (x > header.width * 0.7) v to x else null
+            }
+            .maxByOrNull { it.second }
+            ?.first
     }
 
     private fun menuSpaceFor(header: FrameLayout, density: Float): Int {

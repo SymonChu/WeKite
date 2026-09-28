@@ -157,7 +157,8 @@ object ChatAiEngine {
 
     private suspend fun runPipeline(talker: String, triggerMsgId: Long, auto: Boolean) {
         val isGroup = ContextBuilder.isGroupTalker(talker)
-        delay(800)  // 等 DB 行与语音转写稳定
+        val t0 = System.currentTimeMillis()
+        delay(250)  // 等 DB 行稳定（原 800ms，实测偏保守；语音转写多数在插入时已就绪）
         val latest = latestIncoming(talker, isGroup)
         if (latest == null) {
             WeLogger.i(TAG, "no readable incoming message talker=$talker")
@@ -167,6 +168,7 @@ object ChatAiEngine {
         }
         // 目标消息按 msgId 从上下文里排除（否则同一条既当「目标」又当「前文」）
         val built = ContextBuilder.build(talker, excludeMsgId = latest.first, isGroup = isGroup)
+        val tCtx = System.currentTimeMillis()
         val state = ChoiceProtocol.contextBlock(
             targetText = latest.second,
             speaker = latest.third,
@@ -180,6 +182,7 @@ object ChatAiEngine {
             val body = AiChatHttp.jevExchange(IntentQuestions.payload(state, AiChatConfig.jevModel))
             emotionLine = IntentQuestions.formatOutcome(IntentQuestions.parse(body))
         }
+        val tJev = System.currentTimeMillis()
 
         // 2) LLM 解读 + 建议回复
         if (!AiChatConfig.llmConfigured) {
@@ -196,6 +199,7 @@ object ChatAiEngine {
             knowledge = knowledge,
         )
         val parsed = ReplyProtocol.parse(AiChatHttp.llmExchange(messages, temperature = 0.7))
+        val tLlm = System.currentTimeMillis()
         val note = buildString {
             if (built.skippedVoice > 0) append("前文有 ${built.skippedVoice} 条语音未转写。")
             if (built.truncated) append("上下文过长已截断。")
@@ -239,6 +243,10 @@ object ChatAiEngine {
         WeLogger.i(
             TAG,
             "done talker=$talker emotion=$emotionLine replies=${parsed.replies.size} autoSent=$autoSent"
+        )
+        WeLogger.i(
+            TAG,
+            "timing talker=$talker ctx=${tCtx - t0}ms jev=${tJev - tCtx}ms llm=${tLlm - tJev}ms total=${tLlm - t0}ms"
         )
     }
 
