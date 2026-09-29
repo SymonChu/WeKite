@@ -36,7 +36,9 @@ object ChatUi {
                 WeLogger.i(TAG, "conversation event: ${this.talker ?: "-"} -> $talker")
             }
             this.talker = talker
+            // activity 为空时 W 级可见：静默跳过曾让徽标消失无从排查（2026-09-29 真机日志）
             activity?.let { ChatHeaderStatus.sync(it, talker) }
+                ?: WeLogger.w(TAG, "no activity bound, skip header sync talker=$talker")
         }
     }
 

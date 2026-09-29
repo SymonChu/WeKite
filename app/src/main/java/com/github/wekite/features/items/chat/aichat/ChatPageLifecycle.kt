@@ -25,6 +25,13 @@ object ChatPageLifecycle {
             override fun onActivityResumed(act: Activity) {
                 try {
                     if (!AiChatAssistant.isEnabled) { ChatHeaderStatus.remove(); return }
+                    // 只 bind 聊天宿主：LauncherUI（主界面；Fragment 级切聊天不触发 Activity resume，
+                    // 全靠会话事件）或带 Chat_User extra 的聊天 Activity。Splash/设置页混进来会
+                    // 污染 ChatUi.activityRef，之后事件路径的 sync 拿错 decorView，findHeader
+                    // 必然失败（2026-09-29 19:25 窗口徽标静默消失的成因之一）。
+                    val isChatHost = act is com.tencent.mm.ui.LauncherUI ||
+                        act.intent?.hasExtra("Chat_User") == true
+                    if (!isChatHost) return
                     ChatUi.installListener()
                     ChatUi.bind(act)
                 } catch (e: Throwable) {
