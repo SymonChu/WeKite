@@ -145,12 +145,18 @@ object ChatAiEngine {
         WeLogger.i(TAG, "incoming talker=$talker type=$type msgId=$msgId analyze=$analyze auto=$auto len=${content.length}")
 
         // 群聊默认只在被 @（或 @所有人）时处理，避免在活跃群里见谁都插话；
-        // 「所有消息也处理」按群单独开（AiChatStore.isGroupAllMessages）
+        // 「所有消息也处理」按群单独开（AiChatStore.isGroupAllMessages）。
+        // 例外（用户 2026-09-29 要求的 OR 语义）：配置了关键词白名单且这条消息命中 ⇒
+        // 即使没 @ 我也放行（后续发送仍过 canAutoSend 全套规则）。
         if (ContextBuilder.isGroupTalker(talker) && !AiChatStore.isGroupAllMessages(talker)) {
             val body = stripGroupPrefix(content)
             if (!GroupMention.isAddressedToMe(talker, msgId, body)) {
-                WeLogger.i(TAG, "skip group message (not addressed to me) talker=$talker msgId=$msgId")
-                return
+                if (keywordWhitelistHit(content)) {
+                    WeLogger.i(TAG, "group message not @me but keyword hit, process talker=$talker msgId=$msgId")
+                } else {
+                    WeLogger.i(TAG, "skip group message (not addressed to me) talker=$talker msgId=$msgId")
+                    return
+                }
             }
         }
 
@@ -293,10 +299,25 @@ object ChatAiEngine {
         if (inQuietHours(now)) { WeLogger.i(TAG, "auto blocked: quiet hours talker=$talker"); return false }
         val keywords = AiChatConfig.autoReplyKeywords.split(',', '，').map { x: String -> x.trim() }.filter { it.isNotEmpty() }
         if (keywords.isNotEmpty()) {
-            val latest = latestIncoming(talker, ContextBuilder.isGroupTalker(talker))?.second.orEmpty()
-            if (keywords.none { latest.contains(it) }) { WeLogger.i(TAG, "auto blocked: keywords talker=$talker"); return false }
+            // OR 语义（用户 2026-09-29）：群聊里被 @ 我 ⇒ 不看关键词直接放行；
+            // 其余（单聊全部 / 群未@）按白名单过滤。空名单 = 不过滤。
+            val isGroup = ContextBuilder.isGroupTalker(talker)
+            val latest = latestIncoming(talker, isGroup)
+            val body = latest?.second.orEmpty()
+            val atMe = isGroup && latest != null &&
+                GroupMention.isAddressedToMe(talker, latest.first, stripGroupPrefix(body))
+            if (!atMe && keywords.none { body.contains(it) }) {
+                WeLogger.i(TAG, "auto blocked: keywords talker=$talker"); return false
+            }
         }
         return true
+    }
+
+    /** 关键词白名单是否命中（空名单恒 false；命中判定与 [canAutoSend] 里的发送过滤同一套词表）。 */
+    private fun keywordWhitelistHit(content: String): Boolean {
+        val keywords = AiChatConfig.autoReplyKeywords.split(',', '，').map { x: String -> x.trim() }.filter { it.isNotEmpty() }
+        if (keywords.isEmpty()) return false
+        return keywords.any { content.contains(it) }
     }
 
     private fun inQuietHours(now: Long): Boolean {
