@@ -238,12 +238,16 @@ object BubbleCard {
     }
 
     private fun makeCard(row: View, anchor: View? = null): CardLayout {
-        // 宽度 = 行宽 − 气泡左缩进 − 16dp（≈ 该聊天最宽气泡能占的宽度），固定不随内容缩；
+        // 宽度上限 = 气泡宽度上限（屏宽 68%），不是行宽：微信最宽文本气泡 ≈ 1280px/6.8 寸
+        // 真机 49mm（用户尺量 + 09-28 截图像素 18%→87% 双源吻合 ≈ 872px/68%）。旧行为拿
+        // 行宽（≈ 全屏）当上限 ⇒ 卡片比气泡宽出一截（用户 2026-10-09 报「卡片过宽」）。
         // 行未布局完时按屏幕宽 65% 兜底（v3.50「超出屏幕」的根因就是固定 300dp 兜底值）。
-        val rowCap = (row.width - leftOf(anchor ?: row, row) - dp(row, 16)).takeIf { row.width > 0 }
         val screenW = row.resources.displayMetrics.widthPixels
+        val bubbleCap = (screenW * 0.68f).toInt()
+        val rowCap = (row.width - leftOf(anchor ?: row, row) - dp(row, 16)).takeIf { row.width > 0 }
         val fallback = (screenW * 0.65f).toInt()
-        val w = (rowCap ?: fallback).coerceAtLeast(dp(row, 140)).coerceAtMost(screenW - dp(row, 16))
+        val w = (rowCap ?: fallback).coerceAtMost(bubbleCap).coerceAtLeast(dp(row, 140))
+        WeLogger.i(TAG, "card width w=$w (rowCap=$rowCap bubbleCap=$bubbleCap)")
         return CardLayout(row.context, w)
     }
 
