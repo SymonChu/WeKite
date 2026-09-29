@@ -222,8 +222,8 @@ object BubbleCard {
         return (ap[0] - pp[0] - ancestor.paddingLeft).coerceAtLeast(0)
     }
 
-    /** 卡片容器：宽度=气泡锚点实测宽度（用户 2026-09-29：和微信气泡一样宽，之前 300dp 上限超屏）。 */
-    private class CardLayout(context: android.content.Context, val minWidthPx: Int, val maxWidthPx: Int) :
+    /** 卡片容器：固定宽度（用户 2026-09-29：按最宽气泡的宽度，别跟当前消息气泡/内容变宽变窄）。 */
+    private class CardLayout(context: android.content.Context, val widthPx: Int) :
         LinearLayout(context) {
         init {
             orientation = LinearLayout.VERTICAL
@@ -231,26 +231,20 @@ object BubbleCard {
 
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             super.onMeasure(
-                android.view.View.MeasureSpec.makeMeasureSpec(maxWidthPx, android.view.View.MeasureSpec.AT_MOST),
+                android.view.View.MeasureSpec.makeMeasureSpec(widthPx, android.view.View.MeasureSpec.EXACTLY),
                 heightMeasureSpec,
             )
-            if (measuredWidth < minWidthPx) {
-                super.onMeasure(
-                    android.view.View.MeasureSpec.makeMeasureSpec(minWidthPx, android.view.View.MeasureSpec.EXACTLY),
-                    heightMeasureSpec,
-                )
-            }
         }
     }
 
     private fun makeCard(row: View, anchor: View? = null): CardLayout {
-        // 宽度取「气泡实测宽度」：短消息=窄卡，长消息=宽卡，跟气泡视觉对齐；
-        // 气泡未布局/异常窄时退化为 120dp 下限；再夹一个不超过行宽−16dp 的上界防超屏。
-        val bubbleW = anchor?.width?.takeIf { it > 0 }
-        val rowCap = (row.width - dp(row, 16)).takeIf { row.width > 0 }
-        val maxW = listOfNotNull(bubbleW, rowCap).minOrNull() ?: dp(row, 200)
-        val minW = dp(row, 120)
-        return CardLayout(row.context, minWidthPx = minW, maxWidthPx = maxOf(minW, maxW))
+        // 宽度 = 行宽 − 气泡左缩进 − 16dp（≈ 该聊天最宽气泡能占的宽度），固定不随内容缩；
+        // 行未布局完时按屏幕宽 65% 兜底（v3.50「超出屏幕」的根因就是固定 300dp 兜底值）。
+        val rowCap = (row.width - leftOf(anchor ?: row, row) - dp(row, 16)).takeIf { row.width > 0 }
+        val screenW = row.resources.displayMetrics.widthPixels
+        val fallback = (screenW * 0.65f).toInt()
+        val w = (rowCap ?: fallback).coerceAtLeast(dp(row, 140)).coerceAtMost(screenW - dp(row, 16))
+        return CardLayout(row.context, w)
     }
 
     /** 摘掉某聊天已挂的全部卡片（关开关 / 清状态时用）。 */
@@ -314,43 +308,46 @@ object BubbleCard {
                         setPadding(0, dp(row, 4), 0, 0)
                     })
                 }
-                r.replies.forEachIndexed { i, reply ->
-                    val rowLine = LinearLayout(row.context).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        gravity = android.view.Gravity.CENTER_VERTICAL
-                        setPadding(0, dp(row, 4), 0, 0)
-                    }
-                    rowLine.addView(
-                        text("${i + 1}. $reply", 12f, bodyColor).apply {
+                // 建议列表只在手动模式显示（用户 2026-09-29：全自动时不显示，反正会自动发）
+                if (!AiChatStore.isAutoReplyOn(talker)) {
+                    r.replies.forEachIndexed { i, reply ->
+                        val rowLine = LinearLayout(row.context).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            gravity = android.view.Gravity.CENTER_VERTICAL
+                            setPadding(0, dp(row, 4), 0, 0)
+                        }
+                        rowLine.addView(
+                            text("${i + 1}. $reply", 12f, bodyColor).apply {
+                                setOnClickListener {
+                                    val ok = InputBar.fill(reply)
+                                    android.widget.Toast.makeText(
+                                        row.context,
+                                        if (ok) "已填入输入框" else "填入失败（可长按复制）",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
+                                setOnLongClickListener {
+                                    val cm = row.context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                            as android.content.ClipboardManager
+                                    cm.setPrimaryClip(android.content.ClipData.newPlainText("reply", reply))
+                                    android.widget.Toast.makeText(row.context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+                                    true
+                                }
+                            },
+                            LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                        )
+                        rowLine.addView(text("发送", 12f, titleColor, true).apply {
+                            setPadding(dp(row, 8), dp(row, 2), dp(row, 2), dp(row, 2))
                             setOnClickListener {
-                                val ok = InputBar.fill(reply)
+                                val ok = InputBar.send(talker, reply)
                                 android.widget.Toast.makeText(
-                                    row.context,
-                                    if (ok) "已填入输入框" else "填入失败（可长按复制）",
+                                    row.context, if (ok) "已发送" else "发送失败",
                                     android.widget.Toast.LENGTH_SHORT
                                 ).show()
                             }
-                            setOnLongClickListener {
-                                val cm = row.context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                                        as android.content.ClipboardManager
-                                cm.setPrimaryClip(android.content.ClipData.newPlainText("reply", reply))
-                                android.widget.Toast.makeText(row.context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
-                                true
-                            }
-                        },
-                        LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                    )
-                    rowLine.addView(text("发送", 12f, titleColor, true).apply {
-                        setPadding(dp(row, 8), dp(row, 2), dp(row, 2), dp(row, 2))
-                        setOnClickListener {
-                            val ok = InputBar.send(talker, reply)
-                            android.widget.Toast.makeText(
-                                row.context, if (ok) "已发送" else "发送失败",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    })
-                    card.addView(rowLine)
+                        })
+                        card.addView(rowLine)
+                    }
                 }
                 if (r.note.isNotBlank()) {
                     card.addView(text(r.note, 10f, subColor).apply { setPadding(0, dp(row, 3), 0, 0) })

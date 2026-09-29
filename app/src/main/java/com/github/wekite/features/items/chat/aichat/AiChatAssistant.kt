@@ -281,7 +281,7 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
                 val llmOk = AiChatConfig.llmConfigured
                 Text(
                     buildString {
-                        append("当前聊天：分析")
+                        append("当前聊天：显示分析卡")
                         append(if (analyzeOn) " 开" else " 关")
                         append(" · 自动回复")
                         append(if (autoOn) " 开" else " 关")
@@ -402,7 +402,7 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
             OutlinedTextField(
                 value = keywords,
                 onValueChange = { keywords = it; AiChatConfig.autoReplyKeywords = it },
-                label = { Text("关键词白名单（逗号分隔，空 = 不过滤）") },
+                label = { Text("群聊触发关键词（仅「只回@我」模式生效，@我 或 含关键词 即回）") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )

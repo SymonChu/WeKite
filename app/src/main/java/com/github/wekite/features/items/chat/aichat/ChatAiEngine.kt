@@ -175,17 +175,24 @@ object ChatAiEngine {
     }
 
     private suspend fun runAnalyze(talker: String, msgId: Long, auto: Boolean) {
-        states[talker] = State.Working(msgId)
-        putMsgState(talker, msgId, State.Working(msgId))
-        BubbleCard.refresh(talker)
+        // 静默模式（用户 2026-09-29）：只开自动回复、不开分析 ⇒ 管线照跑（发送需要内容），
+        // 但 UI 全部不写 —— 无卡片、无面板、无 Working 态。
+        val show = AiChatStore.isAnalyzeOn(talker)
+        if (show) {
+            states[talker] = State.Working(msgId)
+            putMsgState(talker, msgId, State.Working(msgId))
+            BubbleCard.refresh(talker)
+        }
         try {
             slots.withPermit { runPipeline(talker, msgId, auto) }
         } catch (e: kotlinx.coroutines.CancellationException) {
             states.remove(talker)
         } catch (e: Throwable) {
             WeLogger.e(TAG, "pipeline failed talker=$talker", e)
-            states[talker] = State.Failed(e.message ?: "分析失败")
-            putMsgState(talker, msgId, State.Failed(e.message ?: "分析失败"))
+            if (show) {
+                states[talker] = State.Failed(e.message ?: "分析失败")
+                putMsgState(talker, msgId, State.Failed(e.message ?: "分析失败"))
+            }
         } finally {
             running.remove(talker)
         }
@@ -198,8 +205,10 @@ object ChatAiEngine {
         val latest = latestIncoming(talker, isGroup)
         if (latest == null) {
             WeLogger.i(TAG, "no readable incoming message talker=$talker")
-            states[talker] = State.Failed("没有可分析的文本消息")
-            BubbleCard.refresh(talker)
+            if (AiChatStore.isAnalyzeOn(talker)) {
+                states[talker] = State.Failed("没有可分析的文本消息")
+                BubbleCard.refresh(talker)
+            }
             return
         }
         // 目标消息按 msgId 从上下文里排除（否则同一条既当「目标」又当「前文」）
@@ -236,16 +245,24 @@ object ChatAiEngine {
             knowledge = knowledge,
             persona = PersonaStore.injectBlock(talker),
         )
-        val parsed = ReplyProtocol.parse(AiChatHttp.llmExchange(messages, temperature = 0.9))
+        val parsed = ReplyProtocol.parse(
+            AiChatHttp.llmExchange(messages, temperature = 0.9),
+            maxReplies = AiChatConfig.suggestionCount,
+        )
         val tLlm = System.currentTimeMillis()
-        val note = buildString {
+        val noteBuilder = buildString {
             if (built.skippedVoice > 0) append("前文有 ${built.skippedVoice} 条语音未转写。")
             if (built.truncated) append("上下文取最近 ${built.messages.size} 条。")
         }
 
-        // 3) 自动回复（双闸已在触发处判定；发送前再查一次）
+        // 3) 自动回复（双闸已在触发处判定；发送前再查一次）。
+        // 拦截原因写进卡片 note（用户 2026-09-29：「不自动回了」看不出原因 ⇒ 直接在 UI 说明）。
         var autoSent = false
-        if (auto && parsed.replies.isNotEmpty() && canAutoSend(talker)) {
+        val blockReason = if (auto) autoBlockReason(talker) else null
+        val note = noteBuilder + if (blockReason != null) {
+            "未自动回复：$blockReason。"
+        } else ""
+        if (auto && parsed.replies.isNotEmpty() && blockReason == null) {
             val base = AiChatConfig.autoReplyDelaySec.coerceIn(3, 60) * 1000L
             delay(base + (0L..2000L).random())
             if (AiChatStore.isAutoReplyOn(talker)) {
@@ -276,12 +293,15 @@ object ChatAiEngine {
             }
         }
 
-        states[talker] = State.Done(Result(latest.first, emotionLine, parsed.reading, parsed.replies, autoSent, note))
-        putMsgState(talker, latest.first, states[talker]!!)
-        BubbleCard.refresh(talker)
+        // 静默模式：结果只落日志（排查用），不进 states/byMsg，不挂卡
+        if (AiChatStore.isAnalyzeOn(talker)) {
+            states[talker] = State.Done(Result(latest.first, emotionLine, parsed.reading, parsed.replies, autoSent, note))
+            putMsgState(talker, latest.first, states[talker]!!)
+            BubbleCard.refresh(talker)
+        }
         WeLogger.i(
             TAG,
-            "done talker=$talker emotion=$emotionLine replies=${parsed.replies.size} autoSent=$autoSent"
+            "done talker=$talker emotion=$emotionLine replies=${parsed.replies.size} autoSent=$autoSent silent=${!AiChatStore.isAnalyzeOn(talker)}"
         )
         WeLogger.i(
             TAG,
@@ -291,26 +311,29 @@ object ChatAiEngine {
 
     // ==================== 自动回复规则 ====================
 
-    private fun canAutoSend(talker: String): Boolean {
+    private fun canAutoSend(talker: String): Boolean = autoBlockReason(talker) == null
+
+    /** 自动回复的拦截原因；null = 允许发送（理由同时用于卡片 note 展示）。 */
+    private fun autoBlockReason(talker: String): String? {
         val now = System.currentTimeMillis()
         val cooldown = AiChatConfig.autoReplyCooldownSec.coerceAtLeast(10) * 1000L
-        lastReplyAt[talker]?.let { if (now - it < cooldown) { WeLogger.i(TAG, "auto blocked: cooldown talker=$talker"); return false } }
-        if (dailyCount(talker) >= AiChatConfig.autoReplyDailyLimit) { WeLogger.i(TAG, "auto blocked: daily limit talker=$talker"); return false }
-        if (inQuietHours(now)) { WeLogger.i(TAG, "auto blocked: quiet hours talker=$talker"); return false }
+        lastReplyAt[talker]?.let { if (now - it < cooldown) { WeLogger.i(TAG, "auto blocked: cooldown talker=$talker"); return "冷却中" } }
+        if (dailyCount(talker) >= AiChatConfig.autoReplyDailyLimit) { WeLogger.i(TAG, "auto blocked: daily limit talker=$talker"); return "达每日上限" }
+        if (inQuietHours(now)) { WeLogger.i(TAG, "auto blocked: quiet hours talker=$talker"); return "免打扰时段" }
         val keywords = AiChatConfig.autoReplyKeywords.split(',', '，').map { x: String -> x.trim() }.filter { it.isNotEmpty() }
-        if (keywords.isNotEmpty()) {
-            // OR 语义（用户 2026-09-29）：群聊里被 @ 我 ⇒ 不看关键词直接放行；
-            // 其余（单聊全部 / 群未@）按白名单过滤。空名单 = 不过滤。
-            val isGroup = ContextBuilder.isGroupTalker(talker)
-            val latest = latestIncoming(talker, isGroup)
+        // 白名单的角色随触发模式变（用户 2026-09-29 定稿）：
+        // - 群聊「只回@我」：白名单是**额外触发通道**（@我 或 关键词，任一即发）
+        // - 群聊「所有消息也处理」/单聊：消息本就在处理范围内，白名单**不再拦截**
+        if (keywords.isNotEmpty() && ContextBuilder.isGroupTalker(talker) && !AiChatStore.isGroupAllMessages(talker)) {
+            val latest = latestIncoming(talker, true)
             val body = latest?.second.orEmpty()
-            val atMe = isGroup && latest != null &&
+            val atMe = latest != null &&
                 GroupMention.isAddressedToMe(talker, latest.first, stripGroupPrefix(body))
             if (!atMe && keywords.none { body.contains(it) }) {
-                WeLogger.i(TAG, "auto blocked: keywords talker=$talker"); return false
+                WeLogger.i(TAG, "auto blocked: keywords talker=$talker"); return "不含关键词"
             }
         }
-        return true
+        return null
     }
 
     /** 关键词白名单是否命中（空名单恒 false；命中判定与 [canAutoSend] 里的发送过滤同一套词表）。 */

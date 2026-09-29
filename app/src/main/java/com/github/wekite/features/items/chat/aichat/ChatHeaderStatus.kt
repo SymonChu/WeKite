@@ -131,7 +131,7 @@ object ChatHeaderStatus {
         // 圆角卡片菜单：原生 AlertDialog 在微信主题下是直角（2026-09-28 用户要求圆角）。
         // 动作直接绑定条目，不再按下标分发，避免增删条目时错位。
         val items = buildList {
-            add(ActionItem("自动分析并给建议：${if (AiChatStore.isAnalyzeOn(talker)) "开" else "关"}") {
+            add(ActionItem("显示 AI 分析卡：${if (AiChatStore.isAnalyzeOn(talker)) "开" else "关（开自动回复则后台静默）"}") {
                 val on = !AiChatStore.isAnalyzeOn(talker)
                 AiChatStore.setAnalyzeOn(talker, on)
                 if (!on) ChatAiEngine.clear(talker)
@@ -215,7 +215,7 @@ object ChatHeaderStatus {
                 val p = IntArray(2).also { v.getLocationOnScreen(it) }
                 (p[0] - headerPos[0]).takeIf { it > header.width * 0.7 }
             }.minOrNull()
-        return menuLeftX?.let { header.width - it + dp(2) } ?: dp(60)
+        return menuLeftX?.let { header.width - it } ?: dp(60)
     }
 
     private fun findHeader(activity: Activity): FrameLayout? {

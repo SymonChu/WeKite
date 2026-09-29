@@ -48,7 +48,7 @@ object ReplyProtocol {
         }
     )
 
-    fun parse(body: String): Analysis {
+    fun parse(body: String, maxReplies: Int = 6): Analysis {
         val text = extractMessage(body).trim()
         val jsonText = Regex("\\{.*\\}", RegexOption.DOT_MATCHES_ALL).find(text)?.value ?: text
         val obj = JSONObject(jsonText)
@@ -61,7 +61,8 @@ object ReplyProtocol {
             }
         }
         require(reading.isNotBlank() || replies.isNotEmpty()) { "模型没有返回可用的解读或建议" }
-        return Analysis(reading, replies)
+        // 提示词的「1-N 条」是软约束，模型偶尔超发（temp 0.9 实测 5-6 条）⇒ 解析端硬夹取
+        return Analysis(reading, replies.take(maxReplies.coerceIn(1, 6)))
     }
 
     private fun extractMessage(body: String): String {
