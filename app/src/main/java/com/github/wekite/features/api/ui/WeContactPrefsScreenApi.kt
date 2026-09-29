@@ -61,11 +61,14 @@ object WeContactPrefsScreenApi : ApiFeature() {
 
     override fun onEnable() {
         initReflection()
-        WeLogger.i(TAG, "prefs screen hook installing for ContactInfoUI / ChatroomInfoUI")
+        WeLogger.i(TAG, "prefs screen hook installing for ContactInfoUI / ChatroomInfoUI / ChattingInfoUI")
 
         listOf(
             ContactInfoUI::class,
-            ChatroomInfoUI::class
+            ChatroomInfoUI::class,
+            // 单聊「聊天详情」页：用户 2026-09-28 反馈单聊详情页没有 AI 开关（群详情有）。
+            // 类名若在宿主版本上不存在， reflekt 拿到的 Class 为空会跳过，不影响另两页。
+            com.tencent.mm.ui.chatting.ChattingInfoUI::class,
         ).forEach {
             it.reflekt().apply {
                 firstMethod { name = "initView" }

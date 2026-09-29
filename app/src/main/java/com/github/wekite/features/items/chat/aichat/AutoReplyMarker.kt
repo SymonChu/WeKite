@@ -26,7 +26,7 @@ object AutoReplyMarker {
     private const val DEDUP_MS = 120_000L
 
     /** 系统提示文案（可配，占位：无）。 */
-    private var noticeText by prefOption("ai_chat_mark_text", "本条消息由 AI 自动回复（仅你可见）")
+    private var noticeText by prefOption("ai_chat_mark_text", "本条消息由 AI 自动回复")
 
     /**
      * 自动发送成功后调用：在该消息下方插一条系统提示行。
@@ -41,7 +41,7 @@ object AutoReplyMarker {
         recentlyMarked[key] = now
 
         val createTime = findCreateTime(talker, content)
-        val text = noticeText.ifBlank { "本条消息由 AI 自动回复（仅你可见）" }
+        val text = noticeText.ifBlank { "本条消息由 AI 自动回复" }
         return try {
             WeMessageApi.createSimpleMsgInfoAndInsert(
                 MessageType.SYSTEM.code,

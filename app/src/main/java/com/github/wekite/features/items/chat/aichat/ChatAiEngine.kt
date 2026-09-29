@@ -228,12 +228,13 @@ object ChatAiEngine {
             relationship = if (isGroup) "群聊成员" else "朋友",
             count = AiChatConfig.suggestionCount,
             knowledge = knowledge,
+            persona = PersonaStore.injectBlock(talker),
         )
-        val parsed = ReplyProtocol.parse(AiChatHttp.llmExchange(messages, temperature = 0.7))
+        val parsed = ReplyProtocol.parse(AiChatHttp.llmExchange(messages, temperature = 0.9))
         val tLlm = System.currentTimeMillis()
         val note = buildString {
             if (built.skippedVoice > 0) append("前文有 ${built.skippedVoice} 条语音未转写。")
-            if (built.truncated) append("上下文过长已截断。")
+            if (built.truncated) append("上下文取最近 ${built.messages.size} 条。")
         }
 
         // 3) 自动回复（双闸已在触发处判定；发送前再查一次）

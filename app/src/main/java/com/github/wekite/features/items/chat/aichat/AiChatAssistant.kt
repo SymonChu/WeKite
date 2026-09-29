@@ -74,7 +74,21 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
     override fun onClick(context: ComponentActivity) = showSettingsDialog(context)
 
     fun openSettingsDialog(activity: android.app.Activity, talker: String? = null) {
-        (activity as? ComponentActivity)?.let { showSettingsDialog(it, talker) }
+        // 微信聊天页的 Activity 不是 ComponentActivity；强转失败会静默不弹（2026-09-28 用户实测点不动）
+        showSettingsDialog(activity, talker)
+    }
+
+    /** 「本聊天预设（人设/风格）」弹窗：手写人设 + 自动风格画像。 */
+    fun openPersonaDialog(activity: android.app.Activity, talker: String) {
+        showComposeDialog(activity, directlyDismissable = false) {
+            val dm = activity.resources.displayMetrics
+            window.setLayout((dm.widthPixels * 0.92f).toInt(), (dm.heightPixels * 0.7f).toInt())
+            AlertDialogContent(
+                title = { Text("本聊天预设") },
+                text = { PersonaContent(talker) },
+                confirmButton = { Button(onDismiss) { Text("关闭") } },
+            )
+        }
     }
 
     override fun onCreateView(param: com.github.wekite.utils.HookParam, view: View) {
@@ -98,7 +112,7 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
 
     // ==================== 设置弹窗 ====================
 
-    private fun showSettingsDialog(activity: ComponentActivity, explicitTalker: String? = null) {
+    private fun showSettingsDialog(activity: android.app.Activity, explicitTalker: String? = null) {
         // 从聊天页进入 ⇒ 用该聊天；从模块设置页进入 ⇒ 用最近跟踪到的会话
         val targetTalker = explicitTalker?.takeIf { it.isNotBlank() }
             ?: ChatUi.talker
@@ -148,13 +162,14 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
         min: Int,
         max: Int,
         unit: String,
+        step: Int = 1,
         onCommit: (Int) -> Unit,
     ) {
         var v by remember { mutableStateOf(value) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, modifier = Modifier.weight(1f))
             TextButton({
-                if (v > min) { v = v - 1; onCommit(v) }
+                if (v - step >= min) { v = v - step; onCommit(v) }
             }) { Text("−") }
             Text(
                 "$v $unit",
@@ -162,8 +177,68 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
                 modifier = Modifier.padding(horizontal = 4.dp),
             )
             TextButton({
-                if (v < max) { v = v + 1; onCommit(v) }
+                if (v + step <= max) { v = v + step; onCommit(v) }
             }) { Text("＋") }
+        }
+    }
+
+    @Composable
+    private fun PersonaContent(talker: String) {
+        var preset by remember { mutableStateOf(PersonaStore.preset(talker)) }
+        var profile by remember { mutableStateOf(PersonaStore.profile(talker)) }
+        var autoRegen by remember { mutableStateOf(PersonaStore.profileAutoRegen(talker)) }
+        var status by remember { mutableStateOf("") }
+        var busy by remember { mutableStateOf(false) }
+
+        DefaultColumn(
+            modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
+            scrollable = true,
+        ) {
+            Text("手写人设（对 AI 优先级最高）", style = MaterialTheme.typography.titleSmall)
+            OutlinedTextField(
+                value = preset,
+                onValueChange = { preset = it; PersonaStore.setPreset(talker, it) },
+                label = { Text("如：我妈，说话随意但要有分寸 / 工作群，简洁正式") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2,
+            )
+
+            Text("风格画像（自动总结，AI 模仿用）", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 12.dp))
+            if (profile.isBlank()) {
+                Text("还没有画像。点「生成」从你在该会话的发言里总结。", style = MaterialTheme.typography.bodySmall)
+            } else {
+                val age = PersonaStore.profileAgeDays(talker)
+                Text(
+                    (if (age > 7) "已过期（${age} 天前生成）：\n" else "${age} 天前生成：\n") + profile,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton({
+                    if (!busy) {
+                        scope.launch {
+                            busy = true
+                            status = "生成中…（读取你在该会话的最近发言）"
+                            val err = PersonaStore.regenerateBlocking(talker)
+                            busy = false
+                            status = err ?: "已更新"
+                            if (err == null) profile = PersonaStore.profile(talker)
+                        }
+                    }
+                }) { Text(if (busy) "生成中…" else "生成 / 重新生成") }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(
+                    checked = autoRegen,
+                    onCheckedChange = { PersonaStore.setProfileAutoRegen(talker, it); autoRegen = it },
+                )
+                Text(
+                    "过期后自动重新生成（默认关）",
+                    modifier = Modifier.padding(start = 8.dp),
+                )
+            }
+            if (status.isNotBlank()) Text(status, style = MaterialTheme.typography.bodySmall)
+            androidx.compose.foundation.layout.Spacer(Modifier.height(12.dp))
         }
     }
 
@@ -177,18 +252,56 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
         var llmModel by remember { mutableStateOf(AiChatConfig.llmModel) }
         var jevKey by remember { mutableStateOf(AiChatConfig.jevApiKey) }
         var testResult by remember { mutableStateOf("") }
+        var advanced by remember { mutableStateOf(false) }
+        var quietStart by remember { mutableStateOf(AiChatConfig.quietHoursStart) }
+        var quietEnd by remember { mutableStateOf(AiChatConfig.quietHoursEnd) }
+        var keywords by remember { mutableStateOf(AiChatConfig.autoReplyKeywords) }
 
         fun test(kind: String) {
             testResult = "测试中…（${if (kind == "jev") AiChatConfig.jevUrl else AiChatConfig.llmUrl}）"
             scope.launch { testResult = testConnection(kind) }
         }
 
+        @Composable
+        fun SectionTitle(text: String) {
+            Text(
+                text,
+                style = MaterialTheme.typography.titleSmall,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+        }
+
         DefaultColumn(
             modifier = Modifier.fillMaxWidth().heightIn(max = 420.dp),
             scrollable = true,
         ) {
-            // ---- 主线路：LLM（分析 + 建议回复都用它）----
-            Text("对话模型（必填）", style = MaterialTheme.typography.titleSmall)
+            // ---- 本聊天状态（只读）：开关本体在长按「…」菜单 / 群详情页 / 聊天详情页（2026-09-28 去重）----
+            if (talker.isNotBlank()) {
+                val analyzeOn = AiChatStore.isAnalyzeOn(talker)
+                val autoOn = AiChatStore.isAutoReplyOn(talker)
+                val groupAll = ContextBuilder.isGroupTalker(talker) && AiChatStore.isGroupAllMessages(talker)
+                val llmOk = AiChatConfig.llmConfigured
+                Text(
+                    buildString {
+                        append("当前聊天：分析")
+                        append(if (analyzeOn) " 开" else " 关")
+                        append(" · 自动回复")
+                        append(if (autoOn) " 开" else " 关")
+                        if (ContextBuilder.isGroupTalker(talker)) {
+                            append(if (groupAll) " · 所有消息" else " · 只回@我")
+                        }
+                        if (autoOn && !llmOk) append("（⚠ 对话模型未配置，开了也不会回复）")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    "本聊天开关：长按聊天页右上角「…」，或在群/联系人详情页",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            // ---- 模型连接 ----
+            SectionTitle("对话模型（必填）")
             OutlinedTextField(
                 value = llmEndpoint,
                 onValueChange = { llmEndpoint = it; AiChatConfig.llmEndpoint = it.trim() },
@@ -216,7 +329,15 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
             }
 
             // ---- 情绪线路：JEV（可选）----
-            Text("情绪概率（可选，OpenRouter Key 即可）", style = MaterialTheme.typography.titleSmall)
+            SectionTitle("情绪概率（可选，OpenRouter Key 即可）")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                var useJev by remember { mutableStateOf(AiChatConfig.useJev) }
+                Switch(
+                    checked = useJev,
+                    onCheckedChange = { AiChatConfig.useJev = it; useJev = it },
+                )
+                Text("启用情绪判断", modifier = Modifier.padding(start = 8.dp))
+            }
             OutlinedTextField(
                 value = jevKey,
                 onValueChange = { jevKey = it; AiChatConfig.jevApiKey = cleanKey(it) },
@@ -233,8 +354,8 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
                 Text(testResult, style = MaterialTheme.typography.bodySmall)
             }
 
-            // ---- 开关 ----
-            Text("开关", style = MaterialTheme.typography.titleSmall)
+            // ---- 自动回复（全局参数；总闸在这里，会话开关不重复出现）----
+            SectionTitle("自动回复")
             Row(verticalAlignment = Alignment.CenterVertically) {
                 var consent by remember { mutableStateOf(AiChatConfig.autoReplyConsent) }
                 Switch(
@@ -244,34 +365,11 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
                         consent = checked
                     },
                 )
-                Text("允许全自动回复（全局总闸）", modifier = Modifier.padding(start = 8.dp))
+                Text(
+                    "允许全自动回复（全局总闸，控制所有聊天）",
+                    modifier = Modifier.padding(start = 8.dp),
+                )
             }
-            if (talker.isNotBlank()) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    var on by remember { mutableStateOf(AiChatStore.isAnalyzeOn(talker)) }
-                    Switch(
-                        checked = on,
-                        onCheckedChange = { AiChatStore.setAnalyzeOn(talker, it); on = it },
-                    )
-                    Text("本聊天：自动分析 + 输入框上方建议", modifier = Modifier.padding(start = 8.dp))
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    var on by remember { mutableStateOf(AiChatStore.isAutoReplyOn(talker)) }
-                    Switch(
-                        checked = on,
-                        onCheckedChange = { checked ->
-                            if (checked && !AiChatConfig.autoReplyConsent) AiChatConfig.autoReplyConsent = true
-                            AiChatStore.setAutoReplyOn(talker, checked)
-                            on = AiChatStore.isAutoReplyOn(talker)
-                        },
-                    )
-                    Text("本聊天：全自动回复", modifier = Modifier.padding(start = 8.dp))
-                }
-            } else {
-                Text("打开一个聊天后，这里会出现该聊天的开关", style = MaterialTheme.typography.bodySmall)
-            }
-            // ---- 自动回复参数（用户反馈「条数/时间设置看不到」⇒ 全部显式暴露）----
-            Text("自动回复参数", style = MaterialTheme.typography.titleSmall)
             StepperRow("一次发送条数", AiChatConfig.autoReplySends, 1, 3, "条") {
                 AiChatConfig.autoReplySends = it
             }
@@ -284,6 +382,52 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
             StepperRow("每日上限", AiChatConfig.autoReplyDailyLimit, 1, 200, "条/聊天") {
                 AiChatConfig.autoReplyDailyLimit = it
             }
+            // 免打扰时段：引擎一直在用（quiet hours 拦截），此前无 UI（隐性设置，2026-09-28 显式暴露）
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                Text("免打扰时段", modifier = Modifier.weight(1f))
+                OutlinedTextField(
+                    value = quietStart,
+                    onValueChange = { quietStart = it; AiChatConfig.quietHoursStart = it.trim() },
+                    label = { Text("开始 如 23:00") },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = quietEnd,
+                    onValueChange = { quietEnd = it; AiChatConfig.quietHoursEnd = it.trim() },
+                    label = { Text("结束 如 07:30") },
+                    modifier = Modifier.weight(1f).padding(start = 8.dp),
+                    singleLine = true,
+                )
+            }
+            // 关键词白名单：空 = 不过滤（隐性设置，同上）
+            OutlinedTextField(
+                value = keywords,
+                onValueChange = { keywords = it; AiChatConfig.autoReplyKeywords = it },
+                label = { Text("关键词白名单（逗号分隔，空 = 不过滤）") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+            )
+
+            // ---- 面板 ----
+            SectionTitle("面板")
+            StepperRow("建议条数上限", AiChatConfig.suggestionCount, 1, 6, "条") {
+                AiChatConfig.suggestionCount = it
+            }
+
+            // ---- 高级（折叠）----
+            TextButton({ advanced = !advanced }) {
+                Text(if (advanced) "收起高级设置" else "高级设置")
+            }
+            if (advanced) {
+                StepperRow("上下文条数", AiChatConfig.contextLimit, 5, 100, "条") {
+                    AiChatConfig.contextLimit = it
+                }
+                StepperRow("上下文预算", AiChatConfig.contextBudget, 1000, 48000, "字", step = 1000) {
+                    AiChatConfig.contextBudget = it
+                }
+            }
+
             // 底部余量：卡片底边与最后一个控件之间留距离
             androidx.compose.foundation.layout.Spacer(Modifier.height(12.dp))
         }

@@ -1,13 +1,19 @@
 package com.github.wekite.features.items.chat.aichat
 
 import android.app.Activity
-import android.app.AlertDialog
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.Text
+import androidx.compose.ui.Modifier
+import com.github.wekite.ui.content.AlertDialogContent
+import com.github.wekite.ui.content.TextButton
+import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.WeLogger
 import java.lang.ref.WeakReference
 
@@ -52,16 +58,11 @@ object ChatHeaderStatus {
         val tv = TextView(activity).apply {
             textSize = 12f
             includeFontPadding = false
-            setPadding(dp(4), dp(6), dp(4), dp(6))
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(6), dp(2), dp(6))
             isClickable = true
             setOnClickListener {
                 boundTalker?.let { AiChatAssistant.openSettingsDialog(activity, it) }
-            }
-            // 兜底入口：你微信的「…」按钮不在标题栏容器里（日志 menu button not found），
-            // 长按 AI 标签同样能出本聊天菜单
-            setOnLongClickListener {
-                boundTalker?.let { showActions(activity, it) }
-                true
             }
         }
         label = tv
@@ -127,45 +128,51 @@ object ChatHeaderStatus {
 
     private fun showActions(activity: Activity, talker: String) {
         val isGroup = ContextBuilder.isGroupTalker(talker)
-        val items = if (isGroup) arrayOf(
-            "自动分析并给建议：${if (AiChatStore.isAnalyzeOn(talker)) "开" else "关"}",
-            "全自动回复：${if (AiChatStore.isAutoReplyOn(talker)) "开" else "关"}",
-            "群里所有消息也处理：${if (AiChatStore.isGroupAllMessages(talker)) "开" else "关（只回@我）"}",
-            "重新分析最新一条",
-            "助手设置",
-        ) else arrayOf(
-            "自动分析并给建议：${if (AiChatStore.isAnalyzeOn(talker)) "开" else "关"}",
-            "全自动回复：${if (AiChatStore.isAutoReplyOn(talker)) "开" else "关"}",
-            "重新分析最新一条",
-            "助手设置",
-        )
-        WeLogger.i(TAG, "actions shown talker=$talker group=$isGroup")
-        AlertDialog.Builder(activity)
-            .setTitle("AI 聊天助手")
-            .setItems(items) { _, which ->
-                when {
-                    which == 0 -> {
-                        val on = !AiChatStore.isAnalyzeOn(talker)
-                        AiChatStore.setAnalyzeOn(talker, on)
-                        if (!on) ChatAiEngine.clear(talker)
-                    }
-                    which == 1 -> {
-                        val on = !AiChatStore.isAutoReplyOn(talker)
-                        if (on && !AiChatConfig.autoReplyConsent) AiChatConfig.autoReplyConsent = true
-                        AiChatStore.setAutoReplyOn(talker, on)
-                    }
-                    isGroup && which == 2 ->
-                        AiChatStore.setGroupAllMessages(talker, !AiChatStore.isGroupAllMessages(talker))
-                    isGroup && which == 3 -> ChatAiEngine.retry(talker)
-                    isGroup && which == 4 -> AiChatAssistant.openSettingsDialog(activity, talker)
-                    !isGroup && which == 2 -> ChatAiEngine.retry(talker)
-                    !isGroup && which == 3 -> AiChatAssistant.openSettingsDialog(activity, talker)
-                }
-                refreshText()
+        // 圆角卡片菜单：原生 AlertDialog 在微信主题下是直角（2026-09-28 用户要求圆角）。
+        // 动作直接绑定条目，不再按下标分发，避免增删条目时错位。
+        val items = buildList {
+            add(ActionItem("自动分析并给建议：${if (AiChatStore.isAnalyzeOn(talker)) "开" else "关"}") {
+                val on = !AiChatStore.isAnalyzeOn(talker)
+                AiChatStore.setAnalyzeOn(talker, on)
+                if (!on) ChatAiEngine.clear(talker)
+            })
+            add(ActionItem("全自动回复：${if (AiChatStore.isAutoReplyOn(talker)) "开" else "关"}") {
+                val on = !AiChatStore.isAutoReplyOn(talker)
+                if (on && !AiChatConfig.autoReplyConsent) AiChatConfig.autoReplyConsent = true
+                AiChatStore.setAutoReplyOn(talker, on)
+            })
+            if (isGroup) {
+                add(ActionItem("群里所有消息也处理：${if (AiChatStore.isGroupAllMessages(talker)) "开" else "关（只回@我）"}") {
+                    AiChatStore.setGroupAllMessages(talker, !AiChatStore.isGroupAllMessages(talker))
+                })
             }
-            .setNegativeButton("关闭", null)
-            .show()
+            add(ActionItem("本聊天预设（人设/风格）") { AiChatAssistant.openPersonaDialog(activity, talker) })
+            add(ActionItem("重新分析最新一条") { ChatAiEngine.retry(talker) })
+            add(ActionItem("助手设置") { AiChatAssistant.openSettingsDialog(activity, talker) })
+        }
+        WeLogger.i(TAG, "actions shown talker=$talker group=$isGroup")
+        showComposeDialog(activity) {
+            AlertDialogContent(
+                title = { Text("AI 聊天助手") },
+                text = {
+                    Column {
+                        items.forEach { item ->
+                            TextButton({
+                                onDismiss()
+                                item.action()
+                                refreshText()
+                            }) {
+                                Text(item.label, modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onDismiss) { Text("关闭") } },
+            )
+        }
     }
+
+    private data class ActionItem(val label: String, val action: () -> Unit)
 
     private fun currentTalker(): String? = ChatUi.talker ?: boundTalker
 
@@ -208,7 +215,7 @@ object ChatHeaderStatus {
                 val p = IntArray(2).also { v.getLocationOnScreen(it) }
                 (p[0] - headerPos[0]).takeIf { it > header.width * 0.7 }
             }.minOrNull()
-        return menuLeftX?.let { header.width - it + dp(4) } ?: dp(60)
+        return menuLeftX?.let { header.width - it + dp(2) } ?: dp(60)
     }
 
     private fun findHeader(activity: Activity): FrameLayout? {

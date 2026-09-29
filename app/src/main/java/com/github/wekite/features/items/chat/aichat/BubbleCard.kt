@@ -157,7 +157,8 @@ object BubbleCard {
             if (bp.getRule(RelativeLayout.ALIGN_PARENT_BOTTOM) != 0) return false
             if (branch.id == View.NO_ID) branch.id = View.generateViewId()
             val card = makeCard(row)
-            val lp = RelativeLayout.LayoutParams(widthOf(row, anchor), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            // 宽度同样交给 CardLayout 自适应（WIDTH == WRAP_CONTENT），缩进/边距沿用原逻辑
+            val lp = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 addRule(RelativeLayout.BELOW, branch.id)
                 addRule(RelativeLayout.ALIGN_PARENT_LEFT)
                 leftMargin = leftOf(anchor, row)
@@ -177,7 +178,9 @@ object BubbleCard {
         }
 
         val card = makeCard(row)
-        val lp = LinearLayout.LayoutParams(widthOf(row, anchor), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+        // 宽度跟内容走（用户 2026-09-28 反馈忽宽忽细长）：旧实现挂卡时一次性算死固定宽度，
+        // 上限 300dp 撑满、行未布局完时算出负值跌到 100dp 下限。现在 WRAP_CONTENT + 上下限。
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             // 卡片与气泡左对齐（上游同款）：按屏幕坐标差算缩进
             leftMargin = leftOf(anchor, target)
             topMargin = dp(row, 3)
@@ -213,22 +216,39 @@ object BubbleCard {
         return false
     }
 
-    /** 卡片宽度：min(300dp, 行宽 − 气泡左缩进 − 16dp)，至少 100dp。 */
-    private fun widthOf(row: View, anchor: View): Int {
-        val left = leftOf(anchor, row)
-        val w = minOf(dp(row, 300), row.width - left - dp(row, 16))
-        return if (w < dp(row, 100)) dp(row, 100) else w
-    }
-
     private fun leftOf(anchor: View, ancestor: View): Int {
         val ap = IntArray(2).also { anchor.getLocationOnScreen(it) }
         val pp = IntArray(2).also { ancestor.getLocationOnScreen(it) }
         return (ap[0] - pp[0] - ancestor.paddingLeft).coerceAtLeast(0)
     }
 
-    private fun makeCard(row: View) = LinearLayout(row.context).apply {
-        orientation = LinearLayout.VERTICAL
+    /** 卡片容器：内容自适应宽度，夹在 [minWidthPx, maxWidthPx]（修「忽宽忽细长」，见 show() 注释）。 */
+    private class CardLayout(context: android.content.Context, val minWidthPx: Int, val maxWidthPx: Int) :
+        LinearLayout(context) {
+        init {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            super.onMeasure(
+                android.view.View.MeasureSpec.makeMeasureSpec(maxWidthPx, android.view.View.MeasureSpec.AT_MOST),
+                heightMeasureSpec,
+            )
+            if (measuredWidth < minWidthPx) {
+                super.onMeasure(
+                    android.view.View.MeasureSpec.makeMeasureSpec(minWidthPx, android.view.View.MeasureSpec.EXACTLY),
+                    heightMeasureSpec,
+                )
+            }
+        }
     }
+
+    private fun makeCard(row: View) = CardLayout(
+        row.context,
+        minWidthPx = dp(row, 100),
+        // 行已布局则不超出行宽 − 16dp，否则先按 300dp 上限（跟内容自适应后一般用不满）
+        maxWidthPx = (row.width - dp(row, 16)).takeIf { row.width > 0 && it > dp(row, 100) } ?: dp(row, 300),
+    )
 
     /** 摘掉某聊天已挂的全部卡片（关开关 / 清状态时用）。 */
     fun clear(talker: String) {
@@ -317,7 +337,7 @@ object BubbleCard {
                         },
                         LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                     )
-                    rowLine.addView(text("发", 12f, titleColor, true).apply {
+                    rowLine.addView(text("发送", 12f, titleColor, true).apply {
                         setPadding(dp(row, 8), dp(row, 2), dp(row, 2), dp(row, 2))
                         setOnClickListener {
                             val ok = InputBar.send(talker, reply)
