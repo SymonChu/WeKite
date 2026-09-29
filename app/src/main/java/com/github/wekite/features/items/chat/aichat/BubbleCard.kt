@@ -161,7 +161,8 @@ object BubbleCard {
             val lp = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 addRule(RelativeLayout.BELOW, branch.id)
                 addRule(RelativeLayout.ALIGN_PARENT_LEFT)
-                leftMargin = leftOf(anchor, row)
+                // 卡片与气泡左对齐再右移 3dp（用户 2026-09-29：再往右一点，跟气泡小三角对齐）
+                leftMargin = leftOf(anchor, row) + dp(row, 3)
                 topMargin = dp(row, 3)
                 bottomMargin = dp(row, 6)
             }
@@ -181,8 +182,8 @@ object BubbleCard {
         // 宽度跟内容走（用户 2026-09-28 反馈忽宽忽细长）：旧实现挂卡时一次性算死固定宽度，
         // 上限 300dp 撑满、行未布局完时算出负值跌到 100dp 下限。现在 WRAP_CONTENT + 上下限。
         val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            // 卡片与气泡左对齐（上游同款）：按屏幕坐标差算缩进
-            leftMargin = leftOf(anchor, target)
+            // 卡片与气泡左对齐再右移 3dp（用户 2026-09-29：再往右一点，跟气泡小三角对齐）
+            leftMargin = leftOf(anchor, target) + dp(row, 3)
             topMargin = dp(row, 3)
             bottomMargin = dp(row, 6)
         }
