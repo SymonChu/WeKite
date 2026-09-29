@@ -161,8 +161,8 @@ object BubbleCard {
             val lp = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 addRule(RelativeLayout.BELOW, branch.id)
                 addRule(RelativeLayout.ALIGN_PARENT_LEFT)
-                // 卡片与气泡左对齐再右移 3dp（用户 2026-09-29：再往右一点，跟气泡小三角对齐）
-                leftMargin = leftOf(anchor, row) + dp(row, 3)
+                // 卡片与气泡左对齐再右移 3.5dp（3dp 对齐小三角 + 用户 2026-09-29 晚：再右移 0.5dp）
+                leftMargin = leftOf(anchor, row) + dp(row, 3.5f)
                 topMargin = dp(row, 3)
                 bottomMargin = dp(row, 6)
             }
@@ -182,8 +182,8 @@ object BubbleCard {
         // 宽度跟内容走（用户 2026-09-28 反馈忽宽忽细长）：旧实现挂卡时一次性算死固定宽度，
         // 上限 300dp 撑满、行未布局完时算出负值跌到 100dp 下限。现在 WRAP_CONTENT + 上下限。
         val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            // 卡片与气泡左对齐再右移 3dp（用户 2026-09-29：再往右一点，跟气泡小三角对齐）
-            leftMargin = leftOf(anchor, target) + dp(row, 3)
+            // 卡片与气泡左对齐再右移 3.5dp（3dp 对齐小三角 + 用户 2026-09-29 晚：再右移 0.5dp）
+            leftMargin = leftOf(anchor, target) + dp(row, 3.5f)
             topMargin = dp(row, 3)
             bottomMargin = dp(row, 6)
         }
@@ -247,7 +247,9 @@ object BubbleCard {
         val bubbleCap = (screenW * 0.68f).toInt()
         val rowCap = (row.width - leftOf(anchor ?: row, row) - dp(row, 16)).takeIf { row.width > 0 }
         val fallback = (screenW * 0.65f).toInt()
-        val w = (rowCap ?: fallback).coerceAtMost(bubbleCap).coerceAtLeast(dp(row, 140))
+        // +1.5dp 加宽（用户 2026-09-29 晚）：必须加在 coerceAtMost 之后——v3.56 真机日志
+        // w=870=bubbleCap 说明宽度上限在生效，若加在上限之前会被 cap 吃掉、等于没加。
+        val w = ((rowCap ?: fallback).coerceAtMost(bubbleCap) + dp(row, 1.5f)).coerceAtLeast(dp(row, 140))
         WeLogger.i(TAG, "card width w=$w (rowCap=$rowCap bubbleCap=$bubbleCap)")
         return CardLayout(row.context, w)
     }
@@ -266,6 +268,8 @@ object BubbleCard {
     }
 
     private fun dp(v: View, n: Int) = (n * v.resources.displayMetrics.density).toInt()
+
+    private fun dp(v: View, n: Float) = (n * v.resources.displayMetrics.density).toInt()
 
     // ==================== 内容 ====================
 

@@ -69,9 +69,9 @@ object ChatHeaderStatus {
         header.addView(
             tv,
             FrameLayout.LayoutParams(-2, dp(44), Gravity.END or Gravity.CENTER_VERTICAL).apply {
-                // -3dp 右移（用户 2026-09-29：AI 标识再往右挪，更贴近「…」；END 锚定下
+                // -5dp 右移（v3.56 是 -3dp；用户 2026-09-29 晚：再往右 2dp，更贴近「…」；END 锚定下
                 // 减 rightMargin = 向右边缘靠）
-                rightMargin = (menuSpaceFor(header, density) - dp(3)).coerceAtLeast(0)
+                rightMargin = (menuSpaceFor(header, density) - dp(5)).coerceAtLeast(0)
             }
         )
         tv.post {
