@@ -123,6 +123,14 @@ object ImmersiveChatUi : SwitchFeature() {
     /** 每个会话页布局当前生效的状态栏偏移, 每帧刷新, 供悬浮标题栏读取。 */
     private val statusBarOffsets = WeakHashMap<View, Int>()
 
+    /**
+     * 布局内原生标题栏引用缓存（键 = ChattingUILayout）。悬浮标题栏关闭时由沉浸的每帧
+     * pre-draw 代它补状态栏偏移，按本仓「每帧路径禁止树扫描」的家规只查 WeakHashMap；
+     * 值可为 null（独立窗口的标题栏不在 layout 树内），所以判断用 containsKey 而不是
+     * 判空 —— 否则 null 会被 getOrPut 当成缺失，每帧重扫全树。
+     */
+    private val nativeHeaderViews = WeakHashMap<View, View?>()
+
     /** 每个会话页布局的状态栏偏移刷新监听。 */
     private val offsetPreDraws = WeakHashMap<View, ViewTreeObserver.OnPreDrawListener>()
 
@@ -487,12 +495,46 @@ object ImmersiveChatUi : SwitchFeature() {
             // 复核「承载窗口是否已切 edge-to-edge」，没切就当场补上（幂等，已应用则直接返回）。
             applyChatEdgeToEdge(layout)
             statusBarOffsets[layout] = currentStatusBarOffset(layout)
+            compensateNativeHeaderWhenFloatingDisabled(layout)
             reassertEdgeToEdgeStatusBar(layout)
             neutralizeChatWrapper(layout)
             true
         }
         offsetPreDraws[layout] = listener
         layout.viewTreeObserver.addOnPreDrawListener(listener)
+    }
+
+    /**
+     * 悬浮标题栏关闭时，代它补偿布局内原生标题栏的状态栏偏移（v3.55「关闭瞬间还原」的结构性补全）。
+     *
+     * 原生标题栏的「状态栏让位」原本来自容器 paddingTop(140px)；修沉浸（v3.36）把该 padding
+     * 清零了。悬浮标题栏开着时由它自己的 reconcile 每帧补 topMargin；关掉（或重启后没运行）时
+     * 没人补 ⇒ 标题栏画进状态栏（用户 2026-09-29 报 v3.55 无效：v3.55 只修关闭那一刻，
+     * 「沉浸开 + 悬浮标题栏关」是持续态）。挂在沉浸的每帧 pre-draw 上 ⇒ 重启后照样生效。
+     * 悬浮标题栏开着时第一行就返回：零开销，也不与它的 reconcile 抢同一属性。
+     */
+    private fun compensateNativeHeaderWhenFloatingDisabled(layout: View) {
+        if (FloatingChatHeader.isEnabled) return
+        val header = nativeHeaderViews[layout]
+        // 已确认过「布局内没有标题栏」（独立窗口路径，坐标原点已含系统栏偏移）⇒ 永久跳过，不再找
+        if (header == null && nativeHeaderViews.containsKey(layout)) return
+        val found = header ?: layout.allViews.firstOrNull {
+            it.javaClass.name == "androidx.appcompat.widget.ActionBarContainer"
+        }
+        if (found == null) {
+            nativeHeaderViews[layout] = null
+            return
+        }
+        nativeHeaderViews[layout] = found
+        val lp = found.layoutParams as? ViewGroup.MarginLayoutParams ?: return
+        val off = statusBarOffsets[layout] ?: 0
+        if (lp.topMargin != off || lp.leftMargin != 0 || lp.rightMargin != 0) {
+            lp.topMargin = off
+            lp.leftMargin = 0
+            lp.rightMargin = 0
+            found.requestLayout()
+            WeLogger.i(TAG, "native header compensated (floating header off): topMargin=$off")
+        }
     }
 
     /**
