@@ -2018,6 +2018,26 @@ object FloatingChatHeader : ClickableFeature(), IResolveDex {
     }
 
     override fun onDisable() {
+        // 关闭时把被重挂的原生标题栏退回原生位置。v3.36 修沉浸时清零了会话页容器顶部
+        // padding（140px），重挂标题栏的 topMargin=0 因此画进状态栏（用户 2026-10-09 报
+        // 「关掉悬浮标题栏后标题栏跑到状态栏里」）。原生位置 = topMargin = 状态栏偏移：
+        // 沉浸开时 padding=0、offset=140 ⇒ y=140；沉浸关时 paddingTop 自带 140、offset=0
+        // ⇒ 同样 y=140。两种组合都落在状态栏正下方。侧边距归零还原原生贴边。
+        for (layout in layoutTrackers.keys.toList()) {
+            val header = headerViews[layout] ?: continue
+            // headerTopOffsets 非空 = 已被 performReparent 重挂过；窗口级标题栏未重挂、
+            // 原地坐标已含系统栏偏移，不属于本 bug 的形态，不动。
+            if (headerTopOffsets[layout] == null) continue
+            val lp = header.layoutParams as? ViewGroup.MarginLayoutParams ?: continue
+            val off = ImmersiveChatUi.statusBarOffset(layout)
+            if (lp.topMargin != off || lp.leftMargin != 0 || lp.rightMargin != 0) {
+                lp.topMargin = off
+                lp.leftMargin = 0
+                lp.rightMargin = 0
+                header.requestLayout()
+                WeLogger.i(TAG, "onDisable: header restored to native topMargin=$off")
+            }
+        }
         layoutTrackers.keys.toList().forEach(::disposeTracker)
         layoutAttachListeners.entries.toList().forEach { (layout, listener) ->
             layout.removeOnAttachStateChangeListener(listener)
