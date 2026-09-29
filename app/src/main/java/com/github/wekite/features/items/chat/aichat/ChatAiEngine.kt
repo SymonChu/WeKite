@@ -64,6 +64,13 @@ object ChatAiEngine {
     private val lastReplyAt = ConcurrentHashMap<String, Long>()
     private val dailyCount = ConcurrentHashMap<String, MutableMap<String, Int>>()
 
+    /**
+     * 锁屏/进程死亡期间落库的消息没人分析（引擎是纯被动监听，v3.55 起用户报「锁屏久了
+     * AI 就没了」）。解锁后第一条消息插入时，把**上一条**消息补扫一遍；按聊天 60s 节流。
+     */
+    private val lastSeenIncomingMsg = ConcurrentHashMap<String, Long>()
+    private val lastCatchupAt = ConcurrentHashMap<String, Long>()
+
     private val insertListener = WeDatabaseListenerApi.IInsertListener { table, values ->
         if (table != TABLE_MESSAGE) return@IInsertListener
         try { onIncoming(values) } catch (e: Throwable) { WeLogger.e(TAG, "onIncoming failed", e) }
@@ -126,6 +133,74 @@ object ChatAiEngine {
         running.put(talker, scope.launch { runAnalyze(talker, 0L, AiChatStore.isAutoReplyOn(talker)) })
     }
 
+    // ==================== 锁屏补扫（v3.56）====================
+
+    /**
+     * 解锁后补扫：进程死掉期间（锁屏冻结/被杀）落库的消息没人分析（引擎纯被动监听，
+     * 用户 2026-09-29 报「锁屏久了 AI 就没了」）。该聊天再来新消息时，比对内存里登记的
+     * 上一条已见消息与新消息的 msgId 间隙，有漏网之鱼就补跑一遍（锁屏期间批量插入的消息
+     * 在解锁瞬间落库，同样被这条路径覆盖）。按聊天 60s 节流；只补文本（语音依赖转写，
+     * 与主流程同口径）；补扫不做群 @ 门槛（锁屏期间错过 @ 的消息仍会触发自动回复规则链）。
+     */
+    private fun maybeCatchUpUnanalyzed(talker: String, currentMsgId: Long) {
+        val prev = lastSeenIncomingMsg.put(talker, currentMsgId) ?: return
+        if (currentMsgId <= prev + 1) return
+        val now = System.currentTimeMillis()
+        val last = lastCatchupAt[talker]
+        if (last != null && now - last < 60_000L) return
+        val auto = AiChatStore.isAutoReplyOn(talker)
+        if (!AiChatStore.isAnalyzeOn(talker) && !auto) return
+        if (running[talker]?.isActive == true) return
+        lastCatchupAt[talker] = now
+        val isGroup = ContextBuilder.isGroupTalker(talker)
+        WeLogger.i(TAG, "catch-up: gap detected talker=$talker prev=$prev current=$currentMsgId")
+        scope.launch {
+            try {
+                val missed = findUnanalyzedIncoming(talker, isGroup, prev, currentMsgId)
+                if (missed == null) {
+                    WeLogger.i(TAG, "catch-up: no analyzable missed message talker=$talker")
+                } else {
+                    WeLogger.i(TAG, "catch-up: analyzing missed talker=$talker msgId=${missed.first}")
+                    // 目标显式传 missed：补扫触发时「最新一条」已是已分析过的实时消息，
+                    // 走 latestIncoming 会选错目标
+                    runAnalyze(talker, missed.first, auto, forceTarget = missed)
+                }
+            } catch (e: Throwable) {
+                WeLogger.e(TAG, "catch-up failed talker=$talker", e)
+            }
+        }
+    }
+
+    /** 在 (prevMsgId, currentMsgId) 开区间里找最新一条未分析过的对方文本消息。 */
+    private fun findUnanalyzedIncoming(
+        talker: String, isGroup: Boolean, prevMsgId: Long, currentMsgId: Long,
+    ): Triple<Long, String, String>? {
+        val msgs = try {
+            WeDatabaseApi.getMessages(talker, pageIndex = 1, pageSize = 24)
+        } catch (e: Exception) {
+            WeLogger.e(TAG, "catch-up read messages failed", e); return null
+        }
+        for (m in msgs) {
+            if (m.msgId <= prevMsgId || m.msgId >= currentMsgId) continue
+            if (m.isSend == 1) continue
+            if (m.typeCode != TYPE_TEXT) continue
+            var text = m.content
+            var speaker = "对方"
+            if (isGroup) {
+                val idx = text.indexOf(":\n")
+                if (idx in 1..64) {
+                    val wxid = text.substring(0, idx)
+                    speaker = WeDatabaseApi.getGroupMemberDisplayName(talker, wxid).ifBlank { wxid }
+                    text = text.substring(idx + 2)
+                }
+            }
+            val body = text.trim()
+            if (body.isEmpty()) continue
+            return Triple(m.msgId, body.take(1000), speaker)
+        }
+        return null
+    }
+
     // ==================== 触发 ====================
 
     private fun onIncoming(values: ContentValues) {
@@ -141,6 +216,7 @@ object ChatAiEngine {
 
         val msgId = values.getAsLong("msgId") ?: 0L
         val content = values.getAsString("content").orEmpty()
+        maybeCatchUpUnanalyzed(talker, msgId)
         // 诊断日志（I 级）：每聊天开关状态 + 收到的消息类型，排查「没反应」时看这行
         WeLogger.i(TAG, "incoming talker=$talker type=$type msgId=$msgId analyze=$analyze auto=$auto len=${content.length}")
 
@@ -174,7 +250,9 @@ object ChatAiEngine {
         running.put(talker, scope.launch { runAnalyze(talker, msgId, auto) })
     }
 
-    private suspend fun runAnalyze(talker: String, msgId: Long, auto: Boolean) {
+    private suspend fun runAnalyze(
+        talker: String, msgId: Long, auto: Boolean, forceTarget: Triple<Long, String, String>? = null,
+    ) {
         // 静默模式（用户 2026-09-29）：只开自动回复、不开分析 ⇒ 管线照跑（发送需要内容），
         // 但 UI 全部不写 —— 无卡片、无面板、无 Working 态。
         val show = AiChatStore.isAnalyzeOn(talker)
@@ -184,7 +262,7 @@ object ChatAiEngine {
             BubbleCard.refresh(talker)
         }
         try {
-            slots.withPermit { runPipeline(talker, msgId, auto) }
+            slots.withPermit { runPipeline(talker, msgId, auto, forceTarget) }
         } catch (e: kotlinx.coroutines.CancellationException) {
             states.remove(talker)
         } catch (e: Throwable) {
@@ -198,11 +276,13 @@ object ChatAiEngine {
         }
     }
 
-    private suspend fun runPipeline(talker: String, triggerMsgId: Long, auto: Boolean) {
+    private suspend fun runPipeline(
+        talker: String, triggerMsgId: Long, auto: Boolean, forceTarget: Triple<Long, String, String>? = null,
+    ) {
         val isGroup = ContextBuilder.isGroupTalker(talker)
         val t0 = System.currentTimeMillis()
         delay(250)  // 等 DB 行稳定（原 800ms，实测偏保守；语音转写多数在插入时已就绪）
-        val latest = latestIncoming(talker, isGroup)
+        val latest = forceTarget ?: latestIncoming(talker, isGroup)
         if (latest == null) {
             WeLogger.i(TAG, "no readable incoming message talker=$talker")
             if (AiChatStore.isAnalyzeOn(talker)) {
