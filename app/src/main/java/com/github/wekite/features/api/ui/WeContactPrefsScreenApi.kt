@@ -63,14 +63,32 @@ object WeContactPrefsScreenApi : ApiFeature() {
         initReflection()
         WeLogger.i(TAG, "prefs screen hook installing for ContactInfoUI / ChatroomInfoUI / ChattingInfoUI")
 
-        listOf(
-            ContactInfoUI::class,
-            ChatroomInfoUI::class,
+        // ⚠️ 一律字符串反射查找，禁止 KClass 字面引用：类不在宿主里时 NoClassDefFoundError
+        // 会让整个 onEnable 抛异常（v3.50 实测：ChattingInfoUI 引用炸掉群详情/联系人详情两个页的 hook）。
+        // 找到才装，找不到记日志跳过。
+        val targetClassNames = listOf(
+            "com.tencent.mm.plugin.profile.ui.ContactInfoUI",
+            "com.tencent.mm.chatroom.ui.ChatroomInfoUI",
             // 单聊「聊天详情」页：用户 2026-09-28 反馈单聊详情页没有 AI 开关（群详情有）。
-            // 类名若在宿主版本上不存在， reflekt 拿到的 Class 为空会跳过，不影响另两页。
-            com.tencent.mm.ui.chatting.ChattingInfoUI::class,
-        ).forEach {
-            it.reflekt().apply {
+            // 2026-09-29 真机日志：v3.50 推断的 com.tencent.mm.ui.chatting.ChattingInfoUI 不存在于
+            // 用户宿主（NoClassDefFoundError）。真实类名待日志定位，先保留探测。
+            "com.tencent.mm.ui.chatting.ChattingInfoUI",
+        )
+        val loader = ContactInfoUI::class.java.classLoader
+        targetClassNames.forEach { name ->
+            val clazz = try {
+                Class.forName(name, false, loader)
+            } catch (_: Throwable) {
+                WeLogger.i(TAG, "host class not found, skip: $name")
+                null
+            } ?: return@forEach
+            installPrefsHook(clazz)
+        }
+    }
+
+    /** 对单个宿主 Activity 类装 initView / onPreferenceTreeClick 两个 hook。 */
+    private fun installPrefsHook(clazz: Class<*>) {
+        clazz.reflekt().apply {
                 firstMethod { name = "initView" }
                     .hookAfter {
                         val hostActivity = thisObject as Activity
@@ -127,7 +145,6 @@ object WeContactPrefsScreenApi : ApiFeature() {
                         }
                     }
                 }
-            }
         }
     }
 

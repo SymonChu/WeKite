@@ -156,7 +156,7 @@ object BubbleCard {
             val bp = branch.layoutParams as? RelativeLayout.LayoutParams ?: return false
             if (bp.getRule(RelativeLayout.ALIGN_PARENT_BOTTOM) != 0) return false
             if (branch.id == View.NO_ID) branch.id = View.generateViewId()
-            val card = makeCard(row)
+            val card = makeCard(row, anchor)
             // 宽度同样交给 CardLayout 自适应（WIDTH == WRAP_CONTENT），缩进/边距沿用原逻辑
             val lp = RelativeLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                 addRule(RelativeLayout.BELOW, branch.id)
@@ -177,7 +177,7 @@ object BubbleCard {
             return false
         }
 
-        val card = makeCard(row)
+        val card = makeCard(row, anchor)
         // 宽度跟内容走（用户 2026-09-28 反馈忽宽忽细长）：旧实现挂卡时一次性算死固定宽度，
         // 上限 300dp 撑满、行未布局完时算出负值跌到 100dp 下限。现在 WRAP_CONTENT + 上下限。
         val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -222,7 +222,7 @@ object BubbleCard {
         return (ap[0] - pp[0] - ancestor.paddingLeft).coerceAtLeast(0)
     }
 
-    /** 卡片容器：内容自适应宽度，夹在 [minWidthPx, maxWidthPx]（修「忽宽忽细长」，见 show() 注释）。 */
+    /** 卡片容器：宽度=气泡锚点实测宽度（用户 2026-09-29：和微信气泡一样宽，之前 300dp 上限超屏）。 */
     private class CardLayout(context: android.content.Context, val minWidthPx: Int, val maxWidthPx: Int) :
         LinearLayout(context) {
         init {
@@ -243,12 +243,15 @@ object BubbleCard {
         }
     }
 
-    private fun makeCard(row: View) = CardLayout(
-        row.context,
-        minWidthPx = dp(row, 100),
-        // 行已布局则不超出行宽 − 16dp，否则先按 300dp 上限（跟内容自适应后一般用不满）
-        maxWidthPx = (row.width - dp(row, 16)).takeIf { row.width > 0 && it > dp(row, 100) } ?: dp(row, 300),
-    )
+    private fun makeCard(row: View, anchor: View? = null): CardLayout {
+        // 宽度取「气泡实测宽度」：短消息=窄卡，长消息=宽卡，跟气泡视觉对齐；
+        // 气泡未布局/异常窄时退化为 120dp 下限；再夹一个不超过行宽−16dp 的上界防超屏。
+        val bubbleW = anchor?.width?.takeIf { it > 0 }
+        val rowCap = (row.width - dp(row, 16)).takeIf { row.width > 0 }
+        val maxW = listOfNotNull(bubbleW, rowCap).minOrNull() ?: dp(row, 200)
+        val minW = dp(row, 120)
+        return CardLayout(row.context, minWidthPx = minW, maxWidthPx = maxOf(minW, maxW))
+    }
 
     /** 摘掉某聊天已挂的全部卡片（关开关 / 清状态时用）。 */
     fun clear(talker: String) {
