@@ -59,14 +59,12 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
         WeChatMessageViewApi.addListener(this)
         ChatAiEngine.start()
         ChatUi.installListener()     // 会话变化事件（替代轮询，见 ChatUi 注释）
-        AiChatPrefsEntry.register()  // 群详情/聊天详情页的开关条目
     }
 
     override fun onDisable() {
         WeChatMessageViewApi.removeListener(this)
         ChatAiEngine.stop()
         ChatHeaderStatus.remove()
-        AiChatPrefsEntry.unregister()
         ChatUi.uninstallListener()
         ChatUi.unbind()
     }
