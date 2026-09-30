@@ -43,6 +43,11 @@ object PersonaStore {
         WePrefs.putString(presetKey(talker), text.trim())
     }
 
+    /** 手动修正自动生成的画像（不更新生成时间——这是编辑，不是重新生成）。 */
+    fun setProfile(talker: String, text: String) {
+        WePrefs.putString(profileKey(talker), text.trim())
+    }
+
     // ---------- 风格画像 ----------
 
     fun profile(talker: String): String = WePrefs.getStringOrDef(profileKey(talker), "")

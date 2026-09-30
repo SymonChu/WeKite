@@ -213,6 +213,22 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            // 画像常不够准（自动总结）：可直接编辑修正，存的是同一份（injectBlock 注入的就是它）
+            var editingProfile by remember { mutableStateOf(false) }
+            if (profile.isNotBlank()) {
+                TextButton({ editingProfile = !editingProfile }) {
+                    Text(if (editingProfile) "收起编辑" else "编辑")
+                }
+            }
+            if (editingProfile) {
+                OutlinedTextField(
+                    value = profile,
+                    onValueChange = { profile = it; PersonaStore.setProfile(talker, it) },
+                    label = { Text("风格画像（可手动修正，AI 按这里说的说话）") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 4,
+                )
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton({
                     if (!busy) {
