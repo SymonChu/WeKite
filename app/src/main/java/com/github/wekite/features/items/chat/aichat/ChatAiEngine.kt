@@ -4,6 +4,7 @@ import android.content.ContentValues
 import com.github.wekite.features.api.core.WeDatabaseApi
 import com.github.wekite.features.api.core.WeDatabaseListenerApi
 import com.github.wekite.features.api.core.WeMessageApi
+import com.github.wekite.features.api.core.models.MessageInfo
 import com.github.wekite.features.items.chat.aichat.net.AiChatHttp
 import com.github.wekite.features.items.chat.aichat.protocol.ChoiceProtocol
 import com.github.wekite.features.items.chat.aichat.protocol.IntentQuestions
@@ -222,11 +223,21 @@ object ChatAiEngine {
 
         // 群聊默认只在被 @（或 @所有人）时处理，避免在活跃群里见谁都插话；
         // 「所有消息也处理」按群单独开（AiChatStore.isGroupAllMessages）。
+        // 判定主走微信记的 at 名单（消息对象 lvbuffer，见 GroupMention），正文文本只作兜底：
+        // 旧实现只有「正文含 @群昵称」一条，而没设群昵称时该判据整条被跳过 ⇒ @ 我从不触发。
         // 例外（用户 2026-09-29 要求的 OR 语义）：配置了关键词白名单且这条消息命中 ⇒
         // 即使没 @ 我也放行（后续发送仍过 canAutoSend 全套规则）。
         if (ContextBuilder.isGroupTalker(talker) && !AiChatStore.isGroupAllMessages(talker)) {
+            val msgInfo = try {
+                MessageInfo.fromContentValues(values)
+            } catch (e: Throwable) {
+                WeLogger.e(TAG, "build msgInfo from values failed talker=$talker msgId=$msgId", e)
+                null
+            }
             val body = stripGroupPrefix(content)
-            if (!GroupMention.isAddressedToMe(talker, msgId, body)) {
+            val addressed = (msgInfo != null && GroupMention.isAddressedToMe(msgInfo, talker)) ||
+                GroupMention.isAddressedToMe(talker, msgId, body)
+            if (!addressed) {
                 if (keywordWhitelistHit(content)) {
                     WeLogger.i(TAG, "group message not @me but keyword hit, process talker=$talker msgId=$msgId")
                 } else {
