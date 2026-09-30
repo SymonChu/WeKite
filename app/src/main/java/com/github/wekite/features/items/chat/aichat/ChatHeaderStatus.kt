@@ -42,6 +42,9 @@ object ChatHeaderStatus {
     private var menuButton: WeakReference<View>? = null
     private val main = Handler(Looper.getMainLooper())
     private var retryPending: Runnable? = null
+    /** 「talker|状态文本」签名：限频用（2026-09-30 用户报「经常挂不上」但 v3.61 把挂载成功降 D
+     *  ⇒ 成功率无法统计。改为：签名变化才打 I，未变（同聊天反复进出）降 D，不回刷屏）。 */
+    private var lastAttachedSig: String? = null
 
     /** 头部未就绪补挂：300ms×5 次封顶（约 1.5s，覆盖微信分帧装配窗口）。 */
     private const val RETRY_MAX = 5
@@ -106,9 +109,16 @@ object ChatHeaderStatus {
             }
         }
         refreshText()
-        // D 级（2026-09-30 定案）：每次进聊天页必打，切页频繁时刷屏（实测 727 条/天）；
-        // 徽标失败路径（retrying/gave up）仍保留 W 级
-        WeLogger.d(TAG, "status attached talker=$talker")
+        // 挂载成功的可见性（2026-09-30）：签名（talker|状态文本）变化才打 I，同聊天反复进出降 D
+        // ——v3.61 全降 D 导致「挂不上」的发生率/场景无法从日志统计（用户当日反馈）。
+        // 状态文本已含 auto/analyzing/on 三态，签名随状态变化自动放开记录。
+        val sig = "$talker|" + (label?.text?.toString() ?: "")
+        if (sig != lastAttachedSig) {
+            lastAttachedSig = sig
+            WeLogger.i(TAG, "status attached talker=$talker text=${label?.text}")
+        } else {
+            WeLogger.d(TAG, "status attached (repeat) talker=$talker")
+        }
     }
 
     /** 头部未就绪的补挂重试。attempt 由 sync 穿透传递；cancelPendingRetry() 清挂起项。 */
