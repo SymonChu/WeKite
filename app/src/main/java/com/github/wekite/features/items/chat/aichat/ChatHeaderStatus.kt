@@ -46,11 +46,17 @@ object ChatHeaderStatus {
      *  ⇒ 成功率无法统计。改为：签名变化才打 I，未变（同聊天反复进出）降 D，不回刷屏）。 */
     private var lastAttachedSig: String? = null
 
-    /** 头部未就绪补挂：300ms×5 次封顶（约 1.5s，覆盖微信分帧装配窗口）。 */
-    private const val RETRY_MAX = 5
+    /** 头部未就绪补挂：300ms×12 次封顶（约 3.6s，2026-09-30 提额：从主页进聊天时聊天标题栏
+     *  装配比从聊天切聊天慢得多，1.5s 实测不够——44273649499 群 5 次进入全部 5 次重试后放弃）。 */
+    private const val RETRY_MAX = 12
     private const val RETRY_STEP_MS = 300L
 
     fun sync(activity: Activity, talker: String?, attempt: Int = 1) {
+        // ⭐ 主页伪会话守卫（2026-09-30 真机日志实锤）：用户回主页时会话值变为
+        // `conversationboxservice`，sync 曾把它当聊天照样在 LauncherUI decor 树里找到
+        // **主页自己的标题栏**挂上徽标（用户看到「主页也有 AI」）。主页没有聊天会话，
+        // 直接摘除并返回。
+        if (talker == "conversationboxservice") { remove(); return }
         if (talker.isNullOrBlank()) { remove(); return }
         boundTalker = talker
         val header = findHeader(activity)
@@ -275,9 +281,21 @@ object ChatHeaderStatus {
 
     private fun findHeader(activity: Activity): FrameLayout? {
         val decor = activity.window?.decorView ?: return null
-        return descendants(decor).firstOrNull {
-            it.isShown && it.javaClass.name == "androidx.appcompat.widget.ActionBarContainer"
-        } as? FrameLayout
+        // 候选可能 >1（主页 Fragment 的 ActionBarContainer + 聊天页的并存，2026-09-30 真机日志：
+        // 从主页进聊天时 5×300ms 全 miss ⇒ 旧 4000 节点遍历上限把聊天标题栏截掉了）。
+        // 不设节点数上限、取**最深的** ActionBarContainer：聊天页的头部在 Fragment 嵌套里更深。
+        var best: FrameLayout? = null
+        var bestDepth = -1
+        var depth = 0
+        fun walk(view: View) {
+            if (depth > 40 || view.visibility != View.VISIBLE) return
+            if (view.javaClass.name == "androidx.appcompat.widget.ActionBarContainer" &&
+                view is FrameLayout && depth > bestDepth
+            ) { best = view; bestDepth = depth }
+            if (view is ViewGroup) for (i in 0 until view.childCount) { depth++; walk(view.getChildAt(i)); depth-- }
+        }
+        walk(decor)
+        return best
     }
 
     private fun descendants(root: View): List<View> {
