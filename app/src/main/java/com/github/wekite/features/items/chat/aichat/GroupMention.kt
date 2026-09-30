@@ -79,8 +79,9 @@ object GroupMention {
             return true
         }
 
-        // 诊断（I 级）：排查「@ 我不触发」就看这行 —— 候选名 + 正文开头足够定案
-        WeLogger.i(
+        // 诊断（D 级，2026-09-30 降噪定案）：判定落空是常态（大多数群消息没 @ 我）。
+        // 候选名 + 正文开头足够定案「@ 我不触发」类问题，详细日志里看
+        WeLogger.d(
             TAG,
             "not addressed to me group=$groupId msgId=$msgId names=$names bodyHead=${body.take(24)}",
         )

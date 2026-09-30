@@ -36,9 +36,10 @@ object ChatUi {
                 WeLogger.i(TAG, "conversation event: ${this.talker ?: "-"} -> $talker")
             }
             this.talker = talker
-            // activity 为空时 W 级可见：静默跳过曾让徽标消失无从排查（2026-09-29 真机日志）
+            // activity 为空时降 D（2026-09-30 定案：会话页滚动/小程序窗口常态产生 conversation event，
+            // 非异常；实测一天 724 条 W。徽标消失类问题仍可开「详细日志」排查）
             activity?.let { ChatHeaderStatus.sync(it, talker) }
-                ?: WeLogger.w(TAG, "no activity bound, skip header sync talker=$talker")
+                ?: WeLogger.d(TAG, "no activity bound, skip header sync talker=$talker")
         }
     }
 

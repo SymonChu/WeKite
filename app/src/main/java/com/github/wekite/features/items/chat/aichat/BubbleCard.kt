@@ -81,7 +81,9 @@ object BubbleCard {
         pendingAttach[row] = listener
         row.addOnAttachStateChangeListener(listener)
         if (quietSkip.add(key)) {
-            WeLogger.i(TAG, "row not attached yet at bind, waiting for attach msgId=$msgId")
+            // D 级（2026-09-30 定案）：滚动复用使每行 bind 都换新 msgId，quietSkip 按 key 去重失效，
+            // 实测一天 4415 条（99% 无卡可挂）；attach 成功与否由 `card attached`/`status` 正面事件证明
+            WeLogger.d(TAG, "row not attached yet at bind, waiting for attach msgId=$msgId")
         }
     }
 

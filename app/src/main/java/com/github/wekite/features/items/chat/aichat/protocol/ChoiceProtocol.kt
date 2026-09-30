@@ -1,5 +1,6 @@
 package com.github.wekite.features.items.chat.aichat.protocol
 
+import com.github.wekite.utils.WeLogger
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
@@ -12,9 +13,12 @@ import kotlin.math.abs
  * 校验规则（不通过即抛 IllegalArgumentException → 调用方显示"返回不完整"）：
  * - choice 必须在 criteria 键集内
  * - probabilities 覆盖全部选项、每项 ∈ [0,1]、总和误差 ≤0.02
- * - chosen 概率必须 ≥ 最大概率（模型自洽）
+ * - chosen 概率应 ≥ 最大概率（模型自洽）——违反时**宽容化**：信任 choice、交换分布
+ *   （2026-09-30：真机实测模型偶发自相矛盾，硬抛会让整条分析管线失败）
  */
 object ChoiceProtocol {
+
+    private const val TAG = "ChoiceProtocol"
 
     data class Decision(val choice: String, val probabilities: Map<String, Double>, val confidence: Double)
 
@@ -34,7 +38,19 @@ object ChoiceProtocol {
         if (distribution.length() != options.size) throw IllegalArgumentException("probability size mismatch for $key")
         val values = options.keys.associateWith { probability(distribution, it) }
         if (abs(values.values.sum() - 1.0) > 0.02) throw IllegalArgumentException("probabilities do not sum to 1 for $key")
-        if (values.getValue(chosen) + 1e-6 < values.values.max()) throw IllegalArgumentException("chosen is not argmax for $key")
+        // 模型偶发自相矛盾（choice 与 argmax 不一致，2026-09-30 真机实测 1/5 失败源于此）。
+        // 宽容化：信任模型的 choice、把分布归一到它，打 W 不再让整条分析管线失败。
+        if (values.getValue(chosen) + 1e-6 < values.values.max()) {
+            val maxKey = values.entries.maxByOrNull { it.value }?.key ?: chosen
+            WeLogger.w(
+                TAG,
+                "chosen not argmax for $key (chosen=$chosen, max=$maxKey); trusting model choice, swapped distribution",
+            )
+            val corrected = values.toMutableMap()
+            corrected[maxKey] = values.getValue(chosen)
+            corrected[chosen] = values.getValue(maxKey)
+            return Decision(chosen, corrected, confidence)
+        }
         return Decision(chosen, values, confidence)
     }
 

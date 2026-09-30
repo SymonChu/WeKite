@@ -106,7 +106,9 @@ object ChatHeaderStatus {
             }
         }
         refreshText()
-        WeLogger.i(TAG, "status attached talker=$talker")
+        // D 级（2026-09-30 定案）：每次进聊天页必打，切页频繁时刷屏（实测 727 条/天）；
+        // 徽标失败路径（retrying/gave up）仍保留 W 级
+        WeLogger.d(TAG, "status attached talker=$talker")
     }
 
     /** 头部未就绪的补挂重试。attempt 由 sync 穿透传递；cancelPendingRetry() 清挂起项。 */
@@ -163,7 +165,8 @@ object ChatHeaderStatus {
             true
         }
         menuButton = WeakReference(btn)
-        WeLogger.i(TAG, "menu long-press installed (button=${btn.javaClass.simpleName})")
+        // D 级（2026-09-30 定案）：每次进聊天页必打（与 status attached 同因，727 条/天）
+        WeLogger.d(TAG, "menu long-press installed (button=${btn.javaClass.simpleName})")
     }
 
     private fun showActions(activity: Activity, talker: String) {

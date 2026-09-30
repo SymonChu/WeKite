@@ -159,7 +159,8 @@ object ChatAiEngine {
             try {
                 val missed = findUnanalyzedIncoming(talker, isGroup, prev, currentMsgId)
                 if (missed == null) {
-                    WeLogger.i(TAG, "catch-up: no analyzable missed message talker=$talker")
+                    // D 级（2026-09-30 降噪定案）：间隙里没有文本消息是常态（语音/图片/系统消息）
+                    WeLogger.d(TAG, "catch-up: no analyzable missed message talker=$talker")
                 } else {
                     WeLogger.i(TAG, "catch-up: analyzing missed talker=$talker msgId=${missed.first}")
                     // 目标显式传 missed：补扫触发时「最新一条」已是已分析过的实时消息，
@@ -218,8 +219,9 @@ object ChatAiEngine {
         val msgId = values.getAsLong("msgId") ?: 0L
         val content = values.getAsString("content").orEmpty()
         maybeCatchUpUnanalyzed(talker, msgId)
-        // 诊断日志（I 级）：每聊天开关状态 + 收到的消息类型，排查「没反应」时看这行
-        WeLogger.i(TAG, "incoming talker=$talker type=$type msgId=$msgId analyze=$analyze auto=$auto len=${content.length}")
+        // 诊断日志（D 级，2026-09-30 降噪定案）：每条消息必打，活跃群一天数百条；
+        // 群消息多时这就是日志膨胀主力（实测 686 条/5.5h）。排查「没反应」开「详细日志」看这行
+        WeLogger.d(TAG, "incoming talker=$talker type=$type msgId=$msgId analyze=$analyze auto=$auto len=${content.length}")
 
         // 群聊默认只在被 @（或 @所有人）时处理，避免在活跃群里见谁都插话；
         // 「所有消息也处理」按群单独开（AiChatStore.isGroupAllMessages）。
@@ -241,7 +243,8 @@ object ChatAiEngine {
                 if (keywordWhitelistHit(content)) {
                     WeLogger.i(TAG, "group message not @me but keyword hit, process talker=$talker msgId=$msgId")
                 } else {
-                    WeLogger.i(TAG, "skip group message (not addressed to me) talker=$talker msgId=$msgId")
+                    // D 级（2026-09-30 降噪定案）：未命中是常态不是异常（群消息大多数没 @ 我）
+                    WeLogger.d(TAG, "skip group message (not addressed to me) talker=$talker msgId=$msgId")
                     return
                 }
             }
