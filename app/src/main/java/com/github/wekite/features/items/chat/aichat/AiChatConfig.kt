@@ -27,6 +27,15 @@ object AiChatConfig {
     // ---------- 分析 ----------
     /** JEV 情绪概率（默认开；关掉则只走 LLM 或都不走） */
     var useJev by prefOption("ai_chat_use_jev", true)
+
+    /**
+     * 回复优选（v3.64，默认开）：LLM 生成候选后，再用 JEV 挑一条 —— 自动回复发它选中的，
+     * 手动模式在它选中的那条上加「⭐推荐」标记（位置不动，用户口径 2026-10-01）。
+     *
+     * 与 [useJev] **正交**：优选只借 JEV 线路（jevUrl/jevApiKey/jevModel），
+     * 关掉情绪判断不影响优选。失败一律静默降级为「按原顺序」。
+     */
+    var replyValuation by prefOption("ai_chat_reply_valuation", true)
     var contextLimit by prefOption("ai_chat_context_limit", 30)
     var contextBudget by prefOption("ai_chat_context_budget", 8000)
     /** 建议条数上限（面板里显示几条） */

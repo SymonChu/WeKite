@@ -9,6 +9,7 @@ import com.github.wekite.features.items.chat.aichat.net.AiChatHttp
 import com.github.wekite.features.items.chat.aichat.protocol.ChoiceProtocol
 import com.github.wekite.features.items.chat.aichat.protocol.IntentQuestions
 import com.github.wekite.features.items.chat.aichat.protocol.ReplyProtocol
+import com.github.wekite.features.items.chat.aichat.protocol.ReplyValuation
 import com.github.wekite.utils.WeLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +53,8 @@ object ChatAiEngine {
         val replies: List<String>,
         val autoSent: Boolean,
         val note: String = "",
+        /** 回复优选结果（v3.64）；null = 未开启 / 还没算完 / 优选失败 ⇒ 按候选原顺序。 */
+        val valuation: ReplyValuation.Pick? = null,
     )
 
     sealed interface State {
@@ -349,6 +352,41 @@ object ChatAiEngine {
             if (built.truncated) append("上下文取最近 ${built.messages.size} 条。")
         }
 
+        // 2.5) 回复优选（v3.64）：候选生成后，再用 JEV 挑一条。
+        // 时序（用户口径 2026-10-01）：自动模式必须**发送前**算出来 —— 耗时落在下面的
+        //   「发送前等待」可撤回窗口里，用户无感；手动模式**先把候选上屏**再算，优选结果
+        //   由下面的最终 Result 刷新补标记，绝不让标记拖慢候选显示。
+        // 门槛：开关开 + JEV 线路可用 + 至少 2 条候选（1 条没得挑）。
+        val valuationOn = AiChatConfig.replyValuation && AiChatConfig.jevConfigured && parsed.replies.size >= 2
+        if (valuationOn && !auto && AiChatStore.isAnalyzeOn(talker)) {
+            states[talker] = State.Done(
+                Result(latest.first, emotionLine, parsed.reading, parsed.replies, autoSent = false, note = noteBuilder)
+            )
+            putMsgState(talker, latest.first, states[talker]!!)
+            BubbleCard.refresh(talker)
+        }
+        var valuation: ReplyValuation.Pick? = null
+        if (valuationOn) {
+            valuation = try {
+                val valuationBody = AiChatHttp.jevExchange(
+                    ReplyValuation.payload(state, parsed.replies, AiChatConfig.jevModel)
+                )
+                ReplyValuation.parse(valuationBody, parsed.replies.size)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 宽容化（对齐 ChoiceProtocol 既有哲学）：优选失败一律按候选原顺序，不打断主管线
+                WeLogger.w(TAG, "valuation failed talker=$talker: ${e.message}")
+                null
+            }
+            WeLogger.i(
+                TAG,
+                "valuation talker=$talker pick=${valuation?.index} rejected=${valuation?.rejected} " +
+                    "prob=${valuation?.chosenProbability}",
+            )
+        }
+        val tVal = System.currentTimeMillis()
+
         // 3) 自动回复（双闸已在触发处判定；发送前再查一次）。
         // 拦截原因写进卡片 note（用户 2026-09-29：「不自动回了」看不出原因 ⇒ 直接在 UI 说明）。
         var autoSent = false
@@ -361,8 +399,16 @@ object ChatAiEngine {
             delay(base + (0L..2000L).random())
             if (AiChatStore.isAutoReplyOn(talker)) {
                 var sent = 0
+                // 优选命中的那条排最前，其余保持原顺序（v3.64）：默认只发 1 条 ⇒ 等价于「发优选结果」；
+                // 用户把「一次发送条数」调到 2-3 时，优选那条也仍是第一条。
+                val pickedIdx = valuation?.index
+                val ordered = if (pickedIdx != null && pickedIdx in parsed.replies.indices) {
+                    listOf(parsed.replies[pickedIdx]) + parsed.replies.filterIndexed { i, _ -> i != pickedIdx }
+                } else {
+                    parsed.replies
+                }
                 // 候选只挑前 N 条发（默认 1）——见 AiChatConfig.autoReplySends 的说明
-                val toSend = parsed.replies.take(AiChatConfig.autoReplySends.coerceIn(1, 3))
+                val toSend = ordered.take(AiChatConfig.autoReplySends.coerceIn(1, 3))
                 for (r in toSend) {
                     if (sent > 0) delay(1200L + (0L..1300L).random())
                     var ok = WeMessageApi.sendText(talker, r)
@@ -389,7 +435,9 @@ object ChatAiEngine {
 
         // 静默模式：结果只落日志（排查用），不进 states/byMsg，不挂卡
         if (AiChatStore.isAnalyzeOn(talker)) {
-            states[talker] = State.Done(Result(latest.first, emotionLine, parsed.reading, parsed.replies, autoSent, note))
+            states[talker] = State.Done(
+                Result(latest.first, emotionLine, parsed.reading, parsed.replies, autoSent, note, valuation)
+            )
             putMsgState(talker, latest.first, states[talker]!!)
             BubbleCard.refresh(talker)
         }
@@ -399,7 +447,8 @@ object ChatAiEngine {
         )
         WeLogger.i(
             TAG,
-            "timing talker=$talker ctx=${tCtx - t0}ms jev=${tJev - tCtx}ms llm=${tLlm - tJev}ms total=${tLlm - t0}ms"
+            "timing talker=$talker ctx=${tCtx - t0}ms jev=${tJev - tCtx}ms llm=${tLlm - tJev}ms " +
+                "val=${tVal - tLlm}ms total=${System.currentTimeMillis() - t0}ms"
         )
     }
 

@@ -322,13 +322,21 @@ object BubbleCard {
                 // 建议列表只在手动模式显示（用户 2026-09-29：全自动时不显示，反正会自动发）
                 if (!AiChatStore.isAutoReplyOn(talker)) {
                     r.replies.forEachIndexed { i, reply ->
+                        // 回复优选（v3.64）：JEV 选中的那条加「⭐推荐 N%」标记，**位置不动**
+                        // （用户口径 2026-10-01：重排会打乱「第几条」的肌肉记忆，只标记不重排）
+                        val picked = r.valuation?.index == i
+                        val percent = ((r.valuation?.chosenProbability ?: 0.0) * 100).toInt()
                         val rowLine = LinearLayout(row.context).apply {
                             orientation = LinearLayout.HORIZONTAL
                             gravity = android.view.Gravity.CENTER_VERTICAL
                             setPadding(0, dp(row, 4), 0, 0)
                         }
                         rowLine.addView(
-                            text("${i + 1}. $reply", 12f, bodyColor).apply {
+                            text(
+                                if (picked) "${i + 1}. $reply  ⭐推荐 $percent%" else "${i + 1}. $reply",
+                                12f,
+                                if (picked) titleColor else bodyColor,
+                            ).apply {
                                 setOnClickListener {
                                     val ok = InputBar.fill(reply)
                                     android.widget.Toast.makeText(

@@ -345,7 +345,8 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
             }
 
             // ---- 情绪线路：JEV（可选）----
-            SectionTitle("情绪概率（可选，OpenRouter Key 即可）")
+            // 同一把 JEV 配置供两个用途：情绪概率 + 回复优选（两者互相独立，见 AiChatConfig）
+            SectionTitle("JEV 决策线路（可选，OpenRouter Key 即可）")
             Row(verticalAlignment = Alignment.CenterVertically) {
                 var useJev by remember { mutableStateOf(AiChatConfig.useJev) }
                 Switch(
@@ -353,6 +354,17 @@ object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewLis
                     onCheckedChange = { AiChatConfig.useJev = it; useJev = it },
                 )
                 Text("启用情绪判断", modifier = Modifier.padding(start = 8.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                var valuation by remember { mutableStateOf(AiChatConfig.replyValuation) }
+                Switch(
+                    checked = valuation,
+                    onCheckedChange = { AiChatConfig.replyValuation = it; valuation = it },
+                )
+                Text(
+                    "回复优选（候选生成后再挑一条最佳的）",
+                    modifier = Modifier.padding(start = 8.dp),
+                )
             }
             OutlinedTextField(
                 value = jevKey,
