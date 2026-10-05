@@ -203,6 +203,17 @@ A: 核心功能（Xposed 模式）支持 8.0.65~8.0.76 全部版本。
 
 [GPL-3.0 License](LICENSE)
 
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=symonchu%2Fwekite&type=date&releases=&legend=bottom-right">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=symonchu/wekite&type=date&theme=dark&legend=bottom-right" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=symonchu/wekite&type=date&legend=bottom-right" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=symonchu/wekite&type=date&legend=bottom-right" />
+ </picture>
+</a>
+
 ## 🙏 致谢
 
 - [WeKit](https://github.com/Ujhhgtg/WeKit) — 上游项目
