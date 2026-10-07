@@ -21,6 +21,8 @@ WeKite 是一套针对微✉️的模块化增强方案：**62 个可开关功�
 
 ## 📱 界面预览
 
+**真机截图**（Zygisk 模式，微信 8.0.77，模块 3.66）
+
 <p align="center">
   <img src="docs/images/tab-home.jpg" width="24%" alt="主页" />
   <img src="docs/images/tab-features.jpg" width="24%" alt="功能" />
@@ -28,7 +30,17 @@ WeKite 是一套针对微✉️的模块化增强方案：**62 个可开关功�
   <img src="docs/images/tab-settings.jpg" width="24%" alt="设置" />
 </p>
 
-<p align="center"><sub>主页 · 功能 · 日志 · 设置 &nbsp;|&nbsp; 截图环境：Zygisk 模式，微信 8.0.77，模块 3.66</sub></p>
+<p align="center"><sub>主页 · 功能 · 日志 · 设置</sub></p>
+
+**界面示意图**（UI 模拟，非真机截图；用来说明功能长什么样，图中聊天内容均为虚构示例）
+
+<p align="center">
+  <img src="docs/images/mock-chat-category.jpg" width="31%" alt="「聊天」分类的功能列表" />
+  <img src="docs/images/mock-ai-chat-settings.jpg" width="31%" alt="AI 聊天助手设置" />
+  <img src="docs/images/mock-ai-analysis-card.jpg" width="31%" alt="聊天页的 AI 分析卡" />
+</p>
+
+<p align="center"><sub>「聊天」分类的功能列表 · AI 聊天助手设置 · 聊天页的分析卡（全自动模式，气泡下方那张即分析卡）</sub></p>
 
 ## 🚀 快速上手
 
