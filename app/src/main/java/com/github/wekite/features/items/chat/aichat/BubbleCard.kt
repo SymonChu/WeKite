@@ -249,10 +249,10 @@ object BubbleCard {
         val bubbleCap = (screenW * 0.68f).toInt()
         val rowCap = (row.width - leftOf(anchor ?: row, row) - dp(row, 16)).takeIf { row.width > 0 }
         val fallback = (screenW * 0.65f).toInt()
-        // +2.5dp 加宽（累计：v3.57 起 +1.5dp，2026-10-02 用户「再加宽 1dp」）：必须加在
-        // coerceAtMost 之后——v3.56 真机日志 w=870=bubbleCap 说明宽度上限在生效，
+        // +3.0dp 加宽（累计：v3.57 起 +1.5dp，v3.65 +2.5dp，2026-10-07 用户「再加宽 0.5dp」）：
+        // 必须加在 coerceAtMost 之后——v3.56 真机日志 w=870=bubbleCap 说明宽度上限在生效，
         // 若加在上限之前会被 cap 吃掉、等于没加。
-        val w = ((rowCap ?: fallback).coerceAtMost(bubbleCap) + dp(row, 2.5f)).coerceAtLeast(dp(row, 140))
+        val w = ((rowCap ?: fallback).coerceAtMost(bubbleCap) + dp(row, 3.0f)).coerceAtLeast(dp(row, 140))
         WeLogger.i(TAG, "card width w=$w (rowCap=$rowCap bubbleCap=$bubbleCap)")
         return CardLayout(row.context, w)
     }
