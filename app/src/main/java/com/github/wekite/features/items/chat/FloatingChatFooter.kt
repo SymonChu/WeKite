@@ -12,6 +12,7 @@ import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.ViewTreeObserver
 import android.view.WindowInsets
+import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -76,6 +77,16 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
 
     /** 气泡图标的宿主类名 (布局 XML 直接引用, 不会被混淆)。 */
     private const val WE_CHAT_ICON_VIEW = "com.tencent.mm.ui.widget.imageview.WeImageView"
+
+    /** 会话页滚动容器与消息列表宿主 (布局 XML 直接引用, 不会被混淆)。 */
+    private const val CHATTING_SCROLL_LAYOUT_CLASS = "com.tencent.mm.pluginsdk.ui.chat.ChattingScrollLayout"
+    private const val MM_CHATTING_LIST_VIEW_CLASS = "com.tencent.mm.ui.chatting.view.MMChattingListView"
+
+    /** ChatFooter 本身 (sdk 插件类, 类名不混淆)。 */
+    private const val CHAT_FOOTER_CLASS = "com.tencent.mm.pluginsdk.ui.chat.ChatFooter"
+
+    /** 每个 footer 对应的消息列表宿主, 避免每次高度刷新都做整树 DFS。 */
+    private val chatListHosts = WeakHashMap<ChatFooter, View>()
 
     /** 消息列表 RecyclerView 由微信自己设的原始 bottom padding (一般是 6dp)。 */
     private val chatListBasePaddings = WeakHashMap<View, Int>()
@@ -203,88 +214,243 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     // ── 8.0.79 面板收起兜底 ────────────────────────────────────────────────
     // 现象：面板/键盘展开后点聊天区不自动收起（仅 8.0.79 + 本特性组合出现；8.0.77 同配置正常）。
     //
-    // 字节级取证（2026-10-14，8.0.77 vs 8.0.79 逐 invoke 对比）：
-    // 原生收面板链两版同构且健在 —— ChattingUIFragment 装配（77 g1 / 79 p1，822B 逐 invoke 相同）
-    // → MMChattingListView.setOnTouchListener（77 a9 / 79 w8，144B 同构）
-    // → ACTION_UP → manager 组件定位 → ChatFooter.K0/L0(收起包装) → Q/N(收起本体)。
-    // w8/a9.onTouch 不做位置判定（无 hitRect），列表只要收到 UP 就收面板。
+    // 字节级取证（2026-10-15，dexdump 逐指令，用户真机同一 build 8.0.79.3182 + 对照 8.0.77）：
+    // 1. 原生监听器的挂载点：`ChattingUIFragment.p1()`
+    //    `t = MMChattingListView.getListView(); t.setOnTouchListener(new w8())`
+    //    —— 挂在【内层消息列表】(ChattingListView / ChattingRecyclerView) 上，
+    //    不是挂在外层 MMChattingListView 上（外层是 MMPullDownView 子类，只做下拉手势）。
+    // 2. 原生的收起时机是 **ACTION_DOWN**：该 onTouch 里 DOWN 分支把 this.d 置 true 后
+    //    继续做判定并调 ChatFooter，UP 分支只把 this.d 置 false 后立刻 return —— v3.76
+    //    盯着 UP 是盯错了事件。
+    // 3. 两版 onTouch 逐指令同构，唯一差别是最后一次调用：77 调 `ChatFooter.L0(Z)`，
+    //    79 调 `ChatFooter.K0(Z)`（79 的 K0(Z) 体 = `Q(0, z, -1)`，即微信自己的收起入口；
+    //    setBottomPanelVisibility(GONE) 也走它）。
     //
-    // 真机日志（2026-10-14 wekite-2026-10-14.log）：诊断 hook 记录到 38 次
-    // "native panel-collapse touch reached w8 (UP)" —— UP 事件确实到达原生监听，
-    // 但面板未收 ⇒ 8.0.79 的 w8.onTouch 在 UP 与 K0 之间多了 2 个字段判断
-    // （77 a9: 11 iget/2 iput；79 w8: 13 iget/4 iput），悬浮卡几何改变了某判定值。
-    // 同时 v3.71 的实例监听器兜底从未生效：日志里无任何 guard 相关行 ——
-    // 即使装上，模块侧 androidx.RecyclerView 监听器接口与微信进程的不是同一 Class
-    // （cross-classloader），addOnItemTouchListener 会静默 ClassCastException。
-    //
-    // 兜底 v2：放弃实例监听器，hook 微信原生类 MMChattingListView.dispatchTouchEvent
-    // （类级 hook，LibXposed 机制穿透 classloader —— 与 w8 诊断 hook 同机制已实证可用）。
-    // UP 且面板展开（footer.translationY < -8px、IME 不可见）→ 反射调 ChatFooter.K0(true)
-    // （微信自己的收起路径，77/79 同构）。用 WeakHashMap 记 listview→footer，避免逐事件反射查找。
+    // ⇒ v3.70~v3.76 的兜底两处都错：钩的是外层 MMChattingListView（继承链上的
+    // MMPullDownView.dispatchTouchEvent），点消息的 UP 根本到不了那儿 —— 真机日志实证
+    // 147 次原生 UP 里零次兜底日志；即便到了，UP 也不是原生的收起时机。
+    // v3 兜底：钩【真正收触摸的那些列表视图】（外层 + 内层都注册，按运行期 class 挂钩），
+    // DOWN/UP 都判，面板或键盘展开时走微信自己的 K0(true)；键盘可见时再补一次 IME 收起。
     private val collapseListViews = WeakHashMap<View, ChatFooter>()
-    private var collapseHookTried = false
+    private val collapseHookedClasses = HashSet<String>()
+
+    /** 展开态只记一行日志，避免每次点击（DOWN+UP）两行刷屏。 */
+    private var collapseEpisodeLogged = false
 
     private fun installPanelCollapseGuard(footer: ChatFooter) {
-        // 注册 footer 对应的消息列表视图（用于 hook 回调里反查 footer）。
-        // recycler 找不到也要继续 —— 兜底 hook 的是 MMChattingListView（列表宿主），
-        // 不依赖 recycler；找不到时记日志留痕。
-        val listHost = footer.chatListView()
-        if (listHost != null) collapseListViews[listHost] = footer
-        else WeLogger.w(TAG, "panel collapse guard: chat list view not found (will retry on next attach)")
+        val hosts = footer.listViewsForCollapse()
+        if (hosts.isEmpty()) {
+            WeLogger.w(TAG, "panel collapse guard: chat list view not found (will retry on next attach)")
+            return
+        }
+        for (v in hosts) {
+            collapseListViews[v] = footer
+            installCollapseHook(v.javaClass.name)
+        }
+        // 一次性结构快照（诊断用）：内层列表在不在外层列表的子树里 —— 决定「点消息的触摸
+        // 会不会经过外层视图」。真机日志里兜底与原生监听器从不同时触发，这一行就是判据。
+        val outer = hosts.first()
+        val inner = hosts.getOrNull(1)
+        WeLogger.i(
+            TAG,
+            "panel collapse views: outer=${outer.javaClass.name}" +
+                if (inner != null) {
+                    ", inner=${inner.javaClass.name}, innerInOuterTree=${isInTreeOf(inner, outer)}"
+                } else {
+                    ", inner=<getListView() returned null>"
+                }
+        )
+        installNativeListenerHook(hosts)
+    }
 
-        // 一次性：hook MMChattingListView.dispatchTouchEvent（微信原生类，类级 hook
-        // 穿透 classloader —— 与下方 w8 诊断 hook 同机制，已由真机日志实证可用）。
-        // UP 且面板展开 → 反射调 ChatFooter.K0(true)。
-        if (collapseHookTried) return
-        collapseHookTried = true
-        runCatching {
-            "com.tencent.mm.ui.chatting.view.MMChattingListView".toClass().reflekt()
-                .firstMethod {
-                    name = "dispatchTouchEvent"
-                    // dispatchTouchEvent 可能未被本类重写（继承自父类），必须搜继承链
-                    superclass(true)
-                    parameters { it.size == 1 && MotionEvent::class.java.isAssignableFrom(it[0]) }
-                }.hookBefore {
-                    val ev = args.getOrNull(0) as? MotionEvent ?: return@hookBefore
-                    if (ev.actionMasked != MotionEvent.ACTION_UP) return@hookBefore
-                    val lv = thisObject as? View ?: return@hookBefore
-                    val f = collapseListViews[lv] ?: return@hookBefore
-                    val ty = f.translationY
-                    // 面板/键盘展开 = footer 被抬起（负 translationY）；-8px 内视为未展开/动画噪声。
-                    // 键盘态不再跳过（v3.76）：原生 w8 的行为就是「列表收到 UP 即收起」，表情面板与
-                    // 键盘一视同仁 —— K0(true) 是微信自己的收起包装，键盘态调用会先收键盘再落卡片。
-                    if (ty > -8f) return@hookBefore
-                    runCatching {
-                        "com.tencent.mm.pluginsdk.ui.chat.ChatFooter".toClass().reflekt()
-                            .firstMethod {
-                                name = "K0"
-                                parameters { it.size == 1 && it[0] == Boolean::class.javaPrimitiveType }
-                            }.invoke(f, true)
-                        WeLogger.i(TAG, "panel collapse fallback fired (ty=$ty)")
-                    }.onFailure {
-                        WeLogger.w(TAG, "panel collapse fallback failed: ${it.message}")
-                    }
-                }
-            WeLogger.d(TAG, "panel collapse guard installed on MMChattingListView.dispatchTouchEvent")
-        }.onFailure {
-            WeLogger.w(TAG, "MMChattingListView.dispatchTouchEvent hook failed: ${it.message}")
+    private fun isInTreeOf(v: View, root: View): Boolean {
+        var node: View? = v
+        while (node != null) {
+            if (node === root) return true
+            node = node.parent as? View
         }
-        // 一次性诊断：hook 原生 touch 监听（77 a9 / 79 w8），判明原生链是否收到 UP
-        runCatching {
-            "com.tencent.mm.ui.chatting.w8".toClass().reflekt().firstMethod {
-                name = "onTouch"
-                parameters { it.size == 2 }
-            }.hookAfter {
-                val ev = args.getOrNull(1) as? MotionEvent ?: return@hookAfter
-                if (ev.actionMasked == MotionEvent.ACTION_UP) {
-                    WeLogger.i(TAG, "native panel-collapse touch reached w8 (UP)")
+        return false
+    }
+
+    /**
+     * 钩微信自己那个收面板监听器（`ChattingUIFragment.p1`: `t.setOnTouchListener(new w8())`）。
+     *
+     * 从 `View.mListenerInfo.mOnTouchListener` 运行时取出实例、钩它自己声明的 `onTouch` ——
+     * 类来自实例，**不写死混淆名**，并且触发点与微信原生收起完全同点（真机日志里这条流
+     * 每次都到，是「最靠近原生行为」的入口；原生自己在 79 里被门挡住不收，我们替它收）。
+     */
+    private fun installNativeListenerHook(hosts: List<View>) {
+        for (v in hosts) {
+            val listener = runCatching {
+                val info = View::class.java.getDeclaredField("mListenerInfo")
+                    .apply { isAccessible = true }.get(v) ?: return@runCatching null
+                info.javaClass.getDeclaredField("mOnTouchListener")
+                    .apply { isAccessible = true }.get(info)
+            }.getOrElse {
+                WeLogger.w(TAG, "panel collapse guard: cannot read OnTouchListener (${it.message})")
+                return
+            } ?: continue
+            val cls = listener.javaClass
+            if (!collapseHookedClasses.add("listener:${cls.name}")) continue
+            val target = runCatching {
+                cls.reflekt().firstMethod {
+                    name = "onTouch"
+                    parameters { it.size == 2 && MotionEvent::class.java.isAssignableFrom(it[1]) }
                 }
+            }.getOrNull()
+            if (target == null) {
+                WeLogger.w(TAG, "panel collapse guard: listener ${cls.name} has no onTouch")
+                continue
             }
-            WeLogger.d(TAG, "diagnostic hook installed on w8.onTouch")
-        }.onFailure {
-            // w8 是混淆名，8.0.80+ 可能变 —— 诊断缺位不影响兜底
-            WeLogger.w(TAG, "w8.onTouch diagnostic unavailable: ${it.message}")
+            target.hookBefore {
+                handleCollapseTouch(
+                    args.getOrNull(0) as? View ?: return@hookBefore,
+                    args.getOrNull(1) as? MotionEvent ?: return@hookBefore
+                )
+            }
+            WeLogger.i(TAG, "panel collapse guard installed on native listener ${cls.name}.onTouch")
         }
+    }
+
+    /**
+     * 收起判定的唯一入口（触摸钩与原生监听器钩共用）。
+     *
+     * 展开态（footer 被抬起 或 IME 可见）才动作：走微信自己的 K0(true)，键盘可见时再补
+     * 一手系统 IME 收起。
+     */
+    private fun handleCollapseTouch(touched: View?, ev: MotionEvent) {
+        val action = ev.actionMasked
+        if (action != MotionEvent.ACTION_DOWN && action != MotionEvent.ACTION_UP) return
+        val lv = touched ?: return
+        val footer = collapseListViews[lv]
+            ?: footerAbove(lv)?.also {
+                collapseListViews[lv] = it
+                WeLogger.i(TAG, "panel collapse: no map entry for ${lv.javaClass.name}, resolved from tree")
+            }
+            ?: return
+        val ty = footer.translationY
+        val imeVisible = footer.isImeVisible
+        // 面板/键盘都没展开（footer 没被抬起、IME 也不可见）⇒ 无需收起，顺手复位日志闸门。
+        if (ty > -8f && !imeVisible) {
+            collapseEpisodeLogged = false
+            return
+        }
+        if (!collapseEpisodeLogged) {
+            collapseEpisodeLogged = true
+            WeLogger.i(
+                TAG,
+                "panel collapse fired: action=$action view=${lv.javaClass.name} ty=$ty ime=$imeVisible"
+            )
+        }
+        collapsePanelNative(footer)
+        // 键盘态再补一手 IME 收起：微信的 K0 只改面板状态位（79 的 K0(Z) = Q(0,z,-1)），
+        // 键盘不归它管 —— 真机日志里 ty=-969（键盘态）时兜底确实触发了但键盘不收。
+        // 用系统 IME API 自己收，收完微信自己的 inset 回调会把卡片位置拉回来。
+        if (imeVisible) hideImeFor(footer)
+    }
+
+    /**
+     * 兜底要钩的视图：外层 MMChattingListView + 它的内层消息列表。
+     *
+     * 内层列表 = `MMChattingListView.getListView()` —— 与微信自己挂收面板监听器
+     * (`ChattingUIFragment.p1`: `t = MMChattingListView.getListView()`) 用的是同一个对象，
+     * 所以点聊天区的触摸一定能命中（外层只是下拉容器，消息区的触摸未必经过它）。
+     */
+    private fun ChatFooter.listViewsForCollapse(): List<View> {
+        val outer = chatListView() ?: return emptyList()
+        val out = LinkedHashSet<View>()
+        out.add(outer)
+        val inner = runCatching {
+            outer.reflekt().firstMethod { name = "getListView" }.invoke() as? View
+        }.getOrNull()
+        if (inner != null) out.add(inner)
+        return out.toList()
+    }
+
+    /**
+     * 按运行期类挂一次触摸钩（onTouchEvent 优先，退回 dispatchTouchEvent；都沿继承链找）。
+     *
+     * 用类级 hook（LibXposed 穿透 classloader）。类来自被钩视图的运行期 class，不写死混淆名。
+     */
+    private fun installCollapseHook(className: String) {
+        if (!collapseHookedClasses.add(className)) return
+        val cls = runCatching { className.toClass() }.getOrElse {
+            WeLogger.w(TAG, "panel collapse guard: class not found: $className")
+            return
+        }
+        val target = runCatching {
+            cls.reflekt().firstMethod {
+                name = "onTouchEvent"
+                superclass(true)
+                parameters { it.size == 1 && MotionEvent::class.java.isAssignableFrom(it[0]) }
+            }
+        }.getOrNull() ?: runCatching {
+            cls.reflekt().firstMethod {
+                name = "dispatchTouchEvent"
+                superclass(true)
+                parameters { it.size == 1 && MotionEvent::class.java.isAssignableFrom(it[0]) }
+            }
+        }.getOrNull()
+        if (target == null) {
+            WeLogger.w(TAG, "panel collapse guard: no touch entry point on $className")
+            return
+        }
+        // 只钩到「宿主自己的类」为止：落到 android.view.View / ViewGroup 的基类实现就放弃
+        // （那是全进程每个 View 都过的公共路径，钩了等于给所有触摸加开销）。
+        val declaring = runCatching { target.self.declaringClass.name }.getOrDefault(className)
+        if (declaring == "android.view.View" || declaring == "android.view.ViewGroup") {
+            WeLogger.w(TAG, "panel collapse guard: touch entry only on $declaring, skipped ($className)")
+            return
+        }
+        target.hookBefore {
+            handleCollapseTouch(
+                thisObject as? View ?: return@hookBefore,
+                args.getOrNull(0) as? MotionEvent ?: return@hookBefore
+            )
+        }
+        WeLogger.i(
+            TAG,
+            "panel collapse guard installed: $className -> $declaring.${runCatching { target.self.name }.getOrDefault("?")}"
+        )
+    }
+
+    /** 微信自己的收起入口（79: ChatFooter.K0(Z) → Q(0, z, -1)）。 */
+    private fun collapsePanelNative(footer: ChatFooter) {
+        runCatching {
+            CHAT_FOOTER_CLASS.toClass().reflekt()
+                .firstMethod {
+                    name = "K0"
+                    parameters { it.size == 1 && it[0] == Boolean::class.javaPrimitiveType }
+                }.invoke(footer, true)
+        }.onFailure {
+            WeLogger.w(TAG, "native panel collapse failed: ${it.message}")
+        }
+    }
+
+    private fun hideImeFor(footer: ChatFooter) {
+        runCatching {
+            val imm = footer.context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+            imm?.hideSoftInputFromWindow(footer.windowToken, 0)
+        }.onFailure {
+            WeLogger.w(TAG, "hide ime failed: ${it.message}")
+        }
+    }
+
+    /**
+     * 从被触摸的视图往上找 ChattingScrollLayout，再在里面找 ChatFooter。
+     *
+     * 兜底反查用（WeakHashMap 里的映射万一过期/换页也不至于整块失效）；
+     * 不按 activity/高度判断 —— v1.31 scope guard 的教训。
+     */
+    private fun footerAbove(v: View): ChatFooter? {
+        var node: View? = v
+        while (node != null) {
+            if (node.javaClass.name == CHATTING_SCROLL_LAYOUT_CLASS) {
+                return node.allViews.firstOrNull { it is ChatFooter } as ChatFooter?
+            }
+            node = node.parent as? View
+        }
+        return null
     }
 
     /**
@@ -431,17 +597,22 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     /**
      * 从 footer 所在的 ChattingScrollLayout 里定位消息列表宿主 MMChattingListView。
      * 兜底 hook 的目标类就是它；找不到 recycler（如 8.0.79 换了实现）也能注册。
+     *
+     * 只认「本 footer 自己那棵树」里的实例：**不能**用「已注册的任意一个还挂着的列表视图」
+     * 顶上（v3.70~v3.76 的写法）—— 会话页换页后那个实例属于别的页面，会把映射写成
+     * key=旧实例、value=新 footer，于是真实触摸永远查不到 footer（表现就是「刚进来能用、
+     * 用着用着就不收」）。
      */
     private fun ChatFooter.chatListView(): View? {
-        collapseListViews.keys.firstOrNull { it.isAttachedToWindow }?.let { return it }
+        chatListHosts[this]?.takeIf { it.isAttachedToWindow }?.let { return it }
         val scrollLayout = parent as? View
-        if (scrollLayout?.javaClass?.name != "com.tencent.mm.pluginsdk.ui.chat.ChattingScrollLayout") {
+        if (scrollLayout?.javaClass?.name != CHATTING_SCROLL_LAYOUT_CLASS) {
             logChatListLookup("parent=${scrollLayout?.javaClass?.name}")
             return null
         }
         return scrollLayout.allViews.firstOrNull {
-            it.javaClass.name == "com.tencent.mm.ui.chatting.view.MMChattingListView"
-        } ?: run {
+            it.javaClass.name == MM_CHATTING_LIST_VIEW_CLASS
+        }?.also { chatListHosts[this] = it } ?: run {
             logChatListLookup("MMChattingListView missing")
             null
         }
