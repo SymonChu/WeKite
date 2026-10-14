@@ -39,7 +39,7 @@ import kotlinx.coroutines.withContext
  *
  * 导出格式（TSV，制表符分隔，可直接粘进 Excel / 表格软件）：
  *   群昵称  昵称  备注  微信号  wxId  邀请人wxId  成员类型
- * 第一行为表头，第二行是汇总（群名 / 总人数 / 导出时间），随后每成员一行。
+ * 第一行为表头，随后每成员一行，末尾附汇总行（成员数 / 导出时间 / 群ID，v3.77 起）。
  * 邀请人缺失时写 `—`；非好友成员在 rcontact 里查不到时昵称列写 wxId 本身。
  *
  * 大群注意：剪贴板无大小硬限制，但数百行文本时部分输入法/剪贴板管理器可能截断——
@@ -170,9 +170,10 @@ object ExportGroupMembers : SwitchFeature(), IContactInfoProvider {
         )
 
         val header = "群昵称\t昵称\t备注\t微信号\twxId\t邀请人"
-        val summary = "成员数: ${sorted.size}    导出时间: $now    群ID: $groupId"
         val body = sorted.joinToString("\n") { r -> r.joinToString("\t") }
+        // 汇总行放最尾（v3.76）：不占正文首行，表头后直接是成员数据，粘贴进表格软件即为纯表。
+        val summary = "成员数: ${sorted.size}    导出时间: $now    群ID: $groupId"
 
-        return "$header\n$summary\n$body\n"
+        return "$header\n$body\n\n$summary\n"
     }
 }
