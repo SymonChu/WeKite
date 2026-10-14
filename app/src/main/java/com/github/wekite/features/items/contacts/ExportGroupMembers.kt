@@ -61,15 +61,15 @@ object ExportGroupMembers : SwitchFeature(), IContactInfoProvider {
 
     // ── IContactInfoProvider ──────────────────────────────────────────────────
 
-    /** 仅群聊的资料页显示（普通联系人 / 群成员个人页不显示） */
+    /** 仅群资料页显示；群成员个人资料页不显示（那时当前会话仍是群，须用页面自身的 wxId 反向排除） */
     override fun getContactInfoItem(activity: Activity): List<PreferenceItem> {
-        val groupId = WeCurrentConversationApi.value
-        if (!groupId.isGroupChatWxId) return emptyList()
+        if (!WeCurrentConversationApi.value.isGroupChatWxId) return emptyList()
+        if (activity.currentWxId?.isGroupChatWxId != true) return emptyList()
         return listOf(
             PreferenceItem(
                 key = PREF_KEY,
                 title = "导出群成员",
-                summary = "复制全部成员信息（TSV）到剪贴板",
+                summary = "复制全部成员信息到剪贴板",
                 position = 60,
             )
         )
