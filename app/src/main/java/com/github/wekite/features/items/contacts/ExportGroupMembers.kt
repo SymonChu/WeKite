@@ -3,6 +3,8 @@ package com.github.wekite.features.items.contacts
 import android.app.Activity
 import android.content.Context
 import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
+import com.github.wekite.activity.TransparentActivity
 import com.github.wekite.features.api.core.WeContactLabelApi
 import com.github.wekite.features.api.core.WeDatabaseApi
 import com.github.wekite.features.api.ui.WeContactPrefsScreenApi
@@ -15,10 +17,12 @@ import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.copyToClipboard
 import com.github.wekite.utils.android.currentWxId
 import com.github.wekite.utils.android.showToast
+import com.github.wekite.utils.android.showToastSuspend
 import com.github.wekite.utils.strings.isGroupChatWxId
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -88,16 +92,51 @@ object ExportGroupMembers : SwitchFeature(), IContactInfoProvider {
             withContext(Dispatchers.Main) {
                 if (text == null) {
                     showToast(activity, "导出失败，见模块日志")
-                } else {
-                    copyToClipboard(activity, text)
-                    val lines = text.count { it == '\n' } - 2 // 表头+汇总行
-                    showToast(activity, "已复制 $lines 个成员")
+                    return@withContext
                 }
+                copyToClipboard(activity, text)
+                val lines = text.count { it == '\n' } - 2 // 表头+汇总行
+                showToast(activity, "已复制 $lines 个成员，正在打开保存对话框…")
+                saveAsCsv(activity, groupId, text)
             }
         }
         return true
     }
 
+    /**
+     * 系统保存对话框另存为 .csv（UTF-8 带 BOM —— Excel/WPS 双击即开不乱码）。
+     * CreateDocument 需要 ComponentActivity 的 ActivityResult 机制，经 TransparentActivity 中转
+     * （与日志导出 saveLogFile 同法）。
+     */
+    private fun saveAsCsv(activity: Activity, groupId: String, text: String) {
+        val groupName = runCatching { WeDatabaseApi.getDisplayName(groupId) }.getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?: groupId.takeLast(6)
+        val fileName = "群成员-$groupName.csv"
+        TransparentActivity.launch(activity) {
+            val launcher = registerForActivityResult(
+                ActivityResultContracts.CreateDocument("text/csv"),
+            ) { uri ->
+                if (uri == null) {
+                    finish(); return@registerForActivityResult
+                }
+                lifecycleScope.launch(Dispatchers.IO) {
+                    runCatching {
+                        contentResolver.openOutputStream(uri, "w")!!.use { out ->
+                            // BOM: Excel 识别 UTF-8 的关键，缺了中文全是乱码
+                            out.write(byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()))
+                            out.write(text.toByteArray(Charsets.UTF_8))
+                        }
+                    }.onFailure {
+                        WeLogger.e(TAG, "failed to save csv", it)
+                        showToastSuspend("保存失败!")
+                    }.onSuccess { showToastSuspend("已保存 CSV") }
+                    withContext(Dispatchers.Main) { finish() }
+                }
+            }
+            launcher.launch(fileName)
+        }
+    }
     // ── 导出内容组装 ──────────────────────────────────────────────────────────
 
     private fun buildExportText(groupId: String): String {
