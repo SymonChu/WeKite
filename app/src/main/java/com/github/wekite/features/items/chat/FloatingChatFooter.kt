@@ -241,6 +241,8 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             "com.tencent.mm.ui.chatting.view.MMChattingListView".toClass().reflekt()
                 .firstMethod {
                     name = "dispatchTouchEvent"
+                    // dispatchTouchEvent 可能未被本类重写（继承自父类），必须搜继承链
+                    superclass(true)
                     parameters { it.size == 1 && MotionEvent::class.java.isAssignableFrom(it[0]) }
                 }.hookBefore {
                     val ev = args.getOrNull(0) as? MotionEvent ?: return@hookBefore
