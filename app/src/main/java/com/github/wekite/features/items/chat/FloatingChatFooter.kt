@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import android.graphics.Outline
 import android.os.Build
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
@@ -21,9 +22,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.recyclerview.widget.RecyclerView
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooter
 import com.tencent.mm.pluginsdk.ui.chat.ChatFooterBottom
 import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.reflekt.utils.toClass
 import java.util.concurrent.CopyOnWriteArrayList
 import com.github.wekite.dexkit.abc.IResolveDex
 import com.github.wekite.dexkit.dsl.dexMethod
@@ -130,6 +133,7 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
             applySideMargins(footer)
             applyBottomGap(footer)
             trackNavBarInset(footer)
+            installPanelCollapseGuard(footer)
         }
 
         // 微信在这里写入 bottomMargin = -面板高, 我们在它之后覆盖掉。
@@ -194,6 +198,91 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         val panel = footer.bottomPanel ?: return 0
         if (footer.isImeVisible) return panel.layoutParams?.height?.coerceAtLeast(0) ?: 0
         return (panel.height + footer.translationY).toInt().coerceAtLeast(0)
+    }
+
+    // ── 8.0.79 面板收起兜底 ────────────────────────────────────────────────
+    // 现象：面板/键盘展开后点聊天区不自动收起（仅 8.0.79 + 本特性组合出现；8.0.77 同配置正常）。
+    //
+    // 字节级取证（2026-10-14，8.0.77 vs 8.0.79 逐 invoke 对比）：
+    // 原生收面板链两版同构且健在 —— ChattingUIFragment 装配（77 g1 / 79 p1，822B 逐 invoke 相同）
+    // → MMChattingListView.setOnTouchListener（77 a9 / 79 w8，144B 同构）
+    // → ACTION_UP → manager 组件定位 → ChatFooter.K0/L0(收起包装) → Q/N(收起本体)。
+    // w8/a9.onTouch 不做位置判定（无 hitRect），列表只要收到 UP 就收面板。
+    //
+    // 推断（离线不可定案，须真机日志）：8.0.79 聊天窗被 EdgeToEdgeWrapperLayout 包裹
+    // （v3.67 适配时已实证），叠加本特性的悬浮卡几何（负 topMargin + 列表 paddingBottom）
+    // 后，点在悬浮卡区域的 UP 不再落到列表 → 原生 onTouch 收不到 → 不收面板。
+    //
+    // 兜底：给消息列表装 OnItemTouchListener（只观察不消费）：ACTION_UP 时若面板展开
+    // （footer.translationY < -8px）→ 反射调 ChatFooter.K0(true)（微信自己的收起路径，
+    // 77/79 同构）。配合 w8.onTouch 诊断日志判明原生链是否触发。
+    private val collapseGuards = WeakHashMap<View, Boolean>()
+    private var collapseHookTried = false
+
+    private fun installPanelCollapseGuard(footer: ChatFooter) {
+        val recycler = footer.chatRecycler() ?: return
+        if (collapseGuards.put(recycler, true) == true) return
+        // 静态类型是 View；模块自带的 androidx 类与微信进程里的不是同一 Class，
+        // 不能 `is RecyclerView`，按类名走反射调 addOnItemTouchListener。
+        var isRv = recycler.javaClass.name == "androidx.recyclerview.widget.RecyclerView"
+        if (!isRv) {
+            var c: Class<*>? = recycler.javaClass.superclass
+            while (c != null && !isRv) {
+                isRv = c.name == "androidx.recyclerview.widget.RecyclerView"
+                c = c.superclass
+            }
+        }
+        if (!isRv) {
+            WeLogger.w(TAG, "panel collapse guard: chat list is not RecyclerView (${recycler.javaClass.name})")
+            return
+        }
+        val listener = object : RecyclerView.SimpleOnItemTouchListener() {
+            override fun onInterceptTouchEvent(rv: RecyclerView, e: MotionEvent): Boolean {
+                if (e.actionMasked != MotionEvent.ACTION_UP) return false
+                val ty = footer.translationY
+                // 面板展开 = footer 被抬起（负 translationY）；-8px 内视为未展开/动画噪声。
+                // IME 可见时不抢（键盘收起是系统行为，configPanel 的互斥逻辑自己处理）。
+                if (ty > -8f || footer.isImeVisible) return false
+                runCatching {
+                    "com.tencent.mm.pluginsdk.ui.chat.ChatFooter".toClass().reflekt()
+                        .firstMethod {
+                            name = "K0"
+                            parameters { it.size == 1 && it[0] == Boolean::class.javaPrimitiveType }
+                        }.invoke(footer, true)
+                    WeLogger.i(TAG, "panel collapse fallback fired (ty=$ty)")
+                }.onFailure {
+                    WeLogger.w(TAG, "panel collapse fallback failed: ${it.message}")
+                }
+                return false
+            }
+        }
+        runCatching {
+            recycler.javaClass.getMethod("addOnItemTouchListener",
+                Class.forName("androidx.recyclerview.widget.RecyclerView\$OnItemTouchListener")
+            ).invoke(recycler, listener)
+            WeLogger.d(TAG, "panel collapse guard installed on ${recycler.javaClass.name}")
+        }.onFailure {
+            WeLogger.w(TAG, "guard install failed: ${it.message}")
+        }
+        // 一次性诊断：hook 原生 touch 监听（77 a9 / 79 w8），判明原生链是否收到 UP
+        if (!collapseHookTried) {
+            collapseHookTried = true
+            runCatching {
+                "com.tencent.mm.ui.chatting.w8".toClass().reflekt().firstMethod {
+                    name = "onTouch"
+                    parameters { it.size == 2 }
+                }.hookAfter {
+                    val ev = args.getOrNull(1) as? MotionEvent ?: return@hookAfter
+                    if (ev.actionMasked == MotionEvent.ACTION_UP) {
+                        WeLogger.i(TAG, "native panel-collapse touch reached w8 (UP)")
+                    }
+                }
+                WeLogger.d(TAG, "diagnostic hook installed on w8.onTouch")
+            }.onFailure {
+                // w8 是混淆名，8.0.80+ 可能变 —— 诊断缺位不影响兜底
+                WeLogger.w(TAG, "w8.onTouch diagnostic unavailable: ${it.message}")
+            }
+        }
     }
 
     /**
