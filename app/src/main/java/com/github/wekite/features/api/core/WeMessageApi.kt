@@ -165,7 +165,22 @@ object WeMessageApi : ApiFeature(), IResolveDex {
             usingEqStrings("MicroMsg.NetSceneSendMsg", "[mergeMsgSource] rawSource:%s args is null:%s flag:%s")
         }
     }
-    private val classImportMultiVideo by dexClass {
+    /**
+     * 多视频导入（[sendVideo] 用）。
+     *
+     * ⚠️ 2026-10-14 实测：微信 8.0.79(build 3200) 把这个类**删掉了**。
+     * 老锚点里的 `get video file name, dataString ` 在 18 个 dex 的字符串池里已完全不存在
+     * （离线字节级扫描，见 `dex_anchor_atlas.py`），全包也没有任何类的构造器还是
+     * `(Context, List, Intent, String, int, ?, Z)` 这个形状（8.0.77 的真身是
+     * `Lcom/tencent/mm/pluginsdk/model/f3;<init>(Landroid/content/Context;Ljava/util/List;Landroid/content/Intent;Ljava/lang/String;ILcom/tencent/mm/pluginsdk/model/d3;Z)V`）；
+     * 8.0.79 里导入逻辑被拆成静态工具类 `Lcom/tencent/mm/pluginsdk/model/g3;`
+     * + 服务 `MicroMsg.ImportMultiVideoService`（`Lyi0/l1$$a`）。
+     * 新路径未在真机验证过，不在这里贸然改写 ⇒ 退成 `allowFailure`：
+     * **strict delegate 零命中会抛异常、FeaturesLoader 会把整个 API feature 跳过**
+     * （用户侧表现 = 「微信消息 API 整块失灵」+ DEX 扫描报告里一条 `No class found for key`），
+     * 改成可选后只有 [sendVideo] 在 8.0.79 上返回 false，其余功能全部照常。
+     */
+    private val classImportMultiVideo by dexClass(allowFailure = true) {
         matcher {
             usingEqStrings("MicroMsg.GetVideoMetadata", "get video file name, dataString ")
         }
@@ -992,6 +1007,11 @@ object WeMessageApi : ApiFeature(), IResolveDex {
     }
 
     fun sendVideo(toUser: String, videoPath: String): Boolean {
+        // 8.0.79 起该类比被删除 ⇒ 解析失败，这里必须自己兜住，别让 .clazz 抛异常（见上方注释）。
+        if (classImportMultiVideo.isPlaceholder) {
+            WeLogger.w(TAG, "sendVideo skipped: import-multi-video class not resolved on this host")
+            return false
+        }
         return try {
             WeLogger.i(TAG, "sending video: $videoPath to $toUser")
             val thread = classImportMultiVideo.clazz.createInstance(

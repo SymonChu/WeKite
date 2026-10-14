@@ -210,7 +210,11 @@ object FixFilePreviewStatusBar : SwitchFeature() {
         val proc = TargetProcesses.currentName
         if (probed.add("$proc|${activity.javaClass.name}")) {
             // 取证（每个进程每个 Activity 类一行）：把「谁在哪个进程、窗口什么形态」一次说清。
-            WeLogger.d(
+            // ⚠️ 用 I 级而非 D 级：2026-10-14 用户报「打开文件状态栏透明复发」，当天的日志里
+            // 本文件 0 行 —— 这几行全是 D 级、而 D/V 默认不落盘（WeLogger.kt:369 详细日志开关），
+            // 用户不开详细日志就拿不到第一现场。升级 I 级后每进程每 Activity 类仅一行，
+            // 成本可忽略（对照 WeLogger 注释里的日志瘦身基线：这行不在每帧回调里）。
+            WeLogger.i(
                 TAG,
                 "file preview probe: proc=$proc act=${activity.javaClass.name} " +
                     "keyword=$keywordMatch comp=${activity.intent?.component?.className ?: "-"} " +
@@ -234,7 +238,8 @@ object FixFilePreviewStatusBar : SwitchFeature() {
                 content.paddingBottom
             )
             if (appliedClasses.add("$proc|${activity.javaClass.name}")) {
-                WeLogger.d(
+                // 同上：v3.41 起这几行是定位「复发」的唯一证据，升 I 级保证默认落盘。
+                WeLogger.i(
                     TAG,
                     "file preview status bar padding applied: proc=$proc " +
                         "act=${activity.javaClass.name} pad=$overlap insetTop=$insetTop childTop=$childTop"
@@ -316,7 +321,7 @@ object FixFilePreviewStatusBar : SwitchFeature() {
         detail: String,
     ) {
         if (attempt >= 3) {
-            WeLogger.d(
+            WeLogger.i(
                 TAG,
                 "file preview status bar strip paint skipped (no opaque band color): proc=$proc " +
                     "act=${activity.javaClass.name} $detail"
@@ -338,7 +343,7 @@ object FixFilePreviewStatusBar : SwitchFeature() {
         val color = stat.color ?: return
         stripPainted[decor] = color
         content.setBackgroundColor(color)
-        WeLogger.d(
+        WeLogger.i(
             TAG,
             "file preview status bar strip painted: proc=$proc act=${activity.javaClass.name} " +
                 "color=#${String.format("%08X", color)} src=$src pad=$pad (${stat.describe()})"
@@ -422,7 +427,7 @@ object FixFilePreviewStatusBar : SwitchFeature() {
                 true
             }.getOrDefault(false)
             if (applied && appliedClasses.add("strategy|$proc|${host.javaClass.simpleName}")) {
-                WeLogger.d(
+                WeLogger.i(
                     TAG,
                     "file preview status bar strategy forced ALWAYS_AVOID: proc=$proc " +
                         "host=${host.javaClass.simpleName}"
