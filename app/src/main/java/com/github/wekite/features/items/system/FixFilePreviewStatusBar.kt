@@ -250,6 +250,23 @@ object FixFilePreviewStatusBar : SwitchFeature() {
             //    取样预览页顶栏自己的颜色涂上去，这条带就归预览页自己，不再透底。
             paintStrip(activity, decor, content, overlap, proc)
         }
+        // 8.0.79（2026-10-14 真机日志定案）：预览窗口自带 EdgeToEdgeWrapperLayout 且策略为
+        // ALWAYS_AVOID —— **微信自己**把内容避让到状态栏下方（childTop==insetTop ⇒ overlap=0），
+        // 上面那条「补 padding」路径整个被跳过。但那条 140px 带仍然**没有不透明来源**
+        // （content 背景透明），用户实测透出微信壁纸 —— 与 v3.39 的「透出聊天页」同一形态，
+        // 只是这次 padding 是微信补的，不是我们补的。⇒ 避让已由宿主完成时同样要涂色：
+        // bandTop 取 wrapper 已让出的那条带的高度（= insetTop），把 content 的 paddingTop
+        // 提前 pad 做软件渲染取样（sampleOpaqueBand 只读不改、幂等）。
+        else if (overlap == 0 && insetTop > 0) {
+            // ⚠️ 带在**宿主容器**的 padding 区里（不在 content 自己的盒子里）⇒ 必须涂宿主容器，
+            //    涂 content 的背景是涂不到的（那是 v3.39 路径能生效的原因：当年 padding 加在
+            //    content 自己身上）。取 pt>0 的那个宿主 = 正在让出这条带的那个容器。
+            val bandOwner = stripHostsIn(decor).firstOrNull { it.paddingTop > 0 }
+            // 页面自己的顶栏在 content 坐标里从 y=0 开始（content 已被宿主整体下移 insetTop），
+            // 所以软件渲染的取样起点用 0（而不是 pad）：取到的是预览页自己的顶栏色，
+            // 不是顶栏下面文档区的白色。
+            if (bandOwner != null) paintStrip(activity, decor, content, insetTop, proc, bandOwner = bandOwner, renderOffset = 0)
+        }
         // 兜底：微信自己的容器按策略算 padding（v3.36 已证实）。这里方向相反 —— 让开状态栏。
         // 只在「状态栏可见（insetTop>0）而策略是 ALWAYS_HIDE」时才改，其余一律不碰。
         if (insetTop > 0) forceAvoidStatusBar(decor, proc)
@@ -273,12 +290,14 @@ object FixFilePreviewStatusBar : SwitchFeature() {
         pad: Int,
         proc: String,
         attempt: Int = 0,
+        bandOwner: View = content,
+        renderOffset: Int = pad,
     ) {
         if (stripPainted.containsKey(decor)) return
         // ① 确定性：把 content 顶部那一条自己画一遍再取众数色（不依赖窗口表面/合成器）
-        val render = renderBandStat(content, pad)
+        val render = renderBandStat(content, renderOffset)
         if (render.color != null) {
-            commitStrip(activity, decor, content, render, "render", proc, pad)
+            commitStrip(activity, decor, content, bandOwner, render, "render", proc, pad)
             return
         }
         // ② 退路：从窗口表面取样（同样要过「不透明 + 占比」双判定）
@@ -291,23 +310,23 @@ object FixFilePreviewStatusBar : SwitchFeature() {
                     val stat = if (result == PixelCopy.SUCCESS) bandStatOf(bitmap) else BandStat(null, 0, 0)
                     bitmap.recycle()
                     if (stat.color != null) {
-                        commitStrip(activity, decor, content, stat, "pcopy", proc, pad)
+                        commitStrip(activity, decor, content, bandOwner, stat, "pcopy", proc, pad)
                     } else {
                         retryStrip(
-                            activity, decor, content, pad, proc, attempt,
+                            activity, decor, content, pad, proc, attempt, bandOwner, renderOffset,
                             "render[${render.describe()}] pcopy[${stat.describe()}] result=$result"
                         )
                     }
                 }, Handler(Looper.getMainLooper()))
             }.onFailure {
                 retryStrip(
-                    activity, decor, content, pad, proc, attempt,
+                    activity, decor, content, pad, proc, attempt, bandOwner, renderOffset,
                     "render[${render.describe()}] pcopy threw ${it.javaClass.simpleName}"
                 )
             }
             return
         }
-        retryStrip(activity, decor, content, pad, proc, attempt, "render[${render.describe()}] no-window")
+        retryStrip(activity, decor, content, pad, proc, attempt, bandOwner, renderOffset, "render[${render.describe()}] no-window")
     }
 
     /** 取样失败时的重试/放弃（**绝不缓存失败结果**，否则永远不再尝试）。 */
@@ -318,6 +337,8 @@ object FixFilePreviewStatusBar : SwitchFeature() {
         pad: Int,
         proc: String,
         attempt: Int,
+        bandOwner: View = content,
+        renderOffset: Int = pad,
         detail: String,
     ) {
         if (attempt >= 3) {
@@ -328,13 +349,16 @@ object FixFilePreviewStatusBar : SwitchFeature() {
             )
             return
         }
-        content.postDelayed({ paintStrip(activity, decor, content, pad, proc, attempt + 1) }, 220)
+        content.postDelayed({
+            paintStrip(activity, decor, content, pad, proc, attempt + 1, bandOwner, renderOffset)
+        }, 220)
     }
 
     private fun commitStrip(
         activity: Activity,
         decor: View,
         content: ViewGroup,
+        bandOwner: View,
         stat: BandStat,
         src: String,
         proc: String,
@@ -342,20 +366,30 @@ object FixFilePreviewStatusBar : SwitchFeature() {
     ) {
         val color = stat.color ?: return
         stripPainted[decor] = color
-        content.setBackgroundColor(color)
+        // 涂「那条带归谁」：我们自己补 padding 时带在 content 盒子里 ⇒ 涂 content；
+        // 宿主自己让出那条带时带在宿主容器的 padding 区 ⇒ 涂宿主容器（涂 content 涂不到）。
+        bandOwner.setBackgroundColor(color)
         WeLogger.i(
             TAG,
             "file preview status bar strip painted: proc=$proc act=${activity.javaClass.name} " +
-                "color=#${String.format("%08X", color)} src=$src pad=$pad (${stat.describe()})"
+                "color=#${String.format("%08X", color)} src=$src pad=$pad owner=${bandOwner.javaClass.simpleName} " +
+                "(${stat.describe()})"
         )
     }
 
-    /** 把 `content` 从 y=pad 起的那一条软件渲染出来做统计（= App 自己画的东西，不依赖合成器）。 */
-    private fun renderBandStat(content: ViewGroup, pad: Int): BandStat {
+    /**
+     * 把 `content` 从 y=`barTop` 起的那一条软件渲染出来做统计（= App 自己画的东西，不依赖合成器）。
+     *
+     * `barTop` = **页面自己的顶栏在 content 坐标里的起点**：我们自己补过 padding 时 = pad
+     * （content 前面 pad 像素是我们补的空带）；宿主补的 padding 时 = 0（content 已被整体下移，
+     * 顶栏就从 content 的 y=0 开始）。取样区 = `[barTop+16, barTop+112)`，+16 是避开顶栏上沿的
+     * 圆角/阴影过渡带。
+     */
+    private fun renderBandStat(content: ViewGroup, barTop: Int): BandStat {
         val width = content.width
         val height = content.height
-        if (width <= 0 || height <= pad + 36) return BandStat(null, 0, 0)
-        val top = pad + 16                                  // 再往下 16px：避开圆角/阴影过渡带
+        if (width <= 0 || height <= barTop + 36) return BandStat(null, 0, 0)
+        val top = barTop + 16                               // 再往下 16px：避开圆角/阴影过渡带
         val bandHeight = minOf(96, height - top)
         if (bandHeight <= 8) return BandStat(null, 0, 0)
         val bitmap = Bitmap.createBitmap(width, bandHeight, Bitmap.Config.ARGB_8888)
