@@ -250,9 +250,10 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                     val lv = thisObject as? View ?: return@hookBefore
                     val f = collapseListViews[lv] ?: return@hookBefore
                     val ty = f.translationY
-                    // 面板展开 = footer 被抬起（负 translationY）；-8px 内视为未展开/动画噪声。
-                    // IME 可见时不抢（键盘收起是系统行为，configPanel 的互斥逻辑自己处理）。
-                    if (ty > -8f || f.isImeVisible) return@hookBefore
+                    // 面板/键盘展开 = footer 被抬起（负 translationY）；-8px 内视为未展开/动画噪声。
+                    // 键盘态不再跳过（v3.76）：原生 w8 的行为就是「列表收到 UP 即收起」，表情面板与
+                    // 键盘一视同仁 —— K0(true) 是微信自己的收起包装，键盘态调用会先收键盘再落卡片。
+                    if (ty > -8f) return@hookBefore
                     runCatching {
                         "com.tencent.mm.pluginsdk.ui.chat.ChatFooter".toClass().reflekt()
                             .firstMethod {
