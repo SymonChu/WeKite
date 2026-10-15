@@ -250,11 +250,38 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     //    （哪怕被后代消费），而微信自己的监听器挂在**内层列表**上，所以 @成员列表/表情面板那一下
     //    不会触发它、却会触发我们额外挂的外层钩子 ⇒ 「钩子被叫到」≠「点在聊天区」。
     //    修法 = 加坐标判据 [isTouchOnFooterBand]：只有 `rawY < footer 上沿`（真正的消息区）才动手。
+    //
+    // ⇒ v3.81 定案（2026-10-15 用户报「有的群 @群员正常，有的群会快速收回」+ 8.0.79 日志）：
+    //    **判据都对，多收的是「游离的 UP」** —— 日志分段统计：正常使用期 38 次 fired 全是 action=0、
+    //    ty 只有 -969/-1202 两个稳定值；@ 测试窗口 16 次 fired 里 11 次是 action=1，ty 全是
+    //    -379/-467/-726/-830/-840/-939/-968/0（动画中间值），另有 2 次 skipped 也是 action=1。
+    //    机制：@成员列表是**独立窗口**（PopupWindow），DOWN 由它处理（钩子看不到）；选中后窗口立刻关闭
+    //    ⇒ 同一手势的 UP 落回聊天窗口，此时 footer 正从面板态动画到键盘态 ⇒ 判定成立、面板被收回去。
+    //    「有的群正常」= UP 恰好落在 footer 带里被 [isTouchOnFooterBand] 放过。
+    //    修法 = [handleCollapseTouch] **只认 ACTION_DOWN**（微信自己的收起时机也是 DOWN）。
+    //    连带两处（都在同一 commit）：
+    //      ① `fired` 行前缀改 `(down-only)` —— 兼作发行门禁的**负向锚点**（v3.80 的
+    //         `panel collapse fired: action=` 必须从包里消失，见 `workspace/verify_release.py`
+    //         的 V381_GONE_MARKERS）；纯删判据的改动没有字符串消失，只能自己造一个。
+    //      ② 补「游离 UP」自证行（[gestureDownSeen]）—— UP 通路一删，v3.80 赖以定案的
+    //         「UP 到过钩子」证据就没了，必须补等价手段（发行清单「改判据必须同批落地诊断」）。
     private val collapseListViews = WeakHashMap<View, ChatFooter>()
     private val collapseHooked = HashSet<String>()
     private val collapseEntryBudget = HashMap<String, Int>()
     private var collapseEpisodeLogged = false
     private var listenerHostLogs = 0
+    /**
+     * 每条钩子「这一下 UP 之前，本钩子见过 DOWN 吗」——用于识别**游离 UP**。
+     *
+     * v3.81 只认 DOWN 之后，UP 一律静默 return；而 v3.80 正是靠 `fired` 行里的 `action=1`
+     * 才发现误收的 ⇒ 删掉 UP 通路会连带删掉「UP 到过钩子」这个证据。这里补等价自证：
+     * **没有前置 DOWN 的 UP = 游离 UP**（= @列表窗口关闭后落回聊天窗口的那一下）。
+     * 按 source 分别记账：不同钩子看到的 DOWN/UP 子集不同，共用一个标志会互相掩盖。
+     */
+    private val gestureDownSeen = HashMap<String, Boolean>()
+
+    /** 游离 UP 的记账条数（诊断用，避免刷屏）。 */
+    private var strayUpLogs = 0
 
     /** 每条钩子入口日志条数上限（诊断用，避免刷屏）。 */
     private const val ENTRY_LOG_BUDGET = 8
@@ -388,7 +415,40 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
      */
     private fun handleCollapseTouch(touched: View?, ev: MotionEvent, source: String) {
         val action = ev.actionMasked
-        if (action != MotionEvent.ACTION_DOWN && action != MotionEvent.ACTION_UP) return
+        // ── 只认 ACTION_DOWN（2026-10-15 v3.81 定案）────────────────────────────
+        // 用户报「有的群 @群员正常，有的群会快速收回」。真机日志（8.0.79）把两次误收和一次正常
+        // 分得很清楚：
+        //   正常使用期（14:27~15:25）38 次 fired **全是 action=0**，ty 只有 -969 / -1202 两个稳定值；
+        //   @ 测试窗口（15:48~15:52）16 次 fired 里 **11 次是 action=1**，ty 全是 -379/-467/-726/
+        //   -830/-840/-939/-968/0 —— **动画中间值**；另有 2 次 skipped 也是 action=1（UP 恰好落在
+        //   footer 带里，所以「有的群正常」）。
+        // 机制：@成员列表是**独立窗口**（PopupWindow），它的 DOWN 由那个窗口处理（我们的钩子看不到）；
+        // 选中后窗口立刻关闭 ⇒ **同一手势的 UP 落回聊天窗口**，成了一个「凭空出现」的 UP，
+        // 而此刻 footer 正从面板态动画到键盘态 ⇒ 判定成立、面板被收回去 = 「快速收回」。
+        //
+        // 为什么删掉 UP 是安全的：
+        //   ① 微信自己的收起时机就是 DOWN（`ChattingUIFragment.p1` 的 onTouch：UP 分支只把字段置 false 就 return）；
+        //   ② `ViewGroup.dispatchTouchEvent` 对 bounds 内所有触摸都触发 ⇒ DOWN 永远先于 UP 到达外层钩子，
+        //      「点聊天区收起」不会丢事件（日志里 38 次合法收起全是 DOWN）。
+        if (action != MotionEvent.ACTION_DOWN) {
+            // 等价自证（见 [gestureDownSeen]）：没有前置 DOWN 的 UP = 游离 UP，正是 @列表窗口
+            // 关闭后落回聊天窗口的那一下。下一份日志里「有这一行」= 机制成立且已被挡下；
+            // 「没有这一行」= 那一下压根没进钩子 ⇒ 残留误收只能来自 DOWN，改查坐标判据。
+            val sawDown = gestureDownSeen[source] == true
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                gestureDownSeen[source] = false
+                if (!sawDown && strayUpLogs < ENTRY_LOG_BUDGET) {
+                    strayUpLogs++
+                    WeLogger.i(
+                        TAG,
+                        "panel collapse ignored stray UP (no DOWN seen, down-only guard v3.81): " +
+                            "action=$action rawY=${ev.rawY} src=$source"
+                    )
+                }
+            }
+            return
+        }
+        gestureDownSeen[source] = true
         val lv = touched ?: return
         val footer = collapseListViews[lv]
             ?: footerAbove(lv)?.also {
@@ -425,10 +485,15 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         }
         if (!collapseEpisodeLogged) {
             collapseEpisodeLogged = true
+            val top = f.screenTop()
             WeLogger.i(
                 TAG,
-                "panel collapse fired: action=$action view=${lv.javaClass.name} ty=$ty " +
-                    "ime=${f.isImeVisible} kbFrame=$kbFrame src=$source"
+                // ⚠️ 前缀带 `(down-only)` 是**有意为之**：它同时充当发行门禁的负向锚点
+                //    （v3.80 的 `panel collapse fired: action=` 必须从包里消失，见
+                //    `workspace/verify_release.py` 的 V381_GONE_MARKERS）。改这一行前先看那段注释。
+                "panel collapse fired (down-only): action=$action view=${lv.javaClass.name} ty=$ty " +
+                    "ime=${f.isImeVisible} kbFrame=$kbFrame src=$source " +
+                    "rawY=${ev.rawY} footerTop=$top footerBottom=${top?.plus(f.height)}"
             )
         }
         collapsePanelNative(f)
