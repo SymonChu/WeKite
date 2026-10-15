@@ -243,6 +243,13 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     //    8.0.77 的等价物叫 `L0(Z)`。修法见 [collapsePanelNative] 的三级探测。
     //    另一条实测结论：键盘态在 8.0.77 上「看着会收」是 [hideImeFor] 救的（日志里键盘态
     //    同样 `failed`，只是系统 IME 被收起后卡片自己落回去了），面板态没有这层侥幸。
+    //
+    // ⇒ v3.80 定案（2026-10-15 用户报「@选人后输入框弹起来又马上收回」+ 8.0.79 日志）：
+    //    **外层钩子 over-fire** —— 真正执行收起的 10 次全部来自 `MMPullDownView.dispatchTouchEvent`，
+    //    内层原生监听器钩 0 次。`ViewGroup.dispatchTouchEvent` 对落在它 bounds 内的**所有**触摸都会触发
+    //    （哪怕被后代消费），而微信自己的监听器挂在**内层列表**上，所以 @成员列表/表情面板那一下
+    //    不会触发它、却会触发我们额外挂的外层钩子 ⇒ 「钩子被叫到」≠「点在聊天区」。
+    //    修法 = 加坐标判据 [isTouchOnFooterBand]：只有 `rawY < footer 上沿`（真正的消息区）才动手。
     private val collapseListViews = WeakHashMap<View, ChatFooter>()
     private val collapseHooked = HashSet<String>()
     private val collapseEntryBudget = HashMap<String, Int>()
@@ -396,10 +403,17 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                 TAG,
                 "panel collapse touch [$source]: action=$action view=${lv.javaClass.name}" +
                     "#${System.identityHashCode(lv)} footer=${footer != null} " +
-                    "ty=${footer?.translationY} ime=${footer?.isImeVisible} kbFrame=$kbFrame"
+                    "ty=${footer?.translationY} ime=${footer?.isImeVisible} kbFrame=$kbFrame " +
+                    "rawY=${ev.rawY} footerTop=${footer?.screenTop()}"
             )
         }
         val f = footer ?: return
+        // 判据顺序：先判「这一下点在不在 footer 那条带上」，再判展开态。
+        // 2026-10-15 v3.79 真机报「@选人后输入框弹起来又马上收回」= 那一下被误判成点聊天区。
+        if (isTouchOnFooterBand(f, ev)) {
+            logFooterBandSkip(f, ev, source)
+            return
+        }
         val rootH = f.rootView.height
         // 键盘判据两条并用：insets（现代）与「可见帧差」（传统/兜底）——
         // v3.77 只信 insets，一旦该信号为 false 就会静默跳过整个判定。
@@ -421,6 +435,55 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         // 键盘态再补一手 IME 收起：微信的 K0 只改面板状态位（79 的 K0(Z) = Q(0,z,-1)），
         // 键盘不归它管。用系统 IME API 自己收，收完微信自己的 inset 回调会把卡片位置拉回来。
         if (imeVisible) hideImeFor(f)
+    }
+
+    /**
+     * 触摸点是否落在 footer 自己占的那条带上（输入行 + 它下方露出来的面板）。
+     *
+     * ⚠️ 这是「点聊天区收起」的**必要判据**。2026-10-15 v3.79 真机报「@选人后输入框弹起来又马上收回」，
+     * 日志（8.0.79）证明：真正执行收起的 10 次**全部**来自外层容器 `MMPullDownView.dispatchTouchEvent`，
+     * 而挂在**内层列表**上的原生监听器钩一次都没被叫到。
+     *
+     * 原因：`ViewGroup.dispatchTouchEvent` 对**落在它 bounds 内的所有触摸**都会触发 ——
+     * 哪怕这一下随后被后代消费掉。微信自己的监听器挂在内层列表（`ChattingUIFragment.p1`：
+     * `MMChattingListView.getListView().setOnTouchListener(w8)`），所以 @成员列表 / 表情面板那一下
+     * **不会**触发它；我们额外挂的外层钩子会 ⇒ 「钩子被叫到」≠「点在聊天区」。
+     *
+     * 几何依据（见 [offscreenHeight] 的注释）：微信把面板用 `bottomMargin = -面板高` 挤到 footer
+     * 底边**之外**，再用 translationY 整体上移把它露出来 ⇒ 展开时屏幕上从 footer 上沿往下依次是
+     * 【输入行】【面板（表情面板 / @成员列表 / 「+」面板）】，即**面板位于 footer 自己的 bounds 下方**。
+     * 所以 `rawY >= footer 上沿` 就说明这一下点在输入行或面板上 —— 原样交给微信处理。
+     */
+    private fun isTouchOnFooterBand(footer: ChatFooter, ev: MotionEvent): Boolean {
+        val top = footer.screenTop() ?: return false
+        return ev.rawY >= top
+    }
+
+    /** footer 在屏幕上的上沿（`getLocationOnScreen` 已含 translationY）；取不到返回 null。 */
+    private fun ChatFooter.screenTop(): Int? = runCatching {
+        val loc = IntArray(2)
+        getLocationOnScreen(loc)
+        loc[1]
+    }.getOrNull()
+
+    /** 被「点在 footer 带上」挡下的次数（记账上限，避免刷屏）。 */
+    private var footerBandSkipLogs = 0
+
+    /**
+     * 被坐标判据挡下的每一次都记账（前 [ENTRY_LOG_BUDGET] 次）—— 否则这条判据无从自证：
+     * 下一份日志里要么看到 `skipped`（判据生效、@ 那一下确实落在 footer 带上），
+     * 要么看到 `fired` 且 `rawY < footerTop`（判据没挡住 ⇒ 换方向查）。
+     */
+    private fun logFooterBandSkip(footer: ChatFooter, ev: MotionEvent, source: String) {
+        if (footerBandSkipLogs >= ENTRY_LOG_BUDGET) return
+        footerBandSkipLogs++
+        val top = footer.screenTop()
+        WeLogger.i(
+            TAG,
+            "panel collapse skipped (touch on footer band): action=${ev.actionMasked} " +
+                "rawY=${ev.rawY} footerTop=$top footerBottom=${top?.plus(footer.height)} " +
+                "ty=${footer.translationY} ime=${footer.isImeVisible} src=$source"
+        )
     }
 
     /**
