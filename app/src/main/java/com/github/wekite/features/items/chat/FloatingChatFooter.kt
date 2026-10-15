@@ -43,6 +43,7 @@ import com.github.wekite.ui.utils.ListItem
 import com.github.wekite.ui.utils.allViews
 import com.github.wekite.ui.utils.findViewWhich
 import com.github.wekite.ui.utils.showComposeDialog
+import com.github.wekite.utils.HostInfo
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.constructor
 import java.util.WeakHashMap
@@ -212,7 +213,9 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     }
 
     // ── 8.0.79 面板收起兜底 ────────────────────────────────────────────────
-    // 现象：面板/键盘展开后点聊天区不自动收起（仅 8.0.79 + 本特性组合出现；8.0.77 同配置正常）。
+    // 现象：面板/键盘展开后点聊天区不自动收起。**8.0.77 与 8.0.79 都有** —— v3.78 之前
+    // 「8.0.77 同配置正常」的结论已由 2026-10-15 真机日志作废（同一台机器切到 8.0.77 后
+    // `panel collapse fired` 13 次 / 失败 91 次，表情面板态照样不收）。
     //
     // 字节级取证（2026-10-15，dexdump 逐指令，用户真机同一 build 8.0.79.3182 + 对照 8.0.77）：
     // 1. 原生监听器的挂载点：`ChattingUIFragment.p1()` 里
@@ -232,6 +235,14 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
     // ⇒ v3.78 定策：**不再猜哪个视图** —— 跟着宿主自己的 OnTouchListener 走（先结构取证再钩实例），
     //    并给每条钩子做入口记账（前 8 次打 action/view/ty/两条键盘判据），键盘判据同时用
     //    insets 与「可见帧差」，避免单条判据失灵导致静默跳过。
+    //
+    // ⇒ v3.79 定案（2026-10-15 真机日志 + 两个 base.apk 逐指令反汇编）：**钩子机制本身没问题** ——
+    //    8.0.77 上三条钩子都装上了、也都叫到了（`panel collapse guard installed on native
+    //    listener com.tencent.mm.ui.chatting.a9`；`panel collapse touch` 56 次、`fired` 13 次），
+    //    **只有最后那次反射调用找不到方法**：`ChatFooter` 里没有 `K0`（那是 8.0.79 的名字），
+    //    8.0.77 的等价物叫 `L0(Z)`。修法见 [collapsePanelNative] 的三级探测。
+    //    另一条实测结论：键盘态在 8.0.77 上「看着会收」是 [hideImeFor] 救的（日志里键盘态
+    //    同样 `failed`，只是系统 IME 被收起后卡片自己落回去了），面板态没有这层侥幸。
     private val collapseListViews = WeakHashMap<View, ChatFooter>()
     private val collapseHooked = HashSet<String>()
     private val collapseEntryBudget = HashMap<String, Int>()
@@ -480,17 +491,76 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
         }
     }
 
-    /** 微信自己的收起入口（79: ChatFooter.K0(Z) → Q(0, z, -1)）。 */
-    private fun collapsePanelNative(footer: ChatFooter) {
-        runCatching {
+    /** 收起入口的一条候选（列表顺序即优先级）。 */
+    private class CollapseEntry(val label: String, val invoke: (ChatFooter) -> Unit)
+
+    /**
+     * 微信自己的收起入口。**不能写死混淆名** —— 2026-10-15 真机实测（同一台机器切宿主，
+     * 日志 `DexCacheManager: host version changed: 8.0.793182 -> 8.0.773141`）：
+     * - 8.0.79(3182)：`ChatFooter.K0(Z)V` 存在（体 = `Q(0,z,-1)`）⇒ 兜底生效（fired 119 / failed 0）；
+     * - 8.0.77(3141)：**没有 K0**，等价物叫 `L0(Z)V`（体 = `N(0,z,-1)`，与 79 的 K0 逐指令同构）
+     *   ⇒ v3.78 的兜底在这台上 91 次调用全部失败
+     *   （`native panel collapse failed: No method matching conditions in …ChatFooter`），
+     *   表现就是「表情面板态点聊天区不收」；键盘态靠 [hideImeFor] 侥幸还能收。
+     *
+     * 三级探测（顺序即优先级，命中即缓存，不再每次触摸都做反射查找）：
+     * ① `K0(Z)` —— 8.0.79 的现状路径，先试它保证已生效的行为一字不变；
+     * ② `setBottomPanelVisibility(I)` —— **8.0.77 / 8.0.79 两版同名且未混淆**（`ChatFooter` 是 sdk 类），
+     *    方法体 39 条指令逐条同构：参数 ≠ 0 时调 K0/L0(true)，之后还会通知面板可见性监听者
+     *    ⇒ 比直接调 L0 更完整，也是抗混淆的长期入口；
+     * ③ `L0(Z)` —— 8.0.77 的等价物，②万一将来也被改名时的保底。
+     */
+    private val collapseEntries = listOf(
+        CollapseEntry("K0(Z)") { footer ->
             CHAT_FOOTER_CLASS.toClass().reflekt()
                 .firstMethod {
                     name = "K0"
                     parameters { it.size == 1 && it[0] == Boolean::class.javaPrimitiveType }
                 }.invoke(footer, true)
-        }.onFailure {
-            WeLogger.w(TAG, "native panel collapse failed: ${it.message}")
+        },
+        CollapseEntry("setBottomPanelVisibility(GONE)") { footer ->
+            CHAT_FOOTER_CLASS.toClass().reflekt()
+                .firstMethod {
+                    name = "setBottomPanelVisibility"
+                    parameters { it.size == 1 && it[0] == Int::class.javaPrimitiveType }
+                }.invoke(footer, View.GONE)
+        },
+        CollapseEntry("L0(Z)") { footer ->
+            CHAT_FOOTER_CLASS.toClass().reflekt()
+                .firstMethod {
+                    name = "L0"
+                    parameters { it.size == 1 && it[0] == Boolean::class.javaPrimitiveType }
+                }.invoke(footer, true)
+        },
+    )
+
+    /** 已命中的收起入口（null = 尚未解析；[collapseEntryResolved] 为 true 而本值仍 null = 三级全无）。 */
+    private var collapseEntry: CollapseEntry? = null
+    private var collapseEntryResolved = false
+
+    private fun collapsePanelNative(footer: ChatFooter) {
+        val entry = collapseEntry
+        if (entry != null) {
+            runCatching { entry.invoke(footer) }.onFailure {
+                WeLogger.w(TAG, "panel collapse via ${entry.label} threw: ${it.message}")
+            }
+            return
         }
+        // 三级全无时只记一行 —— v3.78 在 8.0.77 上把同一句失败日志刷了 91 遍。
+        if (collapseEntryResolved) return
+        collapseEntryResolved = true
+        for (candidate in collapseEntries) {
+            if (runCatching { candidate.invoke(footer) }.isSuccess) {
+                collapseEntry = candidate
+                WeLogger.i(TAG, "panel collapse entry resolved: ${candidate.label}")
+                return
+            }
+        }
+        WeLogger.w(
+            TAG,
+            "native panel collapse unavailable on ${HostInfo.versionName}: none of " +
+                collapseEntries.joinToString { it.label } + " matched $CHAT_FOOTER_CLASS"
+        )
     }
 
     private fun hideImeFor(footer: ChatFooter) {
