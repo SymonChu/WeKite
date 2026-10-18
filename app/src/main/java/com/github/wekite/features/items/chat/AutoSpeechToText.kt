@@ -64,17 +64,33 @@ object AutoSpeechToText : SwitchFeature(),
 
         if (WeMessageApi.methodGetIsTransformed.method.invoke(msgInfo.instance) as Boolean) return
         try {
-            api.reflekt()
-                .firstMethod {
+            // WeChat 8.0.78+ added a trailing Int parameter to TransformComponent's
+            // transform-voice entry (8.0.77: n0(MsgInfo, Z, I, I) → 8.0.79: x0(MsgInfo, Z, I, I, I)).
+            // WeChat's own auto-transform queue (component/fp::run) passes (msgInfo, false, -1, 0, 0),
+            // so the new tail parameter is fed 0, mirroring the pre-8.0.78 call (msgInfo, false, -1, 0).
+            val transform4 = api.reflekt().firstMethodOrNull {
+                parameters(
+                    WeMessageApi.classMsgInfo.clazz,
+                    Boolean::class,
+                    Int::class,
+                    Int::class
+                )
+                returnType = Void::class.javaPrimitiveType
+            }
+            if (transform4 != null) {
+                transform4.invoke(msgInfo.instance, false, -1, 0)
+            } else {
+                api.reflekt().firstMethod {
                     parameters(
                         WeMessageApi.classMsgInfo.clazz,
                         Boolean::class,
                         Int::class,
+                        Int::class,
                         Int::class
                     )
                     returnType = Void::class.javaPrimitiveType
-                }
-                .invoke(msgInfo.instance, false, -1, 0)
+                }.invoke(msgInfo.instance, false, -1, 0, 0)
+            }
         } catch (_: InvocationTargetException) {
             // WeChat throws `java.lang.NullPointerException: getImgPath(...) must not be null`,
             // but that's not what we should care about and doesn't affect functionality
