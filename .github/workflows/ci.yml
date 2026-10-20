@@ -82,7 +82,8 @@ jobs:
                       b'WeDatabaseApi', b'MonetEngine', b'AutoCacheImages',
                       b'BlockVoipRingtone', b'VirtualVoipVideo', b'HideConversationListDividers',
                       b'RemoveOfficialAccountAds', b'SkipSplash', b'ShowWxIdInContactDetails',
-                      b'MessageTimeEnhancements', b'FloatingChatFooter']
+                      b'MessageTimeEnhancements', b'FloatingChatFooter',
+                      b'NotificationsEvolved']
           missing = [c.decode() for c in required if c not in dex_all]
           if missing:
               print("FAIL: keepRules/rules.keep broken — missing from DEX:", missing)

@@ -35,7 +35,8 @@ object WeConversationApi : ApiFeature(), IResolveDex {
             usingEqStrings("rconversation", "PRAGMA table_info( rconversation)")
         }
     }
-    private val methodUpdateUnreadByTalker by dexMethod {
+    // 通知进化功能在会话未读清零时挂这个 hook 清消息历史, 需要跨对象访问
+    internal val methodUpdateUnreadByTalker by dexMethod {
         matcher {
             declaredClass(classConversationStorage.clazz)
             usingEqStrings("MicroMsg.ConversationStorage", "updateUnreadByTalker %s")

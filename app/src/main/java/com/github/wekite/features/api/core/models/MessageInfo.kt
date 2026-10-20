@@ -6,6 +6,7 @@ import android.content.ContentValues
 import dev.ujhhgtg.reflekt.reflekt
 import com.github.wekite.features.api.core.WeApi
 import com.github.wekite.features.api.core.WeMessageApi
+import com.github.wekite.utils.serialization.XmlUtils
 import com.github.wekite.utils.serialization.NativeXmlParser
 import com.github.wekite.utils.serialization.XmlObject
 import com.github.wekite.utils.serialization.asInt
@@ -65,6 +66,16 @@ class MessageInfo(val instance: Any) {
         }
 
     val imagePath by lazy { getFieldByName<String?>(instance, "field_imgPath") }
+
+    /**
+     * 贴纸/表情消息的 md5。图片消息里 imgPath 即 md5；若为空则回退到 content XML 里的 md5。
+     * 通知媒体功能用它来定位本地贴纸文件。
+     */
+    val stickerMd5 by lazy {
+        imagePath?.takeIf { it.isNotBlank() }
+            ?: XmlUtils.extractXmlAttr(content, "md5").takeIf { it.isNotBlank() }
+            ?: XmlUtils.extractXmlTag(content, "md5").takeIf { it.isNotBlank() }
+    }
     /** 微信在没有该列 (或 ContentValues 中无 `lvbuffer` 键) 时会留 null, 因此必须可空 */
     val lvBuffer by lazy { getFieldByName<ByteArray?>(instance, "field_lvbuffer") }
     val talkerId by lazy { getFieldByName<Int>(instance, "field_talkerId") }
