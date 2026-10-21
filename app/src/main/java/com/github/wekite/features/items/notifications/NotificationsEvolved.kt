@@ -284,32 +284,38 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
         onDone: (Boolean) -> Unit,
     ) {
         mainHandler.post {
-            val started = SystemClock.elapsedRealtime()
-            val ok = try {
-                action()
-            } catch (error: Throwable) {
-                val elapsed = SystemClock.elapsedRealtime() - started
-                if (isKernelNotReady(error)) {
-                    WeLogger.w(TAG, "$what attempt $attempt/$KERNEL_RETRY_MAX: kernel not ready (${error.message}) in ${elapsed}ms")
-                    false
-                } else {
-                    WeLogger.e(TAG, "$what attempt $attempt/$KERNEL_RETRY_MAX failed: ${error.javaClass.name}: ${error.message} in ${elapsed}ms", error)
-                    onDone(false)
-                    return@post
+            // 这一整段都在主线程上, 任何逃逸的 Throwable 都会被系统当成未捕获异常处理,
+            // 最坏会连应用进程一起带走。全部兜住, 只留日志。
+            try {
+                val started = SystemClock.elapsedRealtime()
+                val ok = try {
+                    action()
+                } catch (error: Throwable) {
+                    val elapsed = SystemClock.elapsedRealtime() - started
+                    if (isKernelNotReady(error)) {
+                        WeLogger.w(TAG, "$what attempt $attempt/$KERNEL_RETRY_MAX: kernel not ready (${error.message}) in ${elapsed}ms")
+                        false
+                    } else {
+                        WeLogger.e(TAG, "$what attempt $attempt/$KERNEL_RETRY_MAX failed: ${error.javaClass.name}: ${error.message} in ${elapsed}ms", error)
+                        runCatching { onDone(false) }
+                        return@post
+                    }
                 }
-            }
-            val elapsed = SystemClock.elapsedRealtime() - started
-            if (ok) {
-                WeLogger.i(TAG, "$what succeeded on attempt $attempt/$KERNEL_RETRY_MAX (${elapsed}ms)")
-                onDone(true)
-            } else if (attempt >= KERNEL_RETRY_MAX) {
-                WeLogger.e(TAG, "$what gave up after $KERNEL_RETRY_MAX attempts (last attempt ${elapsed}ms)")
-                onDone(false)
-            } else {
-                if (elapsed > 0) WeLogger.i(TAG, "$what attempt $attempt/$KERNEL_RETRY_MAX returned false in ${elapsed}ms, retrying in ${KERNEL_RETRY_DELAY_MS}ms")
-                mainHandler.postDelayed({
-                    retryOnMainThread(what, attempt + 1, action, onDone)
-                }, KERNEL_RETRY_DELAY_MS)
+                val elapsed = SystemClock.elapsedRealtime() - started
+                if (ok) {
+                    WeLogger.i(TAG, "$what succeeded on attempt $attempt/$KERNEL_RETRY_MAX (${elapsed}ms)")
+                    onDone(true)
+                } else if (attempt >= KERNEL_RETRY_MAX) {
+                    WeLogger.e(TAG, "$what gave up after $KERNEL_RETRY_MAX attempts (last attempt ${elapsed}ms)")
+                    onDone(false)
+                } else {
+                    if (elapsed > 0) WeLogger.i(TAG, "$what attempt $attempt/$KERNEL_RETRY_MAX returned false in ${elapsed}ms, retrying in ${KERNEL_RETRY_DELAY_MS}ms")
+                    mainHandler.postDelayed({
+                        retryOnMainThread(what, attempt + 1, action, onDone)
+                    }, KERNEL_RETRY_DELAY_MS)
+                }
+            } catch (error: Throwable) {
+                WeLogger.e(TAG, "$what crashed in completion handler at attempt $attempt", error)
             }
         }
     }
