@@ -206,6 +206,10 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     private data class CachedAvatar(val icon: Icon, val expiresAt: Long, val customAvatarKey: String)
 
     private val stateLock = Any()
+    // 回复/标已读后的一小段"静默窗": 微信常在这期间按旧状态把同一条通知重新刷出来,
+    // 造成"取消了又出现"。窗内只在**该会话未读为 0**时压制重发, 真有新消息不拦。
+    private val suppressRepostUntil = HashMap<String, Long>()
+    private const val SUPPRESS_REPOST_WINDOW_MS = 8_000L
     private val pendingMessages = HashMap<String, ArrayDeque<PendingMessage>>()
     private val avatarLock = Any()
     private val avatarCache = LruCache<String, CachedAvatar>(maxLimit = 64)
@@ -402,6 +406,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                                 // 回复成功后自动收尾: 标已读 -> 清会话状态 -> 关掉这条通知。
                                 val markedRead = WeConversationApi.markAsRead(targetWxId)
                                 WeLogger.i(TAG, "quick reply: mark-as-read=$markedRead for $targetWxId")
+                                armRepostSuppression(targetWxId)
                                 clearConversationState(targetWxId)
                                 removeContentIntent(targetWxId)
                                 cancelConversationNotifications(notificationManager, targetWxId, notifyKey)
@@ -456,6 +461,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                                 WeLogger.w(TAG, "mark-as-read storage not ready for $targetWxId; re-posting notification")
                                 repostLastNotification(notificationManager, targetWxId)
                             } else if (WeConversationApi.markAsRead(targetWxId)) {
+                                armRepostSuppression(targetWxId)
                                 clearConversationState(targetWxId)
                                 removeContentIntent(targetWxId)
                                 cancelConversationNotifications(notificationManager, targetWxId, notifyKey)
@@ -748,6 +754,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
             messageHistory.clear()
             pendingContentIntents.clear()
             lastPostedNotifications.clear()
+            suppressRepostUntil.clear()
         }
         notificationContext.remove()
         synchronized(avatarLock) { avatarCache.clear() }
@@ -809,6 +816,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
             "cancelConversationNotifications: $talker -> ${keys.size} key(s) " +
                 keys.joinToString { "${it.tag}/${it.id}" },
         )
+        dumpActiveNotifications(manager, "$talker right after cancel")
         if (keys.isEmpty()) return
         CANCEL_RETRY_DELAYS_MS.forEachIndexed { index, delay ->
             mainHandler.postDelayed({
@@ -823,9 +831,45 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                     )
                     alive.forEach { manager.cancel(it.tag, it.id) }
                 }
+                // 每次核对都把微信当前还在通知栏的条目全量打出来: 只有它能证明
+                // 「我们这条没了但别的还在」还是「同一条被宿主重新发出」。
+                dumpActiveNotifications(manager, "$talker check #${index + 1}")
             }, delay)
         }
     }
+
+    /** 打印微信当前仍在通知栏的全部条目。 */
+    private fun dumpActiveNotifications(manager: NotificationManager, note: String) {
+        val alive = try {
+            manager.activeNotifications
+        } catch (error: Throwable) {
+            WeLogger.w(TAG, "dumpActiveNotifications failed ($note)", error)
+            return
+        }
+        val wechat = alive.filter { it.packageName == PackageNames.WECHAT }
+        WeLogger.i(
+            TAG,
+            "active notifications ($note): total=${alive.size} wechat=${wechat.size} " +
+                wechat.joinToString { "${it.tag}/${it.id}(group=${it.notification.group})" },
+        )
+    }
+
+    /** 开启一小段静默窗: 该会话此后的陈旧通知重发将被压制(仅当未读为 0)。 */
+    private fun armRepostSuppression(talker: String) {
+        synchronized(stateLock) {
+            suppressRepostUntil[talker] = SystemClock.elapsedRealtime() + SUPPRESS_REPOST_WINDOW_MS
+        }
+        WeLogger.i(TAG, "suppressing stale re-posts for $talker (${SUPPRESS_REPOST_WINDOW_MS}ms)")
+    }
+
+    /** 该会话的未读数; 读不到(表/句柄未就绪)返回 -1, 调用方据此不要做压制判断。 */
+    private fun unreadCountOf(talker: String): Int = runCatching {
+        WeDatabaseApi.rawQuery("SELECT unReadCount, unReadMuteCount, atCount FROM rconversation WHERE username=?", arrayOf<Any>(talker))
+            .use { cursor ->
+                if (!cursor.moveToFirst()) return@use -1
+                maxOf(cursor.getInt(0), cursor.getInt(1), cursor.getInt(2))
+            }
+    }.getOrDefault(-1)
 
     /** 该 (tag,id) 是否仍在通知栏里。取不到状态(API 过低)时按"不确定"处理, 返回 false 不打扰。 */
     private fun stillActive(manager: NotificationManager, key: NotificationKey): Boolean = try {
@@ -841,6 +885,22 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
         context: NotificationContext,
         originalNotify: OriginalMethodInvoker,
     ) {
+        // 记录每一次被拦下的发布: 用来判断"取消之后又出现"是不是宿主重新发的。
+        WeLogger.i(
+            TAG,
+            "notify intercepted for ${context.talker} key=${key.tag}/${key.id} group=${notif.group}",
+        )
+        // 静默窗内 + 该会话确实没有未读 => 这是微信按旧状态刷回来的陈旧通知, 不再发布。
+        val suppressUntil = synchronized(stateLock) { suppressRepostUntil[context.talker] ?: 0L }
+        if (SystemClock.elapsedRealtime() < suppressUntil) {
+            val unread = unreadCountOf(context.talker)
+            if (unread == 0) {
+                synchronized(stateLock) { notificationTalkers.remove(key) }
+                WeLogger.i(TAG, "suppressed stale notification re-post for ${context.talker} (unread=0)")
+                return
+            }
+            WeLogger.i(TAG, "notification re-post allowed for ${context.talker} (unread=$unread)")
+        }
         val notifTitle = notif.extras.getString(Notification.EXTRA_TITLE)
             ?: "未知对话（请向模块开发者报告错误）"
         val notifText = notif.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()
