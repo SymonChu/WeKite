@@ -39,7 +39,10 @@ object WeConversationApi : ApiFeature(), IResolveDex {
     internal val methodUpdateUnreadByTalker by dexMethod {
         matcher {
             declaredClass(classConversationStorage.clazz)
-            usingEqStrings("MicroMsg.ConversationStorage", "updateUnreadByTalker %s")
+            // 不能用 usingEqStrings: 8.0.79 上这个方法(b0)一共用了 10 个字符串常量
+            // ("parentRef"/"atCount"/"username= ?"/"unReadCount" 等), 要求字符串集合精确
+            // 等于两个必然零命中。单靠唯一的格式化串定位即可。
+            usingStrings("updateUnreadByTalker %s")
         }
     }
 
@@ -224,7 +227,9 @@ object WeConversationApi : ApiFeature(), IResolveDex {
 //    private var ecsGiftMsgService: Any? = null
 
     val conversationStorage by lazy {
-        WeServiceApi.storageFeatureService.reflekt()
+        val service = WeServiceApi.storageFeatureService
+            ?: throw IllegalStateException("mCoreStorage not initialized (storageFeatureService null)")
+        service.reflekt()
             .firstMethod {
                 returnType = classConversationStorage.clazz
             }
@@ -300,12 +305,18 @@ object WeConversationApi : ApiFeature(), IResolveDex {
 //        }
 //    }
 
-    fun markAsRead(talker: String) {
-        try {
-            methodUpdateUnreadByTalker.method.invoke(conversationStorage, talker)
-            WeLogger.d(TAG, "marked $talker as read")
-        } catch (ex: Exception) {
+    /** 把某会话标为已读。返回是否成功, 调用方据此决定要不要保留通知。 */
+    fun markAsRead(talker: String): Boolean {
+        return try {
+            val method = methodUpdateUnreadByTalker.method
+            val storage = conversationStorage
+            WeLogger.i(TAG, "markAsRead: $talker -> ${method.name}() on ${storage.javaClass.name}")
+            method.invoke(storage, talker)
+            WeLogger.i(TAG, "markAsRead: $talker updated")
+            true
+        } catch (ex: Throwable) {
             WeLogger.w(TAG, "exception while updating unread count for $talker", ex)
+            false
         }
     }
 

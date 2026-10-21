@@ -105,7 +105,10 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         matcher {
             methods {
                 add {
-                    paramCount = 1
+                    // 不能用 paramCount 约束: 8.0.79 上带锚串的 J(I)V 是实例方法(public final),
+                    // 算上 this 实际参数个数是 2, 写 paramCount = 1 会零命中、整个类解析成 null
+                    // (v3.85 实录: createInstance 报 "Could not find a suitable constructor for null")。
+                    // "markMsgFailed for id:%d" 在 8.0.79 全 dex 唯一, 单靠它就够定位。
                     usingStrings("MicroMsg.NetSceneSendMsg", "markMsgFailed for id:%d")
                 }
             }
@@ -1219,10 +1222,58 @@ object WeMessageApi : ApiFeature(), IResolveDex {
             WeLogger.w(TAG, "sendText: send-msg object not ready (kernel not initialized), to=$toUser")
             throw IllegalStateException("mCoreNetwork not initialized (send-msg object null), to=$toUser")
         }
-        WeLogger.i(TAG, "sendText stage 2/3: creating NetSceneSendMsg (queue=${sendMsgObject.javaClass.name})")
-        val msgObj = classNetSceneSendMsg.clazz.createInstance(toUser, text, 1, 0, null)
+        WeLogger.i(TAG, "sendText stage 2/3: creating NetSceneSendMsg")
+        val msgObj = newSendMsgScene(toUser, text)
         WeLogger.i(TAG, "sendText stage 3/3: posting to net scene queue")
         return methodPostToQueue.method.invoke(sendMsgObject, msgObj) as? Boolean ?: false
+    }
+
+    /**
+     * 构造 NetSceneSendMsg 实例。
+     *
+     * 构造器签名随宿主版本变化: 8.0.65~8.0.76 是 (String, String, int, int, Object);
+     * 8.0.79 是 (String, String, int, int, long, String) —— 微信自己就是
+     * new(toUser, content, type, flag, msgId, msgSource)。
+     * 所以按参数类型挑构造器, 前 4 位固定 (对方 wxid, 正文, 1, 0), 其余原始类型补 0、引用类型补 null。
+     */
+    private fun newSendMsgScene(toUser: String, text: String): Any {
+        val clazz = classNetSceneSendMsg.clazz
+            ?: throw IllegalStateException("NetSceneSendMsg class not resolved on this host")
+        val ctor = clazz.constructors
+            .filter { candidate ->
+                val types = candidate.parameterTypes
+                types.size >= 5 &&
+                    types[0] == String::class.java &&
+                    types[1] == String::class.java &&
+                    types[2] == Int::class.javaPrimitiveType &&
+                    types[3] == Int::class.javaPrimitiveType
+            }
+            .minByOrNull { it.parameterTypes.size }
+            ?: throw IllegalStateException(
+                "no suitable NetSceneSendMsg ctor: " +
+                    clazz.constructors.joinToString(" | ") { it.parameterTypes.joinToString(",") { t -> t.simpleName } },
+            )
+        val types = ctor.parameterTypes
+        val args = arrayOfNulls<Any?>(types.size)
+        args[0] = toUser
+        args[1] = text
+        args[2] = 1
+        args[3] = 0
+        for (i in 4 until types.size) {
+            args[i] = when (types[i]) {
+                java.lang.Long.TYPE -> 0L
+                java.lang.Integer.TYPE -> 0
+                java.lang.Short.TYPE -> 0.toShort()
+                java.lang.Byte.TYPE -> 0.toByte()
+                java.lang.Boolean.TYPE -> false
+                java.lang.Character.TYPE -> '\u0000'
+                java.lang.Float.TYPE -> 0f
+                java.lang.Double.TYPE -> 0.0
+                else -> null
+            }
+        }
+        WeLogger.i(TAG, "sendText: NetSceneSendMsg ctor = (${types.joinToString(",") { it.simpleName }})")
+        return ctor.newInstance(*args)!!
     }
 
     /** 发送文件消息 */

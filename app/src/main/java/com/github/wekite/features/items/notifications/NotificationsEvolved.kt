@@ -328,6 +328,17 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
 
     private val notificationReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            try {
+                handleNotificationAction(context, intent)
+            } catch (error: Throwable) {
+                // 广播回调里逃逸的异常会被系统当成未捕获异常, 直接带走进程 ——
+                // 而进程一死, 通知上的「发送中/处理中」状态就再也回不来 (v3.85 实测:
+                // 标已读只留下一行日志, 紧接着进程重启, 广播丢失)。这里全兜住并留痕。
+                WeLogger.e(TAG, "notification action ${intent.action} crashed", error)
+            }
+        }
+
+        private fun handleNotificationAction(context: Context, intent: Intent) {
             val targetWxId = intent.getStringExtra("extra_target_wxid") ?: return
             if (TargetProcesses.currentType != TargetProcesses.PROC_MAIN) {
                 WeLogger.i(
@@ -336,6 +347,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                 )
                 return
             }
+            WeLogger.i(TAG, "handling action=${intent.action} for $targetWxId")
             val notificationManager =
                 context.getSystemService<NotificationManager>()
 
@@ -428,13 +440,17 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                         action = { storageProbe() },
                     ) { ready ->
                         try {
-                            if (ready) {
-                                WeConversationApi.markAsRead(targetWxId)
+                            if (!ready) {
+                                WeLogger.w(TAG, "mark-as-read storage not ready for $targetWxId; re-posting notification")
+                                repostLastNotification(notificationManager, targetWxId)
+                            } else if (WeConversationApi.markAsRead(targetWxId)) {
                                 clearConversationState(targetWxId)
                                 removeContentIntent(targetWxId)
                                 cancelConversationNotifications(notificationManager, targetWxId)
+                                WeLogger.i(TAG, "mark-as-read done for $targetWxId; notification cancelled")
                             } else {
-                                WeLogger.w(TAG, "mark-as-read storage still not ready for $targetWxId; notification kept")
+                                WeLogger.w(TAG, "mark-as-read failed for $targetWxId; re-posting notification")
+                                repostLastNotification(notificationManager, targetWxId)
                             }
                         } finally {
                             finishOnce()
