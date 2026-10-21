@@ -348,6 +348,12 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                 return
             }
             WeLogger.i(TAG, "handling action=${intent.action} for $targetWxId")
+            // 按钮 Intent 里带了通知自身的 (tag,id); 冷启动进程里内存映射为空时, 靠它才能取消通知。
+            val notifyKey = if (intent.hasExtra("extra_notify_id")) {
+                NotificationKey(intent.getStringExtra("extra_notify_tag"), intent.getIntExtra("extra_notify_id", 0))
+            } else {
+                null
+            }
             val notificationManager =
                 context.getSystemService<NotificationManager>()
 
@@ -391,8 +397,12 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                     ) { sent ->
                         try {
                             if (sent) {
-                                WeConversationApi.markAsRead(targetWxId)
-                                cancelConversationNotifications(notificationManager, targetWxId)
+                                // 回复成功后自动收尾: 标已读 -> 清会话状态 -> 关掉这条通知。
+                                val markedRead = WeConversationApi.markAsRead(targetWxId)
+                                WeLogger.i(TAG, "quick reply: mark-as-read=$markedRead for $targetWxId")
+                                clearConversationState(targetWxId)
+                                removeContentIntent(targetWxId)
+                                cancelConversationNotifications(notificationManager, targetWxId, notifyKey)
 
                                 // markAsRead 会经下面的 hook 清掉历史。按配置恢复, 两种模式下都补上这条快捷回复。
                                 appendHistory(targetWxId, preservedHistory)
@@ -446,7 +456,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                             } else if (WeConversationApi.markAsRead(targetWxId)) {
                                 clearConversationState(targetWxId)
                                 removeContentIntent(targetWxId)
-                                cancelConversationNotifications(notificationManager, targetWxId)
+                                cancelConversationNotifications(notificationManager, targetWxId, notifyKey)
                                 WeLogger.i(TAG, "mark-as-read done for $targetWxId; notification cancelled")
                             } else {
                                 WeLogger.w(TAG, "mark-as-read failed for $targetWxId; re-posting notification")
@@ -769,13 +779,26 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
             .onFailure { WeLogger.w(TAG, "failed to re-post notification for $talker", it) }
     }
 
-    private fun cancelConversationNotifications(manager: NotificationManager, talker: String) {
+    private fun cancelConversationNotifications(
+        manager: NotificationManager,
+        talker: String,
+        explicitKey: NotificationKey? = null,
+    ) {
         val keys = synchronized(stateLock) {
             invalidatePendingNotifications { it.talker == talker }
             lastPostedNotifications.remove(talker)
-            notificationTalkers.filterValues { it == talker }.keys.toList()
+            buildList {
+                // 按钮 Intent 带过来的那条通知优先(冷启动时内存映射是空的, 只有它靠得住)。
+                explicitKey?.let { add(it) }
+                addAll(notificationTalkers.filterValues { it == talker }.keys)
+            }.distinct()
         }
         keys.forEach { manager.cancel(it.tag, it.id) }
+        WeLogger.i(
+            TAG,
+            "cancelConversationNotifications: $talker -> ${keys.size} key(s) " +
+                keys.joinToString { "${it.tag}/${it.id}" },
+        )
     }
 
     private fun scheduleNotification(
@@ -818,7 +841,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                     val enhanced = try {
                         enhanceNotification(
                             notif.clone(), context.talker, notifTitle,
-                            fallbackGroupSenderName, capturedMessage?.senderWxId, history,
+                            fallbackGroupSenderName, capturedMessage?.senderWxId, history, key,
                         )
                     } catch (error: CancellationException) {
                         throw error
@@ -923,6 +946,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
         fallbackGroupSenderName: String?,
         currentSenderWxId: String?,
         history: List<HistoryEntry>,
+        notifyKey: NotificationKey,
     ): Notification {
         // 通知一被接受就先启动懒加载的大图下载,
         // 别等头像/名字处理或下一条历史消息把时限耗光。
@@ -1011,6 +1035,11 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
         val replyIntent = Intent(ACTION_REPLY).apply {
             setPackage(PackageNames.WECHAT)
             putExtra("extra_target_wxid", convWxId)
+            // 把通知的 (tag,id) 一起带给接收器: 回复/标已读广播常把微信从冷启动拉起,
+            // 那时内存里的 notificationTalkers 映射是空的, 单靠它取消不到通知,
+            // 结果就是"回复成功但通知还挂着、会话仍未读"。
+            putExtra("extra_notify_tag", notifyKey.tag)
+            putExtra("extra_notify_id", notifyKey.id)
         }
         val replyPendingIntent = PendingIntent.getBroadcast(
             context, convWxId.hashCode(), replyIntent,
@@ -1026,6 +1055,8 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
         val readIntent = Intent(ACTION_MARK_READ).apply {
             setPackage(PackageNames.WECHAT)
             putExtra("extra_target_wxid", convWxId)
+            putExtra("extra_notify_tag", notifyKey.tag)
+            putExtra("extra_notify_id", notifyKey.id)
         }
         val readPendingIntent = PendingIntent.getBroadcast(
             context, convWxId.hashCode(), readIntent,
