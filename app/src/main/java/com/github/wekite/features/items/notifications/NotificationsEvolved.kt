@@ -239,9 +239,80 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     private val pendingContentIntents = HashMap<String, PendingIntent>()
     private var receiverRegistered = false
 
+    // 微信的回复广播会同时唤醒 main 与 push 两个进程; push 进程没有完整的网络/存储内核
+    // (v3.83 实测: sendText 抛 "mCoreNetwork not initialized!", markAsRead 在存储对象上 NPE),
+    // 且广播会从冷启动把进程拉起来、动作跑在内核就绪之前。因此:
+    //  1. 只在主进程处理 (push 直接让路) —— 同时消除「同一条消息发两遍」的隐患;
+    //  2. 发送/标已读带内核就绪重试 (最多 5 次 × 2s ≈ 8s 窗口, 覆盖冷启动初始化耗时);
+    //  3. onReceive 用 goAsync 挂起广播, 给重试留够窗口 (系统广播 10s 上限, goAsync 可续)。
+    private const val KERNEL_RETRY_MAX = 5
+    private const val KERNEL_RETRY_DELAY_MS = 2_000L
+
+    /** 微信内核未初始化类异常 (宿主 ka6.a 抛 "mCoreNetwork not initialized!" 等)。 */
+    private fun isKernelNotReady(error: Throwable): Boolean {
+        var cur: Throwable? = error
+        while (cur != null) {
+            if (cur.message?.contains("not initialized") == true) return true
+            cur = cur.cause
+        }
+        return false
+    }
+
+    /** 在当前线程轮询直到动作成功/确定性失败/内核就绪窗口耗尽。返回最终是否成功。 */
+    private inline fun retryUntilKernelReady(
+        what: String,
+        attemptLog: () -> Unit,
+        action: () -> Boolean,
+    ): Boolean {
+        for (attempt in 1..KERNEL_RETRY_MAX) {
+            attemptLog()
+            val ok = try {
+                action()
+            } catch (error: Throwable) {
+                if (isKernelNotReady(error)) {
+                    WeLogger.w(TAG, "$what attempt $attempt: kernel not ready (${error.message})")
+                    false
+                } else {
+                    throw error
+                }
+            }
+            if (ok) {
+                if (attempt > 1) WeLogger.i(TAG, "$what succeeded on attempt $attempt")
+                return true
+            }
+            if (attempt == KERNEL_RETRY_MAX) {
+                WeLogger.e(TAG, "$what gave up after $KERNEL_RETRY_MAX attempts (kernel still not ready)")
+                return false
+            }
+            SystemClock.sleep(KERNEL_RETRY_DELAY_MS)
+        }
+        return false
+    }
+
+    private fun waitUntilMarkReadReady(talker: String): Boolean {
+        // markAsRead 走 conversationStorage; storage 没就绪时直接调会 NPE (v3.83 实测)。
+        // 这里轻探: rawQuery 可用 = 存储内核就绪。WeDatabaseApi.isReady 是 hook 时机标记,
+        // 不代表本进程 storage 服务已拿到, 故以真实探活为准。
+        return retryUntilKernelReady(
+            what = "mark-as-read probe for $talker",
+            attemptLog = {},
+        ) {
+            runCatching { WeDatabaseApi.rawQuery("SELECT 1 FROM rconversation LIMIT 1").use { it.moveToFirst() } }
+                .onFailure { WeLogger.w(TAG, "storage probe failed: ${it.message}") }
+                .getOrDefault(false)
+        }
+    }
+
     private val notificationReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             val targetWxId = intent.getStringExtra("extra_target_wxid") ?: return
+            if (TargetProcesses.currentType != TargetProcesses.PROC_MAIN) {
+                WeLogger.i(
+                    TAG,
+                    "ignore action=${intent.action} in non-main process (${TargetProcesses.currentName})"
+                )
+                return
+            }
             val notificationManager =
                 context.getSystemService<NotificationManager>()
 
@@ -260,31 +331,55 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                             messageHistory[targetWxId]?.toList().orEmpty()
                         }
                     }
-                    WeLogger.i(TAG, "quick replying '$replyContent' to $targetWxId")
-                    WeMessageApi.sendText(targetWxId, replyContent)
-                    WeConversationApi.markAsRead(targetWxId)
-                    cancelConversationNotifications(notificationManager, targetWxId)
+                    val pending = goAsync()
+                    Thread {
+                        try {
+                            WeLogger.i(TAG, "quick replying '$replyContent' to $targetWxId")
+                            val sent = retryUntilKernelReady(
+                                what = "quick reply to $targetWxId",
+                                attemptLog = {},
+                            ) { WeMessageApi.sendText(targetWxId, replyContent) }
+                            if (sent) {
+                                waitUntilMarkReadReady(targetWxId)
+                                WeConversationApi.markAsRead(targetWxId)
+                                cancelConversationNotifications(notificationManager, targetWxId)
 
-                    // markAsRead 会经下面的 hook 清掉历史。按配置恢复, 两种模式下都补上这条快捷回复。
-                    appendHistory(targetWxId, preservedHistory)
-                    appendHistory(
-                        targetWxId,
-                        HistoryEntry(
-                            senderWxId = WeApi.selfWxId,
-                            senderName = null,
-                            text = replyContent,
-                            timestamp = System.currentTimeMillis(),
-                            messageId = null,
-                        ),
-                    )
+                                // markAsRead 会经下面的 hook 清掉历史。按配置恢复, 两种模式下都补上这条快捷回复。
+                                appendHistory(targetWxId, preservedHistory)
+                                appendHistory(
+                                    targetWxId,
+                                    HistoryEntry(
+                                        senderWxId = WeApi.selfWxId,
+                                        senderName = null,
+                                        text = replyContent,
+                                        timestamp = System.currentTimeMillis(),
+                                        messageId = null,
+                                    ),
+                                )
+                            } else {
+                                // 发送失败: 保留通知, 用户至少能看到还有未回的消息。
+                                WeLogger.w(TAG, "quick reply to $targetWxId failed after retries; notification kept")
+                            }
+                        } finally {
+                            pending.finish()
+                        }
+                    }.start()
                 }
 
                 ACTION_MARK_READ -> {
-                    WeLogger.i(TAG, "marking chat as read for $targetWxId")
-                    WeConversationApi.markAsRead(targetWxId)
-                    clearConversationState(targetWxId)
-                    removeContentIntent(targetWxId)
-                    cancelConversationNotifications(notificationManager, targetWxId)
+                    val pending = goAsync()
+                    Thread {
+                        try {
+                            WeLogger.i(TAG, "marking chat as read for $targetWxId")
+                            waitUntilMarkReadReady(targetWxId)
+                            WeConversationApi.markAsRead(targetWxId)
+                            clearConversationState(targetWxId)
+                            removeContentIntent(targetWxId)
+                            cancelConversationNotifications(notificationManager, targetWxId)
+                        } finally {
+                            pending.finish()
+                        }
+                    }.start()
                 }
 
                 ACTION_NOTIFICATION_OPENED -> {

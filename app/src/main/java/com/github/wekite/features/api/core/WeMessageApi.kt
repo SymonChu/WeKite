@@ -1198,7 +1198,13 @@ object WeMessageApi : ApiFeature(), IResolveDex {
     fun sendText(toUser: String, text: String): Boolean {
         return try {
             WeLogger.i(TAG, "sending text message: $text")
-            val sendMsgObject = methodGetSendMsgObject.method.invoke(null) ?: return false
+            val sendMsgObject = methodGetSendMsgObject.method.invoke(null)
+            if (sendMsgObject == null) {
+                // 微信核心 (MMKernel) 尚未初始化完时拿不到发送队列对象 —— 之前这里静默
+                // return false, 快捷回复在进程冷启动早期点击时就无声丢失 (v3.83 实测)。
+                WeLogger.w(TAG, "sendText: send-msg object not ready (kernel not initialized), to=$toUser")
+                return false
+            }
             val msgObj = classNetSceneSendMsg.clazz.createInstance(toUser, text, 1, 0, null)
             methodPostToQueue.method.invoke(sendMsgObject, msgObj) as? Boolean ?: false
         } catch (e: Exception) {
