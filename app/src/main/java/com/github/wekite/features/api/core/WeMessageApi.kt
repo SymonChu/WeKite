@@ -1211,6 +1211,7 @@ object WeMessageApi : ApiFeature(), IResolveDex {
      */
     fun sendTextOrThrow(toUser: String, text: String): Boolean {
         WeLogger.i(TAG, "sending text message: $text")
+        WeLogger.i(TAG, "sendText stage 1/3: resolving send-msg object")
         val sendMsgObject = methodGetSendMsgObject.method.invoke(null)
         if (sendMsgObject == null) {
             // 微信核心 (MMKernel) 尚未初始化完时拿不到发送队列对象 —— 之前这里静默
@@ -1218,7 +1219,9 @@ object WeMessageApi : ApiFeature(), IResolveDex {
             WeLogger.w(TAG, "sendText: send-msg object not ready (kernel not initialized), to=$toUser")
             throw IllegalStateException("mCoreNetwork not initialized (send-msg object null), to=$toUser")
         }
+        WeLogger.i(TAG, "sendText stage 2/3: creating NetSceneSendMsg (queue=${sendMsgObject.javaClass.name})")
         val msgObj = classNetSceneSendMsg.clazz.createInstance(toUser, text, 1, 0, null)
+        WeLogger.i(TAG, "sendText stage 3/3: posting to net scene queue")
         return methodPostToQueue.method.invoke(sendMsgObject, msgObj) as? Boolean ?: false
     }
 
