@@ -253,11 +253,12 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     //      goAsync 永不 finish ⇒ 通知栏回复按钮一直转圈), 而主线程上 4ms 内就抛
     //     ka6.b "mCoreNetwork not initialized!"。微信这套内核访问器 (l51.i9.e -> pq0.i1.j/q)
     //     对调用线程敏感, 必须走主线程 (上游原版也是内联在 onReceive 里);
-    //  3. 内核未就绪用主线程 postDelayed 重试 (5 次 × 2s ≈ 8s), 不 sleep、不占线程;
-    //  4. 看门狗: 无论卡在哪一步, 12s 内一定 finish() 广播, 转圈不会无限持续。
+    //  3. 内核未就绪用主线程 postDelayed 重试 (5 次 × 1.5s ≈ 6s), 不 sleep、不占线程;
+    //  4. 看门狗: 无论卡在哪一步, 9s 内一定 finish() 广播 —— goAsync 的系统窗口约 10s,
+    //     超时会被系统判 ANR 且转圈不一定停, 所以兜底必须早于它。
     private const val KERNEL_RETRY_MAX = 5
-    private const val KERNEL_RETRY_DELAY_MS = 2_000L
-    private const val REPLY_WATCHDOG_MILLIS = 12_000L
+    private const val KERNEL_RETRY_DELAY_MS = 1_500L
+    private const val REPLY_WATCHDOG_MILLIS = 9_000L
 
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
