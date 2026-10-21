@@ -248,14 +248,14 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     // (v3.83 实测: sendText 抛 "mCoreNetwork not initialized!", markAsRead 在存储对象上 NPE)。
     // 且广播会把进程从冷启动拉起来、动作跑在内核就绪之前。因此:
     //  1. 只在主进程处理 (push 直接让路) —— 同时消除「同一条消息发两遍」的隐患;
-    //  2. 发送/标已读一律在**主线程**执行。v3.84 实测: 同一调用放到后台线程会永久卡死
+    //  2. 发送/标已读放在**独立后台线程**上跑: v3.84 实测微信的发送入口会长期不返回
     //     (12:21/12:24 三次点击只有一行 sending text message, 之后既无异常也无重试日志,
-    //      goAsync 永不 finish ⇒ 通知栏回复按钮一直转圈), 而主线程上 4ms 内就抛
-    //     ka6.b "mCoreNetwork not initialized!"。微信这套内核访问器 (l51.i9.e -> pq0.i1.j/q)
-    //     对调用线程敏感, 必须走主线程 (上游原版也是内联在 onReceive 里);
-    //  3. 内核未就绪用主线程 postDelayed 重试 (5 次 × 1.5s ≈ 6s), 不 sleep、不占线程;
+    //      goAsync 永不 finish ⇒ 通知栏回复按钮一直转圈), 但进程本身照常可用 —— 说明卡的是
+    //     那个调用本身。放在主线程会把整个微信冻住 (ANR), 所以留在后台线程;
+    //  3. 内核未就绪重试 5 次 × 1.5s (在同一个后台线程里 sleep, 间隔不占主线程);
     //  4. 看门狗: 无论卡在哪一步, 9s 内一定 finish() 广播 —— goAsync 的系统窗口约 10s,
-    //     超时会被系统判 ANR 且转圈不一定停, 所以兜底必须早于它。
+    //     超时会被系统判 ANR 且转圈不一定停, 所以兜底必须早于它;
+    //  5. 失败/兜底时重发一次同一通知, 把 RemoteInput 的「发送中」态复位。
     private const val KERNEL_RETRY_MAX = 5
     private const val KERNEL_RETRY_DELAY_MS = 1_500L
     private const val REPLY_WATCHDOG_MILLIS = 9_000L
@@ -273,51 +273,50 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     }
 
     /**
-     * 在主线程按 [KERNEL_RETRY_DELAY_MS] 间隔重试 [action], 最多 [KERNEL_RETRY_MAX] 次,
-     * 结束后回调最终结果。全程不阻塞线程 (重试用 postDelayed 排队), 且每次尝试都留日志,
-     * 失败时能一眼看出是内核未就绪还是别的错误。
+     * 在独立后台线程上按 [KERNEL_RETRY_DELAY_MS] 间隔重试 [action], 最多 [KERNEL_RETRY_MAX] 次,
+     * 结束后把结果回调到主线程。
+     *
+     * 为什么不干脆在主线程跑: v3.84 实测微信的发送入口在后台线程上会长期不返回, 但进程本身
+     * 照常可用 (用户继续操作、能打开通知); 若把同样的调用放在主线程, 一旦不返回就是整个
+     * 微信冻住 / ANR, 代价更大。所以发送留在后台线程, 靠看门狗兜底广播时长。
      */
-    private fun retryOnMainThread(
+    private fun retryOnWorker(
         what: String,
         attempt: Int = 1,
         action: () -> Boolean,
         onDone: (Boolean) -> Unit,
     ) {
-        mainHandler.post {
-            // 这一整段都在主线程上, 任何逃逸的 Throwable 都会被系统当成未捕获异常处理,
-            // 最坏会连应用进程一起带走。全部兜住, 只留日志。
-            try {
+        Thread {
+            var lastElapsed = 0L
+            for (round in attempt..KERNEL_RETRY_MAX) {
                 val started = SystemClock.elapsedRealtime()
                 val ok = try {
                     action()
                 } catch (error: Throwable) {
-                    val elapsed = SystemClock.elapsedRealtime() - started
+                    lastElapsed = SystemClock.elapsedRealtime() - started
                     if (isKernelNotReady(error)) {
-                        WeLogger.w(TAG, "$what attempt $attempt/$KERNEL_RETRY_MAX: kernel not ready (${error.message}) in ${elapsed}ms")
+                        WeLogger.w(TAG, "$what attempt $round/$KERNEL_RETRY_MAX: kernel not ready (${error.message}) in ${lastElapsed}ms")
                         false
                     } else {
-                        WeLogger.e(TAG, "$what attempt $attempt/$KERNEL_RETRY_MAX failed: ${error.javaClass.name}: ${error.message} in ${elapsed}ms", error)
-                        runCatching { onDone(false) }
-                        return@post
+                        WeLogger.e(TAG, "$what attempt $round/$KERNEL_RETRY_MAX failed: ${error.javaClass.name}: ${error.message} in ${lastElapsed}ms", error)
+                        mainHandler.post { runCatching { onDone(false) } }
+                        return@Thread
                     }
                 }
-                val elapsed = SystemClock.elapsedRealtime() - started
+                lastElapsed = SystemClock.elapsedRealtime() - started
                 if (ok) {
-                    WeLogger.i(TAG, "$what succeeded on attempt $attempt/$KERNEL_RETRY_MAX (${elapsed}ms)")
-                    onDone(true)
-                } else if (attempt >= KERNEL_RETRY_MAX) {
-                    WeLogger.e(TAG, "$what gave up after $KERNEL_RETRY_MAX attempts (last attempt ${elapsed}ms)")
-                    onDone(false)
-                } else {
-                    if (elapsed > 0) WeLogger.i(TAG, "$what attempt $attempt/$KERNEL_RETRY_MAX returned false in ${elapsed}ms, retrying in ${KERNEL_RETRY_DELAY_MS}ms")
-                    mainHandler.postDelayed({
-                        retryOnMainThread(what, attempt + 1, action, onDone)
-                    }, KERNEL_RETRY_DELAY_MS)
+                    WeLogger.i(TAG, "$what succeeded on attempt $round/$KERNEL_RETRY_MAX (${lastElapsed}ms)")
+                    mainHandler.post { runCatching { onDone(true) } }
+                    return@Thread
                 }
-            } catch (error: Throwable) {
-                WeLogger.e(TAG, "$what crashed in completion handler at attempt $attempt", error)
+                if (round < KERNEL_RETRY_MAX) {
+                    WeLogger.i(TAG, "$what attempt $round/$KERNEL_RETRY_MAX returned false in ${lastElapsed}ms, retrying in ${KERNEL_RETRY_DELAY_MS}ms")
+                    SystemClock.sleep(KERNEL_RETRY_DELAY_MS)
+                }
             }
-        }
+            WeLogger.e(TAG, "$what gave up after $KERNEL_RETRY_MAX attempts (last attempt ${lastElapsed}ms)")
+            mainHandler.post { runCatching { onDone(false) } }
+        }.apply { isDaemon = true; name = "wekite-notif-action" }.start()
     }
 
     private fun storageProbe(): Boolean =
@@ -373,7 +372,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                     }.apply { isDaemon = true }.start()
 
                     WeLogger.i(TAG, "quick replying '$replyContent' to $targetWxId")
-                    retryOnMainThread(
+                    retryOnWorker(
                         what = "quick reply to $targetWxId",
                         action = { WeMessageApi.sendTextOrThrow(targetWxId, replyContent) },
                     ) { sent ->
@@ -423,7 +422,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                     }.apply { isDaemon = true }.start()
 
                     WeLogger.i(TAG, "marking chat as read for $targetWxId")
-                    retryOnMainThread(
+                    retryOnWorker(
                         what = "mark-as-read storage probe for $targetWxId",
                         action = { storageProbe() },
                     ) { ready ->
