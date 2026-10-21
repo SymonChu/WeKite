@@ -12,6 +12,8 @@ import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.drawable.Icon
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.compose.material3.ListItem
@@ -237,16 +239,27 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
 
     // 微信每会话原 contentIntent, 清历史后点击通知仍要走它打开聊天。
     private val pendingContentIntents = HashMap<String, PendingIntent>()
+    // 每个会话最近一次真正发布出去的通知。快捷回复失败时要原样重发一次:
+    // 否则 Android 一直停在「发送中」状态, 通知栏的回复按钮会无限转圈 (v3.84 实测)。
+    private val lastPostedNotifications = HashMap<String, Pair<NotificationKey, Notification>>()
     private var receiverRegistered = false
 
     // 微信的回复广播会同时唤醒 main 与 push 两个进程; push 进程没有完整的网络/存储内核
-    // (v3.83 实测: sendText 抛 "mCoreNetwork not initialized!", markAsRead 在存储对象上 NPE),
-    // 且广播会从冷启动把进程拉起来、动作跑在内核就绪之前。因此:
+    // (v3.83 实测: sendText 抛 "mCoreNetwork not initialized!", markAsRead 在存储对象上 NPE)。
+    // 且广播会把进程从冷启动拉起来、动作跑在内核就绪之前。因此:
     //  1. 只在主进程处理 (push 直接让路) —— 同时消除「同一条消息发两遍」的隐患;
-    //  2. 发送/标已读带内核就绪重试 (最多 5 次 × 2s ≈ 8s 窗口, 覆盖冷启动初始化耗时);
-    //  3. onReceive 用 goAsync 挂起广播, 给重试留够窗口 (系统广播 10s 上限, goAsync 可续)。
+    //  2. 发送/标已读一律在**主线程**执行。v3.84 实测: 同一调用放到后台线程会永久卡死
+    //     (12:21/12:24 三次点击只有一行 sending text message, 之后既无异常也无重试日志,
+    //      goAsync 永不 finish ⇒ 通知栏回复按钮一直转圈), 而主线程上 4ms 内就抛
+    //     ka6.b "mCoreNetwork not initialized!"。微信这套内核访问器 (l51.i9.e -> pq0.i1.j/q)
+    //     对调用线程敏感, 必须走主线程 (上游原版也是内联在 onReceive 里);
+    //  3. 内核未就绪用主线程 postDelayed 重试 (5 次 × 2s ≈ 8s), 不 sleep、不占线程;
+    //  4. 看门狗: 无论卡在哪一步, 12s 内一定 finish() 广播, 转圈不会无限持续。
     private const val KERNEL_RETRY_MAX = 5
     private const val KERNEL_RETRY_DELAY_MS = 2_000L
+    private const val REPLY_WATCHDOG_MILLIS = 12_000L
+
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
     /** 微信内核未初始化类异常 (宿主 ka6.a 抛 "mCoreNetwork not initialized!" 等)。 */
     private fun isKernelNotReady(error: Throwable): Boolean {
@@ -258,50 +271,53 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
         return false
     }
 
-    /** 在当前线程轮询直到动作成功/确定性失败/内核就绪窗口耗尽。返回最终是否成功。 */
-    private inline fun retryUntilKernelReady(
+    /**
+     * 在主线程按 [KERNEL_RETRY_DELAY_MS] 间隔重试 [action], 最多 [KERNEL_RETRY_MAX] 次,
+     * 结束后回调最终结果。全程不阻塞线程 (重试用 postDelayed 排队), 且每次尝试都留日志,
+     * 失败时能一眼看出是内核未就绪还是别的错误。
+     */
+    private fun retryOnMainThread(
         what: String,
-        attemptLog: () -> Unit,
+        attempt: Int = 1,
         action: () -> Boolean,
-    ): Boolean {
-        for (attempt in 1..KERNEL_RETRY_MAX) {
-            attemptLog()
+        onDone: (Boolean) -> Unit,
+    ) {
+        mainHandler.post {
+            val started = SystemClock.elapsedRealtime()
             val ok = try {
                 action()
             } catch (error: Throwable) {
+                val elapsed = SystemClock.elapsedRealtime() - started
                 if (isKernelNotReady(error)) {
-                    WeLogger.w(TAG, "$what attempt $attempt: kernel not ready (${error.message})")
+                    WeLogger.w(TAG, "$what attempt $attempt/$KERNEL_RETRY_MAX: kernel not ready (${error.message}) in ${elapsed}ms")
                     false
                 } else {
-                    throw error
+                    WeLogger.e(TAG, "$what attempt $attempt/$KERNEL_RETRY_MAX failed: ${error.javaClass.name}: ${error.message} in ${elapsed}ms", error)
+                    onDone(false)
+                    return@post
                 }
             }
+            val elapsed = SystemClock.elapsedRealtime() - started
             if (ok) {
-                if (attempt > 1) WeLogger.i(TAG, "$what succeeded on attempt $attempt")
-                return true
+                WeLogger.i(TAG, "$what succeeded on attempt $attempt/$KERNEL_RETRY_MAX (${elapsed}ms)")
+                onDone(true)
+            } else if (attempt >= KERNEL_RETRY_MAX) {
+                WeLogger.e(TAG, "$what gave up after $KERNEL_RETRY_MAX attempts (last attempt ${elapsed}ms)")
+                onDone(false)
+            } else {
+                if (elapsed > 0) WeLogger.i(TAG, "$what attempt $attempt/$KERNEL_RETRY_MAX returned false in ${elapsed}ms, retrying in ${KERNEL_RETRY_DELAY_MS}ms")
+                mainHandler.postDelayed({
+                    retryOnMainThread(what, attempt + 1, action, onDone)
+                }, KERNEL_RETRY_DELAY_MS)
             }
-            if (attempt == KERNEL_RETRY_MAX) {
-                WeLogger.e(TAG, "$what gave up after $KERNEL_RETRY_MAX attempts (kernel still not ready)")
-                return false
-            }
-            SystemClock.sleep(KERNEL_RETRY_DELAY_MS)
         }
-        return false
     }
 
-    private fun waitUntilMarkReadReady(talker: String): Boolean {
-        // markAsRead 走 conversationStorage; storage 没就绪时直接调会 NPE (v3.83 实测)。
-        // 这里轻探: rawQuery 可用 = 存储内核就绪。WeDatabaseApi.isReady 是 hook 时机标记,
-        // 不代表本进程 storage 服务已拿到, 故以真实探活为准。
-        return retryUntilKernelReady(
-            what = "mark-as-read probe for $talker",
-            attemptLog = {},
-        ) {
-            runCatching { WeDatabaseApi.rawQuery("SELECT 1 FROM rconversation LIMIT 1").use { it.moveToFirst() } }
-                .onFailure { WeLogger.w(TAG, "storage probe failed: ${it.message}") }
-                .getOrDefault(false)
-        }
-    }
+    private fun storageProbe(): Boolean =
+        runCatching { WeDatabaseApi.rawQuery("SELECT 1 FROM rconversation LIMIT 1").use { it.moveToFirst() } }
+            .onFailure { WeLogger.w(TAG, "storage probe failed: ${it.message}") }
+            .getOrDefault(false)
+
 
     private val notificationReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -332,15 +348,30 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                         }
                     }
                     val pending = goAsync()
+                    val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+                    fun finishOnce() {
+                        if (finished.compareAndSet(false, true)) {
+                            runCatching { pending.finish() }
+                        }
+                    }
+                    // 看门狗跑在独立守护线程上: 即使主线程被微信内部调用卡住, 也必须结束广播,
+                    // 否则通知栏上的回复按钮会一直转圈 (v3.84 实测的症状)。
                     Thread {
+                        SystemClock.sleep(REPLY_WATCHDOG_MILLIS)
+                        if (!finished.get()) {
+                            WeLogger.e(TAG, "quick reply watchdog fired after ${REPLY_WATCHDOG_MILLIS}ms for $targetWxId; releasing broadcast")
+                            mainHandler.post { repostLastNotification(notificationManager, targetWxId) }
+                            finishOnce()
+                        }
+                    }.apply { isDaemon = true }.start()
+
+                    WeLogger.i(TAG, "quick replying '$replyContent' to $targetWxId")
+                    retryOnMainThread(
+                        what = "quick reply to $targetWxId",
+                        action = { WeMessageApi.sendTextOrThrow(targetWxId, replyContent) },
+                    ) { sent ->
                         try {
-                            WeLogger.i(TAG, "quick replying '$replyContent' to $targetWxId")
-                            val sent = retryUntilKernelReady(
-                                what = "quick reply to $targetWxId",
-                                attemptLog = {},
-                            ) { WeMessageApi.sendText(targetWxId, replyContent) }
                             if (sent) {
-                                waitUntilMarkReadReady(targetWxId)
                                 WeConversationApi.markAsRead(targetWxId)
                                 cancelConversationNotifications(notificationManager, targetWxId)
 
@@ -358,28 +389,50 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                                 )
                             } else {
                                 // 发送失败: 保留通知, 用户至少能看到还有未回的消息。
-                                WeLogger.w(TAG, "quick reply to $targetWxId failed after retries; notification kept")
+                                // 必须重发一次同一通知, 否则 Android 停在「发送中」态, 回复按钮会一直转圈。
+                                repostLastNotification(notificationManager, targetWxId)
+                                WeLogger.w(TAG, "quick reply to $targetWxId failed after retries; notification re-posted")
                             }
                         } finally {
-                            pending.finish()
+                            finishOnce()
                         }
-                    }.start()
+                    }
                 }
 
                 ACTION_MARK_READ -> {
                     val pending = goAsync()
-                    Thread {
-                        try {
-                            WeLogger.i(TAG, "marking chat as read for $targetWxId")
-                            waitUntilMarkReadReady(targetWxId)
-                            WeConversationApi.markAsRead(targetWxId)
-                            clearConversationState(targetWxId)
-                            removeContentIntent(targetWxId)
-                            cancelConversationNotifications(notificationManager, targetWxId)
-                        } finally {
-                            pending.finish()
+                    val finished = java.util.concurrent.atomic.AtomicBoolean(false)
+                    fun finishOnce() {
+                        if (finished.compareAndSet(false, true)) {
+                            runCatching { pending.finish() }
                         }
-                    }.start()
+                    }
+                    Thread {
+                        SystemClock.sleep(REPLY_WATCHDOG_MILLIS)
+                        if (!finished.get()) {
+                            WeLogger.e(TAG, "mark-as-read watchdog fired after ${REPLY_WATCHDOG_MILLIS}ms for $targetWxId; releasing broadcast")
+                            finishOnce()
+                        }
+                    }.apply { isDaemon = true }.start()
+
+                    WeLogger.i(TAG, "marking chat as read for $targetWxId")
+                    retryOnMainThread(
+                        what = "mark-as-read storage probe for $targetWxId",
+                        action = { storageProbe() },
+                    ) { ready ->
+                        try {
+                            if (ready) {
+                                WeConversationApi.markAsRead(targetWxId)
+                                clearConversationState(targetWxId)
+                                removeContentIntent(targetWxId)
+                                cancelConversationNotifications(notificationManager, targetWxId)
+                            } else {
+                                WeLogger.w(TAG, "mark-as-read storage still not ready for $targetWxId; notification kept")
+                            }
+                        } finally {
+                            finishOnce()
+                        }
+                    }
                 }
 
                 ACTION_NOTIFICATION_OPENED -> {
@@ -659,6 +712,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
             pendingMessages.clear()
             messageHistory.clear()
             pendingContentIntents.clear()
+            lastPostedNotifications.clear()
         }
         notificationContext.remove()
         synchronized(avatarLock) { avatarCache.clear() }
@@ -677,9 +731,25 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
         }
     }
 
+    /**
+     * 重发该会话最近一次通知。快捷回复失败/看门狗兜底时调用:
+     * Android 会把带 RemoteInput 的通知停留在「发送中」状态, 只有重新 notify 同一 (tag,id)
+     * 才能把这状态清掉, 否则通知栏的回复按钮会无限转圈。
+     */
+    private fun repostLastNotification(manager: NotificationManager, talker: String) {
+        val posted = synchronized(stateLock) { lastPostedNotifications[talker] } ?: run {
+            WeLogger.w(TAG, "no cached notification to re-post for $talker")
+            return
+        }
+        val (key, notif) = posted
+        runCatching { manager.notify(key.tag, key.id, notif) }
+            .onFailure { WeLogger.w(TAG, "failed to re-post notification for $talker", it) }
+    }
+
     private fun cancelConversationNotifications(manager: NotificationManager, talker: String) {
         val keys = synchronized(stateLock) {
             invalidatePendingNotifications { it.talker == talker }
+            lastPostedNotifications.remove(talker)
             notificationTalkers.filterValues { it == talker }.keys.toList()
         }
         keys.forEach { manager.cancel(it.tag, it.id) }
@@ -741,6 +811,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                             if (pendingNotifications[key] === pending) {
                                 originalNotify(arrayOf(key.tag, key.id, enhanced))
                                 pendingNotifications.remove(key)
+                                lastPostedNotifications[context.talker] = key to enhanced
                             }
                         }
                     }

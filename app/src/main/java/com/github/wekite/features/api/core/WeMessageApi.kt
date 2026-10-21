@@ -1197,20 +1197,29 @@ object WeMessageApi : ApiFeature(), IResolveDex {
     /** 发送文本消息 */
     fun sendText(toUser: String, text: String): Boolean {
         return try {
-            WeLogger.i(TAG, "sending text message: $text")
-            val sendMsgObject = methodGetSendMsgObject.method.invoke(null)
-            if (sendMsgObject == null) {
-                // 微信核心 (MMKernel) 尚未初始化完时拿不到发送队列对象 —— 之前这里静默
-                // return false, 快捷回复在进程冷启动早期点击时就无声丢失 (v3.83 实测)。
-                WeLogger.w(TAG, "sendText: send-msg object not ready (kernel not initialized), to=$toUser")
-                return false
-            }
-            val msgObj = classNetSceneSendMsg.clazz.createInstance(toUser, text, 1, 0, null)
-            methodPostToQueue.method.invoke(sendMsgObject, msgObj) as? Boolean ?: false
+            sendTextOrThrow(toUser, text)
         } catch (e: Exception) {
             WeLogger.e(TAG, "failed to send text message", e)
             false
         }
+    }
+
+    /**
+     * 与 [sendText] 相同的发送路径, 但把异常抛给调用方。
+     * 通知栏快捷回复需要区分「微信内核还没初始化好」(可以等等重试) 与真正的发送失败,
+     * 而 [sendText] 会把两者都压成 false。
+     */
+    fun sendTextOrThrow(toUser: String, text: String): Boolean {
+        WeLogger.i(TAG, "sending text message: $text")
+        val sendMsgObject = methodGetSendMsgObject.method.invoke(null)
+        if (sendMsgObject == null) {
+            // 微信核心 (MMKernel) 尚未初始化完时拿不到发送队列对象 —— 之前这里静默
+            // return false, 快捷回复在进程冷启动早期点击时就无声丢失 (v3.83 实测)。
+            WeLogger.w(TAG, "sendText: send-msg object not ready (kernel not initialized), to=$toUser")
+            throw IllegalStateException("mCoreNetwork not initialized (send-msg object null), to=$toUser")
+        }
+        val msgObj = classNetSceneSendMsg.clazz.createInstance(toUser, text, 1, 0, null)
+        return methodPostToQueue.method.invoke(sendMsgObject, msgObj) as? Boolean ?: false
     }
 
     /** 发送文件消息 */
