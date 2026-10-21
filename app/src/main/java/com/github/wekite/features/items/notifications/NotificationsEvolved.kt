@@ -259,6 +259,8 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     private const val KERNEL_RETRY_MAX = 5
     private const val KERNEL_RETRY_DELAY_MS = 1_500L
     private const val REPLY_WATCHDOG_MILLIS = 9_000L
+    // 取消通知的补刀时点: 广播 finish 之后 RemoteInput 的收尾可能把通知刷回来, 需要再取消几次。
+    private val CANCEL_RETRY_DELAYS_MS = longArrayOf(400L, 1_200L, 2_500L)
 
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
@@ -779,6 +781,14 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
             .onFailure { WeLogger.w(TAG, "failed to re-post notification for $talker", it) }
     }
 
+    /**
+     * 取消该会话的通知, 并在随后一段时间里反复核对/补刀。
+     *
+     * 为什么需要补: 快捷回复走 RemoteInput, 广播还挂起(pending.finish() 之前)时调用
+     * manager.cancel, Android 会按"通知最后的状态"把界面再刷回来, 取消看起来没生效
+     * (v3.87 实录: cancel 了 null/-1937897901 且 key 正确, 8 秒后通知仍在)。
+     * 所以 finish 之后再补几次, 并用 getActiveNotifications 核对, 结果写进日志。
+     */
     private fun cancelConversationNotifications(
         manager: NotificationManager,
         talker: String,
@@ -799,6 +809,30 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
             "cancelConversationNotifications: $talker -> ${keys.size} key(s) " +
                 keys.joinToString { "${it.tag}/${it.id}" },
         )
+        if (keys.isEmpty()) return
+        CANCEL_RETRY_DELAYS_MS.forEachIndexed { index, delay ->
+            mainHandler.postDelayed({
+                val alive = keys.filter { stillActive(manager, it) }
+                if (alive.isEmpty()) {
+                    WeLogger.i(TAG, "notification cleared for $talker (check #${index + 1} after ${delay}ms)")
+                } else {
+                    WeLogger.w(
+                        TAG,
+                        "notification still active for $talker after ${delay}ms: " +
+                            alive.joinToString { "${it.tag}/${it.id}" } + "; cancelling again",
+                    )
+                    alive.forEach { manager.cancel(it.tag, it.id) }
+                }
+            }, delay)
+        }
+    }
+
+    /** 该 (tag,id) 是否仍在通知栏里。取不到状态(API 过低)时按"不确定"处理, 返回 false 不打扰。 */
+    private fun stillActive(manager: NotificationManager, key: NotificationKey): Boolean = try {
+        manager.activeNotifications.any { it.tag == key.tag && it.id == key.id }
+    } catch (error: Throwable) {
+        WeLogger.w(TAG, "getActiveNotifications failed", error)
+        false
     }
 
     private fun scheduleNotification(
@@ -858,6 +892,8 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                                 originalNotify(arrayOf(key.tag, key.id, enhanced))
                                 pendingNotifications.remove(key)
                                 lastPostedNotifications[context.talker] = key to enhanced
+                                // 记录每次真正发布, 便于判断"取消后又出现"是不是宿主重新发的。
+                                WeLogger.i(TAG, "posted notification for ${context.talker} key=${key.tag}/${key.id}")
                             }
                         }
                     }
