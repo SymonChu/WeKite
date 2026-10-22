@@ -277,10 +277,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     private const val REPLY_WATCHDOG_MILLIS = 9_000L
     // 取消通知的补刀时点: 广播 finish 之后 RemoteInput 的收尾可能把通知刷回来, 需要再取消几次。
     private val CANCEL_RETRY_DELAYS_MS = longArrayOf(400L, 1_200L, 2_500L)
-    // 回复成功后到真正 cancel 之间的等待: 先 finish() 放掉 RemoteInput 广播, 让系统把
-    // "回复中"状态那一份刷完, 再取消 —— 否则我们的 cancel 会被系统的刷回盖掉 (v3.94)。
-    // 取 150ms: 够系统走完广播收尾, 又远短于用户能察觉的延迟。
-    private const val CANCEL_AFTER_FINISH_DELAY_MS = 150L
+
     // 更长一段的复查时点: 微信 (:push) 会在回复后几十秒才把同一条通知重新发出来。
     // 2026-10-22 10:09 实测 (v3.91): 幽灵出现在回复后 +20s~+33s —— 正好落在旧 +20/+35 两档的空档里,
     // 用户在空档里看到它"还挂着"。因此加密到 5s 一档直到 +40s, 再拉长到 2 分钟收尾;
@@ -449,58 +446,34 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                         what = "quick reply to $targetWxId",
                         action = { WeMessageApi.sendTextOrThrow(targetWxId, replyContent) },
                     ) { sent ->
-                        try {
-                            if (sent) {
-                                // 回复成功后自动收尾: 标已读 -> 清会话状态 -> 关掉这条通知。
-                                val markedRead = WeConversationApi.markAsRead(targetWxId)
-                                WeLogger.i(TAG, "quick reply: mark-as-read=$markedRead for $targetWxId")
-                                // 压制标记先打(只是 MMKV 写, 与取消时序无关), 让 finish 之后那段
-                                // 空窗里微信若按旧状态重发, scheduleNotification 也能拦住。
-                                armRepostSuppression(targetWxId)
-                                clearConversationState(targetWxId)
-                                removeContentIntent(targetWxId)
-
-                                // markAsRead 会经下面的 hook 清掉历史。按配置恢复, 两种模式下都补上这条快捷回复。
-                                appendHistory(targetWxId, preservedHistory)
-                                appendHistory(
-                                    targetWxId,
-                                    HistoryEntry(
-                                        senderWxId = WeApi.selfWxId,
-                                        senderName = null,
-                                        text = replyContent,
-                                        timestamp = System.currentTimeMillis(),
-                                        messageId = null,
-                                    ),
-                                )
-
-                                // ⭐ v3.94 定案: 取消必须**排在 RemoteInput 广播收尾之后**。
-                                //
-                                // 「标为已读」按钮一直好用、只有回复不好用, 两者的差别不在取消逻辑
-                                // (两条分支调的是同一个 cancelConversationNotifications), 而在回复走的是
-                                // RemoteInput: 广播还挂起时系统把这条通知锁在「回复中」状态, 我们在 finish()
-                                // 之前 cancel, 系统随后按"通知最后的状态"把它刷回通知栏 —— 于是用户看到
-                                // 「回复了但通知还在」, 而且这次重发是**系统**发的, 不经过我们的 notify 钩子
-                                // (v3.92 日志里"幽灵出现零日志"就是这么来的)。
-                                //
-                                // 所以先 finish() 放掉广播、让系统先把它那一份刷完, 再取消。用户那句
-                                // 「点发送也相当于点已读」在时序上就是这个意思: 已读按钮没有挂起的 RemoteInput,
-                                // 它的 cancel 天然是"最后一句话"。
-                                finishOnce()
-                                mainHandler.postDelayed({
-                                    val cancelled = cancelConversationNotifications(
-                                        notificationManager, targetWxId, notifyKey,
-                                    )
-                                    watchForRepost(notificationManager, targetWxId, cancelled)
-                                }, CANCEL_AFTER_FINISH_DELAY_MS)
-                            } else {
-                                // 发送失败: 保留通知, 用户至少能看到还有未回的消息。
-                                // 必须重发一次同一通知, 否则 Android 停在「发送中」态, 回复按钮会一直转圈。
-                                repostLastNotification(notificationManager, targetWxId)
-                                WeLogger.w(TAG, "quick reply to $targetWxId failed after retries; notification re-posted")
-                            }
-                        } finally {
+                        if (!sent) {
+                            // 发送失败: 保留通知, 用户至少能看到还有未回的消息。
+                            // 必须重发一次同一通知, 否则 Android 停在「发送中」态, 回复按钮会一直转圈。
+                            repostLastNotification(notificationManager, targetWxId)
+                            WeLogger.w(TAG, "quick reply to $targetWxId failed after retries; notification re-posted")
                             finishOnce()
+                            return@retryOnMainThread
                         }
+                        // ⭐ v3.95（用户要求）：回复 = 发消息 + **再触发一次「标为已读」**。
+                        // 这里不复制任何收尾代码 —— 直接把已读按钮那条广播原样发一次，
+                        // 走的就是下面同一个 ACTION_MARK_READ 分支（同一份实现、同一时序）。
+                        // 按钮文字/位置/交互一律不变。
+                        WeLogger.i(TAG, "quick reply sent; dispatching mark-as-read for $targetWxId")
+                        dispatchMarkAsRead(context, targetWxId, notifyKey)
+                        // markAsRead 会经 updateUnreadByTalker 钩子清掉历史。按配置补回,
+                        // 让"下一条通知里能看到我刚回的那条"这个行为不因改成已读而丢失。
+                        appendHistory(targetWxId, preservedHistory)
+                        appendHistory(
+                            targetWxId,
+                            HistoryEntry(
+                                senderWxId = WeApi.selfWxId,
+                                senderName = null,
+                                text = replyContent,
+                                timestamp = System.currentTimeMillis(),
+                                messageId = null,
+                            ),
+                        )
+                        finishOnce()
                     }
                 }
 
@@ -521,30 +494,13 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                     }.apply { isDaemon = true }.start()
 
                     WeLogger.i(TAG, "marking chat as read for $targetWxId")
-                    retryOnMainThread(
-                        what = "mark-as-read storage probe for $targetWxId",
-                        action = { storageProbe() },
-                    ) { ready ->
-                        try {
-                            if (!ready) {
-                                WeLogger.w(TAG, "mark-as-read storage not ready for $targetWxId; re-posting notification")
-                                repostLastNotification(notificationManager, targetWxId)
-                            } else if (WeConversationApi.markAsRead(targetWxId)) {
-                                armRepostSuppression(targetWxId)
-                                clearConversationState(targetWxId)
-                                removeContentIntent(targetWxId)
-                                val cancelled =
-                                    cancelConversationNotifications(notificationManager, targetWxId, notifyKey)
-                                watchForRepost(notificationManager, targetWxId, cancelled)
-                                WeLogger.i(TAG, "mark-as-read done for $targetWxId; notification cancelled")
-                            } else {
-                                WeLogger.w(TAG, "mark-as-read failed for $targetWxId; re-posting notification")
-                                repostLastNotification(notificationManager, targetWxId)
-                            }
-                        } finally {
-                            finishOnce()
-                        }
-                    }
+                    performMarkAsRead(
+                        manager = notificationManager,
+                        talker = targetWxId,
+                        notifyKey = notifyKey,
+                        source = "mark-as-read",
+                        onDone = { finishOnce() },
+                    )
                 }
 
                 ACTION_NOTIFICATION_OPENED -> {
@@ -864,6 +820,97 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
         val (key, notif) = posted
         runCatching { manager.notify(key.tag, key.id, notif) }
             .onFailure { WeLogger.w(TAG, "failed to re-post notification for $talker", it) }
+    }
+
+    /**
+     * 把「标为已读」按钮的那条广播**原样**再发一次。
+     *
+     * v3.95：用户要求「点了回复就等于点已读」—— 回复分支在消息发送成功后调用本函数，
+     * 于是整条收尾走的就是 ACTION_MARK_READ 分支（同一份实现、同一时序），回复侧不再有
+     * 自己的收尾副本。按钮文字/位置/交互不变。
+     */
+    private fun dispatchMarkAsRead(context: Context, talker: String, key: NotificationKey?) {
+        val intent = Intent(ACTION_MARK_READ).apply {
+            setPackage(PackageNames.WECHAT)
+            putExtra("extra_target_wxid", talker)
+            if (key != null) {
+                putExtra("extra_notify_tag", key.tag)
+                putExtra("extra_notify_id", key.id)
+            }
+        }
+        runCatching { context.sendBroadcast(intent) }
+            .onFailure { WeLogger.w(TAG, "failed to dispatch mark-as-read for $talker", it) }
+    }
+
+    /**
+     * 「标记已读」的**唯一实现** —— 通知栏上的「标为已读」按钮直接用它；
+     * 「回复」按钮在消息发送成功后也**原样调用它**（按钮文字/位置不变，变的只是按下去之后
+     * 走哪段逻辑）。用户的原话：「点回复就等于点已读」。
+     *
+     * 顺序与用户能观察到的行为完全一致：storage 探针 → markAsRead → 收尾（打压制标记 /
+     * 清会话状态 / 清 contentIntent / 取消通知 / 开复查窗）。
+     * [afterMarkRead] 只在标记已读成功后执行（回复分支用它补历史）；
+     * [onDone] 无论如何都会在最后执行（调用方用来 finish 广播）。
+     */
+    private fun performMarkAsRead(
+        manager: NotificationManager,
+        talker: String,
+        notifyKey: NotificationKey?,
+        source: String,
+        afterMarkRead: () -> Unit = {},
+        onDone: () -> Unit,
+    ) {
+        retryOnMainThread(
+            what = "$source storage probe for $talker",
+            action = { storageProbe() },
+        ) { ready ->
+            try {
+                if (!ready) {
+                    WeLogger.w(TAG, "$source: storage not ready for $talker; re-posting notification")
+                    repostLastNotification(manager, talker)
+                } else if (WeConversationApi.markAsRead(talker)) {
+                    WeLogger.i(TAG, "$source: mark-as-read=true for $talker")
+                    afterMarkRead()
+                    finishConversation(manager, talker, notifyKey, source)
+                } else {
+                    WeLogger.w(TAG, "$source: mark-as-read failed for $talker; re-posting notification")
+                    repostLastNotification(manager, talker)
+                }
+            } finally {
+                onDone()
+            }
+        }
+    }
+
+    /**
+     * 「这条会话已经处理完」的**唯一**收尾入口 —— 「回复」与「标为已读」共用这一个函数。
+     *
+     * 用户要求「点回复就等于点已读」：两条分支原本各自抄了同样的五步（打压制标记 / 清会话状态 /
+     * 清 contentIntent / 取消通知 / 开复查窗），一旦哪边漏改就会漂成两种行为。现在只有这一份。
+     *
+     * 唯一允许存在的差别是**调用时机**：回复走 RemoteInput，广播还挂起时系统把通知锁在"回复中"
+     * 状态，此刻 cancel 会被系统随后的刷回盖掉（v3.87/v3.92 日志实证），所以回复侧在
+     * `finish()` 之后 delay [CANCEL_AFTER_FINISH_DELAY_MS] 再进来；已读按钮没有挂起的
+     * RemoteInput，直接进来即可。进来之后做的事完全相同。
+     */
+    private fun finishConversation(
+        manager: NotificationManager,
+        talker: String,
+        notifyKey: NotificationKey?,
+        source: String,
+    ) {
+        // 压制标记先打（只是 MMKV 写，与取消时序无关）：让取消之后那段空窗里微信若按旧状态
+        // 重发，scheduleNotification 也能拦住。
+        armRepostSuppression(talker)
+        clearConversationState(talker)
+        removeContentIntent(talker)
+        val cancelled = cancelConversationNotifications(manager, talker, notifyKey)
+        watchForRepost(manager, talker, cancelled)
+        WeLogger.i(
+            TAG,
+            "$source done for $talker; notification finished " +
+                "(${cancelled.size} key(s): ${cancelled.joinToString { "${it.tag}/${it.id}" }})",
+        )
     }
 
     /**
