@@ -286,9 +286,17 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     // 用户在空档里看到它"还挂着"。因此加密到 5s 一档直到 +40s, 再拉长到 2 分钟收尾;
     // 且该路径是唯一可靠的兜底: 幽灵出现时没有任何 notify 进我们的钩子 (零日志),
     // 说明其发布路径在 NotificationManager.notify 之外, 按标记拦截救不了, 只能靠复查补刀。
+    // v3.95: 前 5 秒按 300ms 一档密查。
+    //
+    // 2026-10-22 22:25 真机日志 (v3.94) 把幽灵的存活时间量出来了: 回复后 +20s 复查还是 absent,
+    // 1 秒后用户却按到了同一条通知的「回复」按钮, 而这段时间**没有任何 notify 钩子日志** ——
+    // 说明把带 RemoteInput 的通知画回来的是**系统侧**, 不经过微信的 notify, 只能靠复查去拔。
+    // 旧档位 5s 一档 ⇒ 幽灵可见最长 5 秒(实测 +21s 出现、+25s 才被拔)。改成 300ms 一档后
+    // 可见时间压到亚秒; 后续档位保持到 120s 收尾。
     private val REPOST_WATCH_DELAYS_MS = longArrayOf(
-        5_000L, 10_000L, 15_000L, 20_000L, 25_000L, 30_000L, 35_000L, 40_000L,
-        50_000L, 60_000L, 75_000L, 90_000L, 120_000L,
+        300L, 600L, 1_000L, 1_500L, 2_000L, 3_000L, 4_000L,
+        5_000L, 7_500L, 10_000L, 15_000L, 20_000L, 25_000L, 30_000L, 40_000L,
+        50_000L, 60_000L, 90_000L, 120_000L,
     )
 
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
@@ -387,6 +395,21 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
             }
             val notificationManager =
                 context.getSystemService<NotificationManager>()
+
+            // v3.95 取证: 用户按下按钮的那一刻, 通知栏上到底还挂着什么。
+            // 2026-10-22 22:25 (v3.94) 日志里 +20s 复查报 absent, 1 秒后用户却按到了同一条通知的
+            // 「回复」按钮, 而全程没有任何 notify 钩子日志 —— 只有这一行能把"通知真的还在"和
+            // "系统保留了 RemoteInput 面板"分开。同时打印按钮 Intent 自带的 key 与内存里登记的 key。
+            dumpActiveNotifications(notificationManager, "action=${intent.action} $targetWxId received")
+            WeLogger.i(
+                TAG,
+                "action=${intent.action} for $targetWxId: intentKey=" +
+                    (notifyKey?.let { "${it.tag}/${it.id}" } ?: "none") +
+                    ", mappedKeys=" + synchronized(stateLock) {
+                        notificationTalkers.filterValues { it == targetWxId }.keys
+                            .joinToString { "${it.tag}/${it.id}" }
+                    },
+            )
 
             when (intent.action) {
                 ACTION_REPLY -> {
@@ -914,29 +937,34 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                 mediaScope.launch {
                     val alive = keys.filter { stillActive(manager, it) }
                     if (alive.isEmpty()) {
-                        WeLogger.i(TAG, "repost watch #${index + 1} (+${delay}ms): $talker still absent")
+                        // 密查档位 (300/600ms…) 不逐条落日志: 一次回复会打 19 行, 反而把真事件埋了。
+                        // 前 1 秒 + 10 秒以后各留一行, 足够证明"没回来"。
+                        if (delay <= 1_000L || delay >= 10_000L) {
+                            WeLogger.i(TAG, "repost watch #${index + 1} (+${delay}ms): $talker still absent")
+                        }
                         return@launch
                     }
-                    // 取证: 该通知是系统什么时候发布的 (postTime) —— 幽灵的发布路径绕过我们的
-                    // notify 钩子(零日志), postTime 是唯一能定位"谁在什么时候发的"的线索。
-                    val postTimes = keys.mapNotNull { key ->
-                        try {
-                            manager.activeNotifications.find { it.tag == key.tag && it.id == key.id }
-                                ?.let { key to it.postTime }
-                        } catch (error: Throwable) {
-                            null
-                        }
+                    // 取证: 幽灵的发布路径绕过我们的 notify 钩子(零日志), 所以"它长什么样、
+                    // 系统认为它是何时发布的"是唯一线索 —— postTime + channel + group 一起打。
+                    // v3.95: 抓到的那一刻把微信全部在栏条目也 dump 一份(同一毫秒的快照)。
+                    try {
+                        manager.activeNotifications
+                            .filter { sbn -> keys.any { it.tag == sbn.tag && it.id == sbn.id } }
+                            .forEach { sbn ->
+                                WeLogger.w(
+                                    TAG,
+                                    "repost watch #${index + 1} (+${delay}ms): $talker GHOST key=${sbn.tag}/${sbn.id} " +
+                                        "channel=${sbn.notification.channelId} group=${sbn.notification.group} " +
+                                        "postTime=${java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
+                                            .format(java.util.Date(sbn.postTime))} (posted " +
+                                        "${(System.currentTimeMillis() - sbn.postTime) / 1000.0}s ago, " +
+                                        "proc=${TargetProcesses.currentName})",
+                                )
+                            }
+                    } catch (error: Throwable) {
+                        WeLogger.w(TAG, "repost watch #${index + 1}: failed to read ghost detail", error)
                     }
-                    postTimes.forEach { (key, postTime) ->
-                        WeLogger.i(
-                            TAG,
-                            "repost watch #${index + 1} (+${delay}ms): $talker key=${key.tag}/${key.id} " +
-                                "postTime=${java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
-                                    .format(java.util.Date(postTime))} (posted " +
-                                "${(System.currentTimeMillis() - postTime) / 1000.0}s ago, " +
-                                "proc=${TargetProcesses.currentName})",
-                        )
-                    }
+                    dumpActiveNotifications(manager, "$talker ghost detected #${index + 1} (+${delay}ms)")
                     val unread = unreadCountOf(talker)
                     if (unread > 0) {
                         WeLogger.i(
@@ -1579,6 +1607,15 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                             TAG,
                             "notify bypassed (context set but channel=${notif.channelId}) " +
                                 "key=${key.tag}/${key.id} proc=${TargetProcesses.currentName}",
+                        )
+                    } else if (notif.channelId == "message_channel_new_id") {
+                        // v3.95: 消灭"静默分支" —— 走消息通道、又没上下文、key 也不在登记表里,
+                        // 以前这里一声不响 (排查时看起来就是"幽灵零日志")。消息通道的通知本来就少,
+                        // 每条留一行足够定位。
+                        WeLogger.i(
+                            TAG,
+                            "context-less notify (unregistered key) key=${key.tag}/${key.id} " +
+                                "group=${notif.group} proc=${TargetProcesses.currentName}",
                         )
                     }
                     synchronized(stateLock) {
