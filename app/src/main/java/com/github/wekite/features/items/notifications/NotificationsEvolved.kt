@@ -214,9 +214,10 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     // 且一行压制日志都没有。MMKV 是 MULTI_PROCESS_MODE (WePrefs, 与「隐藏联系人通知抑制」同一个
     // 跨进程通道)。时间戳统一用 elapsedRealtime: 设备级单调时钟, 两个进程读数一致。
     private const val SUPPRESS_MARK_PREFIX = "notifications_evolved_suppress_at_"
+    // v3.96: 这是「回复/标已读后的静音窗」, 语义从"压制陈旧重发"扩到"这条会话暂时安静" ——
+    // 窗内**包括对方紧跟着发来的真新消息**也不弹 (未读角标照常 +1)。2026-10-22 23:17 真机日志:
+    // 回复后 16ms 对方就发来一条, 微信用同一个 key 重发, 用户只看到"回复了通知还在"。
     private const val SUPPRESS_REPOST_WINDOW_MS = 120_000L
-    // 未读数读不到 (-1, :push 里数据库句柄可能未就绪) 时只压一个短窗 —— 宁可少压, 也不吞真消息。
-    internal const val SUPPRESS_UNREAD_UNKNOWN_WINDOW_MS = 15_000L
     // 已取消通知的 key -> 会话 跨进程映射。v3.91: 微信还有一条**不走 dealNotify** 的重发路径
     // (2026-10-22 09:22 实测: 回复后 3 次核对 active=0, +5s watch 也说不在, 但用户 10s 后仍按到了
     // 同一 key 通知上的按钮, 且全程无 intercepted 日志) —— 只有 notify-hook 无上下文分支能拦它。
@@ -654,10 +655,11 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     private fun enqueueMessage(message: MessageInfo, insertedMessageId: Long) {
         if (message.isSelfSender) return
 
-        // 真有入站消息 => 立刻解除「回复后压制」, 该会话的通知照常发。
-        // 这是跨进程压制 (见 armRepostSuppression) 的放行信号: 入库发生在本进程, 通知也在本进程拼,
-        // 顺序上一定先入库后 notify, 所以不会被自己那条压制标记误吞。
-        clearRepostSuppression(message.talker)
+        // v3.96 静音窗: 入站消息**不再**解除「回复后压制」(v3.90~v3.95 在这里 clearRepostSuppression 放行)。
+        // 2026-10-22 23:17 真机日志: 回复后**16ms**对方就发来新消息 → 压制被解除 → 微信拿同一个
+        // key(null/-1436547933) 重发 → 用户看到"回复的通知又回来了"。实测 5 次"幽灵"全是 unread>0
+        // 的真消息, 没有一次是陈旧重发 —— 所以用户要的语义只能是「回复后这条会话安静一会儿」。
+        // 消息照常入库、未读角标照常 +1; 窗(120s)一过恢复正常通知。
 
         val senderWxId = message.sender
         if (senderWxId.isEmpty()) return
@@ -1013,18 +1015,15 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                     }
                     dumpActiveNotifications(manager, "$talker ghost detected #${index + 1} (+${delay}ms)")
                     val unread = unreadCountOf(talker)
-                    if (unread > 0) {
-                        WeLogger.i(
-                            TAG,
-                            "repost watch #${index + 1} (+${delay}ms): $talker re-posted but unread=$unread; keeping it",
-                        )
-                        return@launch
-                    }
                     withContext(Dispatchers.Main) { alive.forEach { manager.cancel(it.tag, it.id) } }
+                    // v3.96: 静音窗内无条件取消。旧行为"unread>0 就保留"会在回复后对方立刻回话时
+                    // 把通知留在栏上(用户看到的就是"回复了通知还在"), 而 +400ms 的补刀又会把它杀回来
+                    // (用户收不到真新消息的通知) —— 两个症状同源, 统一由静音窗语义解决。
                     WeLogger.w(
                         TAG,
                         "repost watch #${index + 1} (+${delay}ms): $talker notification re-appeared " +
-                            "(unread=$unread); cancelled again " + alive.joinToString { "${it.tag}/${it.id}" },
+                            "(unread=$unread 仅取证); cancelled again (mute window) " +
+                            alive.joinToString { "${it.tag}/${it.id}" },
                     )
                 }
             }, delay)
@@ -1069,16 +1068,9 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
             .onFailure { WeLogger.w(TAG, "failed to read suppression mark for $talker", it) }
             .getOrDefault(0L)
 
-    /** 真有新消息到达时立刻解除压制 —— 新消息的通知本来就该出现。 */
-    private fun clearRepostSuppression(talker: String) {
-        if (suppressedAtOf(talker) == 0L) return
-        runCatching { WePrefs.remove(SUPPRESS_MARK_PREFIX + talker) }
-            .onFailure { WeLogger.w(TAG, "failed to clear suppression mark for $talker", it) }
-        WeLogger.i(
-            TAG,
-            "suppression released for $talker (new incoming message, proc=${TargetProcesses.currentName})",
-        )
-    }
+    // v3.96 已删除 clearRepostSuppression(): 入站消息不再解除压制。旧实现是"新消息放行"的唯一开关,
+    // 而真机日志 (2026-10-22 23:17) 显示它正是"回复后通知又回来"的入口 —— 对方 16ms 后发一条就把
+    // 120s 静音窗打穿, 微信用同一个 key 重发。现在窗内一律静音, 到期由时间比较/清理自然失效。
 
     /** 清掉过期的压制标记: 它们只是 120s 有效的一次性时间戳, 不清会在 MMKV 里无限累积。 */
     private fun pruneSuppressionMarks() {
@@ -1148,7 +1140,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
         val (talker, cancelledAt) = cancelled
         val unread = unreadCountOf(talker)
         val cancelledAgoMs = SystemClock.elapsedRealtime() - cancelledAt
-        if (unread == 0 || (unread < 0 && cancelledAgoMs <= SUPPRESS_UNREAD_UNKNOWN_WINDOW_MS)) {
+        if (cancelledAgoMs <= SUPPRESS_REPOST_WINDOW_MS) {
             synchronized(stateLock) {
                 invalidatePendingNotifications { it.key == key }
                 notificationTalkers.remove(key)
@@ -1160,7 +1152,8 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
             WeLogger.i(
                 TAG,
                 "suppressed context-less notification re-post for $talker key=${key.tag}/${key.id} " +
-                    "(unread=$unread, cancelled ${cancelledAgoMs}ms ago, via=$via, " +
+                    "(unread=$unread 仅取证, cancelled ${cancelledAgoMs}ms ago, " +
+                    "mute window ${SUPPRESS_REPOST_WINDOW_MS}ms, via=$via, " +
                     "proc=${TargetProcesses.currentName})",
             )
             return true
@@ -1222,29 +1215,22 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                 "proc=${TargetProcesses.currentName} clearedAgo=${clearedAgo}ms unread=$unread",
         )
         if (clearedAgo in 0..SUPPRESS_REPOST_WINDOW_MS) {
-            // 未读为 0 => 微信按旧状态刷回来的陈旧通知; 未读读不到 => 只压短窗; 有未读 => 真有新消息, 照发。
-            val stale = when {
-                unread == 0 -> true
-                unread < 0 -> clearedAgo <= SUPPRESS_UNREAD_UNKNOWN_WINDOW_MS
-                else -> false
-            }
-            if (stale) {
-                synchronized(stateLock) { notificationTalkers.remove(key) }
-                // 这条也可能已经发出去过 (重启/另一个进程发的), 顺手撤掉, 别留在通知栏上。
-                runCatching {
-                    HostInfo.application.getSystemService<NotificationManager>().cancel(key.tag, key.id)
-                }.onFailure { WeLogger.w(TAG, "failed to cancel suppressed notification ${key.tag}/${key.id}", it) }
-                WeLogger.i(
-                    TAG,
-                    "suppressed stale notification re-post for ${context.talker} " +
-                        "(unread=$unread, cleared ${clearedAgo}ms ago, proc=${TargetProcesses.currentName})",
-                )
-                return
-            }
+            // v3.96 静音窗: 窗内这条会话的通知一律不发 —— **包括对方紧跟着发来的真新消息**。
+            // 旧语义(未读>0 放行)在真机日志里就是"回复后通知又回来": 对方 16ms 后发一条,
+            // 微信拿同一个 key 重发, 用户分不清是新消息还是刚才那条没消。unread 只作取证。
+            // 未读角标/会话列表照常更新, 窗一过(120s)恢复正常通知。
+            synchronized(stateLock) { notificationTalkers.remove(key) }
+            // 这条也可能已经发出去过 (重启/另一个进程发的), 顺手撤掉, 别留在通知栏上。
+            runCatching {
+                HostInfo.application.getSystemService<NotificationManager>().cancel(key.tag, key.id)
+            }.onFailure { WeLogger.w(TAG, "failed to cancel suppressed notification ${key.tag}/${key.id}", it) }
             WeLogger.i(
                 TAG,
-                "notification re-post allowed for ${context.talker} (unread=$unread, cleared ${clearedAgo}ms ago)",
+                "suppressed notification re-post for ${context.talker} " +
+                    "(unread=$unread 仅取证, cleared ${clearedAgo}ms ago, " +
+                    "mute window ${SUPPRESS_REPOST_WINDOW_MS}ms, proc=${TargetProcesses.currentName})",
             )
+            return
         }
         val notifTitle = notif.extras.getString(Notification.EXTRA_TITLE)
             ?: "未知对话（请向模块开发者报告错误）"
