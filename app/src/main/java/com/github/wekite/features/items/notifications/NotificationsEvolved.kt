@@ -277,8 +277,15 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     private const val REPLY_WATCHDOG_MILLIS = 9_000L
     // 取消通知的补刀时点: 广播 finish 之后 RemoteInput 的收尾可能把通知刷回来, 需要再取消几次。
     private val CANCEL_RETRY_DELAYS_MS = longArrayOf(400L, 1_200L, 2_500L)
-    // 更长一段的复查时点: 微信 (:push) 会在回复后几十秒才把同一条通知重新发出来 (2026-10-22 实测 +9s/+30s)。
-    private val REPOST_WATCH_DELAYS_MS = longArrayOf(5_000L, 10_000L, 20_000L, 35_000L, 60_000L)
+    // 更长一段的复查时点: 微信 (:push) 会在回复后几十秒才把同一条通知重新发出来。
+    // 2026-10-22 10:09 实测 (v3.91): 幽灵出现在回复后 +20s~+33s —— 正好落在旧 +20/+35 两档的空档里,
+    // 用户在空档里看到它"还挂着"。因此加密到 5s 一档直到 +40s, 再拉长到 2 分钟收尾;
+    // 且该路径是唯一可靠的兜底: 幽灵出现时没有任何 notify 进我们的钩子 (零日志),
+    // 说明其发布路径在 NotificationManager.notify 之外, 按标记拦截救不了, 只能靠复查补刀。
+    private val REPOST_WATCH_DELAYS_MS = longArrayOf(
+        5_000L, 10_000L, 15_000L, 20_000L, 25_000L, 30_000L, 35_000L, 40_000L,
+        50_000L, 60_000L, 75_000L, 90_000L, 120_000L,
+    )
 
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
@@ -886,6 +893,26 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                     if (alive.isEmpty()) {
                         WeLogger.i(TAG, "repost watch #${index + 1} (+${delay}ms): $talker still absent")
                         return@launch
+                    }
+                    // 取证: 该通知是系统什么时候发布的 (postTime) —— 幽灵的发布路径绕过我们的
+                    // notify 钩子(零日志), postTime 是唯一能定位"谁在什么时候发的"的线索。
+                    val postTimes = keys.mapNotNull { key ->
+                        try {
+                            manager.activeNotifications.find { it.tag == key.tag && it.id == key.id }
+                                ?.let { key to it.postTime }
+                        } catch (error: Throwable) {
+                            null
+                        }
+                    }
+                    postTimes.forEach { (key, postTime) ->
+                        WeLogger.i(
+                            TAG,
+                            "repost watch #${index + 1} (+${delay}ms): $talker key=${key.tag}/${key.id} " +
+                                "postTime=${java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
+                                    .format(java.util.Date(postTime))} (posted " +
+                                "${(System.currentTimeMillis() - postTime) / 1000.0}s ago, " +
+                                "proc=${TargetProcesses.currentName})",
+                        )
                     }
                     val unread = unreadCountOf(talker)
                     if (unread > 0) {
