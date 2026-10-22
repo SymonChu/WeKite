@@ -216,12 +216,13 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     private const val SUPPRESS_MARK_PREFIX = "notifications_evolved_suppress_at_"
     private const val SUPPRESS_REPOST_WINDOW_MS = 120_000L
     // 未读数读不到 (-1, :push 里数据库句柄可能未就绪) 时只压一个短窗 —— 宁可少压, 也不吞真消息。
-    private const val SUPPRESS_UNREAD_UNKNOWN_WINDOW_MS = 15_000L
+    internal const val SUPPRESS_UNREAD_UNKNOWN_WINDOW_MS = 15_000L
     // 已取消通知的 key -> 会话 跨进程映射。v3.91: 微信还有一条**不走 dealNotify** 的重发路径
     // (2026-10-22 09:22 实测: 回复后 3 次核对 active=0, +5s watch 也说不在, 但用户 10s 后仍按到了
     // 同一 key 通知上的按钮, 且全程无 intercepted 日志) —— 只有 notify-hook 无上下文分支能拦它。
-    private const val CANCELLED_KEY_PREFIX = "notifications_evolved_cancelled_key_"
-    private const val CANCELLED_KEY_TTL_MS = 180_000L
+    // v3.93 起同时被 NotificationRepostListener (事件驱动立即拔除) 消费, 故 internal 可见。
+    internal const val CANCELLED_KEY_PREFIX = "notifications_evolved_cancelled_key_"
+    internal const val CANCELLED_KEY_TTL_MS = 180_000L
     private val pendingMessages = HashMap<String, ArrayDeque<PendingMessage>>()
     private val avatarLock = Any()
     private val avatarCache = LruCache<String, CachedAvatar>(maxLimit = 64)
@@ -1046,6 +1047,8 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     }
 
     /** 该会话的未读数; 读不到(表/句柄未就绪)返回 -1, 调用方据此不要做压制判断。 */
+    internal fun unreadCountOfPublic(talker: String): Int = unreadCountOf(talker)
+
     private fun unreadCountOf(talker: String): Int = runCatching {
         WeDatabaseApi.rawQuery("SELECT unReadCount, unReadMuteCount, atCount FROM rconversation WHERE username=?", arrayOf<Any>(talker))
             .use { cursor ->
@@ -1381,6 +1384,16 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
             var imageMode by remember { mutableStateOf(imageNotificationMode) }
             var stickerMode by remember { mutableStateOf(stickerNotificationMode) }
             var clearHistory by remember { mutableStateOf(clearHistoryAfterQuickReply) }
+            var listenerGranted by remember {
+                mutableStateOf(
+                    runCatching {
+                        android.provider.Settings.Secure.getString(
+                            context.contentResolver,
+                            "enabled_notification_listeners",
+                        )?.contains(context.packageName) == true
+                    }.getOrDefault(false)
+                )
+            }
 
             fun modeLabel(mode: ImageNotificationMode): String = when (mode) {
                 ImageNotificationMode.DISABLED -> "不显示图片消息"
@@ -1433,6 +1446,39 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                                 )
                             },
                             headlineContent = { Text("快速回复后清除消息历史") },
+                        )
+                        // v3.93: 幽灵通知「立即拔除」监听器的授权入口。
+                        // 事件驱动比 v3.92 的 5s 轮询快得多; 未授权时轮询兜底照常工作。
+                        ListItem(
+                            colors = dialogListItemColors(),
+                            modifier = Modifier.clickable {
+                                runCatching {
+                                    context.startActivity(
+                                        android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }
+                                listenerGranted = runCatching {
+                                    android.provider.Settings.Secure.getString(
+                                        context.contentResolver,
+                                        "enabled_notification_listeners",
+                                    )?.contains(context.packageName) == true
+                                }.getOrDefault(listenerGranted)
+                            },
+                            trailingContent = {
+                                androidx.compose.material3.Switch(
+                                    checked = listenerGranted,
+                                    onCheckedChange = null,
+                                    colors = dialogSwitchColors(),
+                                )
+                            },
+                            headlineContent = { Text("通知使用权（回复后立即清除通知）") },
+                            supportingContent = {
+                                Text(
+                                    if (listenerGranted) "已开启：被回复过的通知一冒头就立即拔掉"
+                                    else "点此去系统设置授权；不授权也能用，只是通知消失最慢约 5 秒"
+                                )
+                            },
                         )
                     }
                 },
