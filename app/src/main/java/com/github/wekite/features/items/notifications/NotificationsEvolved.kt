@@ -217,6 +217,11 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     private const val SUPPRESS_REPOST_WINDOW_MS = 120_000L
     // 未读数读不到 (-1, :push 里数据库句柄可能未就绪) 时只压一个短窗 —— 宁可少压, 也不吞真消息。
     private const val SUPPRESS_UNREAD_UNKNOWN_WINDOW_MS = 15_000L
+    // 已取消通知的 key -> 会话 跨进程映射。v3.91: 微信还有一条**不走 dealNotify** 的重发路径
+    // (2026-10-22 09:22 实测: 回复后 3 次核对 active=0, +5s watch 也说不在, 但用户 10s 后仍按到了
+    // 同一 key 通知上的按钮, 且全程无 intercepted 日志) —— 只有 notify-hook 无上下文分支能拦它。
+    private const val CANCELLED_KEY_PREFIX = "notifications_evolved_cancelled_key_"
+    private const val CANCELLED_KEY_TTL_MS = 180_000L
     private val pendingMessages = HashMap<String, ArrayDeque<PendingMessage>>()
     private val avatarLock = Any()
     private val avatarCache = LruCache<String, CachedAvatar>(maxLimit = 64)
@@ -831,6 +836,9 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
             }.distinct()
         }
         keys.forEach { manager.cancel(it.tag, it.id) }
+        // 记住"我们刚取消过这些 key"(跨进程): 微信有一条不走 dealNotify 的重发路径,
+        // 只有 notify-hook 的无上下文分支能拦 (v3.91)。
+        keys.forEach { rememberCancelledKey(it, talker) }
         WeLogger.i(
             TAG,
             "cancelConversationNotifications: $talker -> ${keys.size} key(s) " +
@@ -958,6 +966,56 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                     if (at == 0L || now - at > SUPPRESS_REPOST_WINDOW_MS) WePrefs.remove(key)
                 }
         }.onFailure { WeLogger.w(TAG, "failed to prune suppression marks", it) }
+    }
+
+    // ---- 已取消通知 key 的跨进程映射 (v3.91) ----
+    // key 形如 "tag/id" (tag 为 null 时是 "null/id"), 值 = elapsedRealtime,会话 的复合串 "ts|talker"。
+    // 解析在读取端做, 写入端只做字符串拼接 —— 任何一端格式演进都不影响旧数据可判定性。
+
+    private fun rememberCancelledKey(key: NotificationKey, talker: String) {
+        runCatching {
+            WePrefs.putString(
+                CANCELLED_KEY_PREFIX + (key.tag ?: "null") + "/" + key.id,
+                SystemClock.elapsedRealtime().toString() + "|" + talker,
+            )
+        }.onFailure { WeLogger.w(TAG, "failed to remember cancelled key ${key.tag}/${key.id}", it) }
+    }
+
+    /**
+     * 该 (tag,id) 是否是我们取消过的通知、且 TTL 内。返回 (talker, 取消于 elapsedRealtime)。
+     *
+     * 过期/缺映射返回 null。**读后即清** —— 一个 key 只用来拦一次重发:
+     * 若微信随后真有新消息要走同一 (tag,id), scheduleNotification 正常路径会重新发布并覆盖,
+     * 不读后即清的话, 一次取消会把该会话此后 3 分钟的全部无上下文通知都吞掉。
+     */
+    private fun consumeCancelledKey(key: NotificationKey): Pair<String, Long>? {
+        val stored = runCatching {
+            WePrefs.getString(CANCELLED_KEY_PREFIX + (key.tag ?: "null") + "/" + key.id)
+        }.onFailure { WeLogger.w(TAG, "failed to read cancelled key ${key.tag}/${key.id}", it) }
+            .getOrNull() ?: return null
+        runCatching { WePrefs.remove(CANCELLED_KEY_PREFIX + (key.tag ?: "null") + "/" + key.id) }
+            .onFailure { WeLogger.w(TAG, "failed to clear cancelled key ${key.tag}/${key.id}", it) }
+        val sep = stored.indexOf('|')
+        if (sep <= 0 || sep >= stored.length - 1) return null
+        val at = stored.substring(0, sep).toLongOrNull() ?: return null
+        val talker = stored.substring(sep + 1)
+        if (talker.isEmpty()) return null
+        if (SystemClock.elapsedRealtime() - at > CANCELLED_KEY_TTL_MS) return null
+        return talker to at
+    }
+
+    /** 清掉过期的已取消 key 映射, 防累积。 */
+    private fun pruneCancelledKeys() {
+        val now = SystemClock.elapsedRealtime()
+        runCatching {
+            WePrefs.default.all.keys
+                .filter { it.startsWith(CANCELLED_KEY_PREFIX) }
+                .forEach { key ->
+                    val stored = WePrefs.getString(key) ?: return@forEach
+                    val at = stored.substringBefore('|').toLongOrNull()
+                    if (at == null || now - at > CANCELLED_KEY_TTL_MS) WePrefs.remove(key)
+                }
+        }.onFailure { WeLogger.w(TAG, "failed to prune cancelled keys", it) }
     }
 
     /** 该会话的未读数; 读不到(表/句柄未就绪)返回 -1, 调用方据此不要做压制判断。 */
@@ -1361,6 +1419,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     override fun onEnable() {
         clearState()
         pruneSuppressionMarks()
+        pruneCancelledKeys()
         mediaScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         mediaScope.launch { cleanupNotificationMediaCache() }
 
@@ -1407,6 +1466,34 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                 val notif = args[2] as Notification
                 val notifyContext = notificationContext.get()
                 if (notifyContext == null || notif.channelId != "message_channel_new_id") {
+                    // v3.91: 无 dealNotify 上下文的重发 —— 2026-10-22 09:22 实测的最后一条漏网路径。
+                    // 回复后 3 次核对 + 5s watch 都确认通知已消失, 但 10s 后用户仍按到了同一 key 通知上的
+                    // 「标为已读」按钮, 且全程没有 intercepted 日志 ⇒ 这条 notify 没带上下文、v3.90 是
+                    // 静默放行的。判定: 该 (tag,id) 是我们最近取消过的 & 该会话未读为 0 ⇒ 拦下。
+                    // 有未读(新消息)或 key 不认识时照常放行, 不会吞真通知。
+                    if (notifyContext == null) {
+                        val cancelled = consumeCancelledKey(key)
+                        if (cancelled != null) {
+                            val (cancelledTalker, cancelledAt) = cancelled
+                            val unread = unreadCountOf(cancelledTalker)
+                            val cancelledAgoMs = SystemClock.elapsedRealtime() - cancelledAt
+                            if (unread == 0 || (unread < 0 && cancelledAgoMs <= SUPPRESS_UNREAD_UNKNOWN_WINDOW_MS)) {
+                                WeLogger.i(
+                                    TAG,
+                                    "suppressed context-less notification re-post for $cancelledTalker " +
+                                        "key=${key.tag}/${key.id} (unread=$unread, cancelled ${cancelledAgoMs}ms ago, " +
+                                        "proc=${TargetProcesses.currentName}, channel=${notif.channelId})",
+                                )
+                                result = null
+                                return@hookBefore
+                            }
+                            WeLogger.i(
+                                TAG,
+                                "context-less notify allowed for $cancelledTalker key=${key.tag}/${key.id} " +
+                                    "(unread=$unread, cancelled ${cancelledAgoMs}ms ago, proc=${TargetProcesses.currentName})",
+                            )
+                        }
+                    }
                     if (notifyContext != null) {
                         // 带上了会话上下文却走了别的 channel —— 微信还有第二条通知通道,
                         // 我们的拦截拦不到它 (v3.89 曾出现"没日志却来了通知")。留痕便于定性。
