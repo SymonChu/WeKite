@@ -65,17 +65,6 @@
             android:exported="true"
             android:theme="@style/Theme.Material3.DynamicColors.DayNight.NoActionBar" />
 
-        <!-- 通知进化: 回复后幽灵通知的「立即拔除」监听器。
-             需要用户在系统设置里授予「通知使用权」才生效; 未授权时退回 v3.92 的定时复查兜底。 -->
-        <service
-            android:name=".features.items.notifications.NotificationRepostListener"
-            android:exported="false"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
-        </service>
-
         <meta-data
             android:name="xposedmodule"
             android:value="true" />

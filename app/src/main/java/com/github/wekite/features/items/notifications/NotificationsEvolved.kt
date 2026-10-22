@@ -220,9 +220,8 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     // 已取消通知的 key -> 会话 跨进程映射。v3.91: 微信还有一条**不走 dealNotify** 的重发路径
     // (2026-10-22 09:22 实测: 回复后 3 次核对 active=0, +5s watch 也说不在, 但用户 10s 后仍按到了
     // 同一 key 通知上的按钮, 且全程无 intercepted 日志) —— 只有 notify-hook 无上下文分支能拦它。
-    // v3.93 起同时被 NotificationRepostListener (事件驱动立即拔除) 消费, 故 internal 可见。
-    internal const val CANCELLED_KEY_PREFIX = "notifications_evolved_cancelled_key_"
-    internal const val CANCELLED_KEY_TTL_MS = 180_000L
+    private const val CANCELLED_KEY_PREFIX = "notifications_evolved_cancelled_key_"
+    private const val CANCELLED_KEY_TTL_MS = 180_000L
     private val pendingMessages = HashMap<String, ArrayDeque<PendingMessage>>()
     private val avatarLock = Any()
     private val avatarCache = LruCache<String, CachedAvatar>(maxLimit = 64)
@@ -278,6 +277,10 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
     private const val REPLY_WATCHDOG_MILLIS = 9_000L
     // 取消通知的补刀时点: 广播 finish 之后 RemoteInput 的收尾可能把通知刷回来, 需要再取消几次。
     private val CANCEL_RETRY_DELAYS_MS = longArrayOf(400L, 1_200L, 2_500L)
+    // 回复成功后到真正 cancel 之间的等待: 先 finish() 放掉 RemoteInput 广播, 让系统把
+    // "回复中"状态那一份刷完, 再取消 —— 否则我们的 cancel 会被系统的刷回盖掉 (v3.94)。
+    // 取 150ms: 够系统走完广播收尾, 又远短于用户能察觉的延迟。
+    private const val CANCEL_AFTER_FINISH_DELAY_MS = 150L
     // 更长一段的复查时点: 微信 (:push) 会在回复后几十秒才把同一条通知重新发出来。
     // 2026-10-22 10:09 实测 (v3.91): 幽灵出现在回复后 +20s~+33s —— 正好落在旧 +20/+35 两档的空档里,
     // 用户在空档里看到它"还挂着"。因此加密到 5s 一档直到 +40s, 再拉长到 2 分钟收尾;
@@ -428,12 +431,11 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                                 // 回复成功后自动收尾: 标已读 -> 清会话状态 -> 关掉这条通知。
                                 val markedRead = WeConversationApi.markAsRead(targetWxId)
                                 WeLogger.i(TAG, "quick reply: mark-as-read=$markedRead for $targetWxId")
+                                // 压制标记先打(只是 MMKV 写, 与取消时序无关), 让 finish 之后那段
+                                // 空窗里微信若按旧状态重发, scheduleNotification 也能拦住。
                                 armRepostSuppression(targetWxId)
                                 clearConversationState(targetWxId)
                                 removeContentIntent(targetWxId)
-                                val cancelled =
-                                    cancelConversationNotifications(notificationManager, targetWxId, notifyKey)
-                                watchForRepost(notificationManager, targetWxId, cancelled)
 
                                 // markAsRead 会经下面的 hook 清掉历史。按配置恢复, 两种模式下都补上这条快捷回复。
                                 appendHistory(targetWxId, preservedHistory)
@@ -447,6 +449,26 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                                         messageId = null,
                                     ),
                                 )
+
+                                // ⭐ v3.94 定案: 取消必须**排在 RemoteInput 广播收尾之后**。
+                                //
+                                // 「标为已读」按钮一直好用、只有回复不好用, 两者的差别不在取消逻辑
+                                // (两条分支调的是同一个 cancelConversationNotifications), 而在回复走的是
+                                // RemoteInput: 广播还挂起时系统把这条通知锁在「回复中」状态, 我们在 finish()
+                                // 之前 cancel, 系统随后按"通知最后的状态"把它刷回通知栏 —— 于是用户看到
+                                // 「回复了但通知还在」, 而且这次重发是**系统**发的, 不经过我们的 notify 钩子
+                                // (v3.92 日志里"幽灵出现零日志"就是这么来的)。
+                                //
+                                // 所以先 finish() 放掉广播、让系统先把它那一份刷完, 再取消。用户那句
+                                // 「点发送也相当于点已读」在时序上就是这个意思: 已读按钮没有挂起的 RemoteInput,
+                                // 它的 cancel 天然是"最后一句话"。
+                                finishOnce()
+                                mainHandler.postDelayed({
+                                    val cancelled = cancelConversationNotifications(
+                                        notificationManager, targetWxId, notifyKey,
+                                    )
+                                    watchForRepost(notificationManager, targetWxId, cancelled)
+                                }, CANCEL_AFTER_FINISH_DELAY_MS)
                             } else {
                                 // 发送失败: 保留通知, 用户至少能看到还有未回的消息。
                                 // 必须重发一次同一通知, 否则 Android 停在「发送中」态, 回复按钮会一直转圈。
@@ -1007,22 +1029,27 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                 SystemClock.elapsedRealtime().toString() + "|" + talker,
             )
         }.onFailure { WeLogger.w(TAG, "failed to remember cancelled key ${key.tag}/${key.id}", it) }
+        // 登记表是 TTL 型事实而不是一次性令牌(见 readCancelledKey), 会累积; 每次登记顺手清过期的。
+        pruneCancelledKeys()
     }
 
     /**
      * 该 (tag,id) 是否是我们取消过的通知、且 TTL 内。返回 (talker, 取消于 elapsedRealtime)。
      *
-     * 过期/缺映射返回 null。**读后即清** —— 一个 key 只用来拦一次重发:
-     * 若微信随后真有新消息要走同一 (tag,id), scheduleNotification 正常路径会重新发布并覆盖,
-     * 不读后即清的话, 一次取消会把该会话此后 3 分钟的全部无上下文通知都吞掉。
+     * 过期/缺映射返回 null。
+     *
+     * v3.94: **不再读后即清**。v3.91 的读后即清原本是为了「一次取消别吞掉该会话 3 分钟内的全部
+     * 无上下文通知」, 但代价是这条登记只能拦一次 —— 幽灵是同一条通知反复重发, 拦掉第一次之后,
+     * 第二次起就再也认不出它了 (v3.92 日志里"幽灵出现时零日志"有一半是这么来的: 钩子进了无上下文
+     * 分支, 但登记已被前一次读掉, 于是既不拦也不打日志)。真正该防的误伤由**未读判据**负责:
+     * 对方真发新消息 → unread>0 → 所有路径一律放行。所以这里改成"TTL 内一直有效",
+     * 让 notify 三个重载 + 定时复查的判定完全一致、可重复。
      */
-    private fun consumeCancelledKey(key: NotificationKey): Pair<String, Long>? {
+    private fun readCancelledKey(key: NotificationKey): Pair<String, Long>? {
         val stored = runCatching {
             WePrefs.getString(CANCELLED_KEY_PREFIX + (key.tag ?: "null") + "/" + key.id)
         }.onFailure { WeLogger.w(TAG, "failed to read cancelled key ${key.tag}/${key.id}", it) }
             .getOrNull() ?: return null
-        runCatching { WePrefs.remove(CANCELLED_KEY_PREFIX + (key.tag ?: "null") + "/" + key.id) }
-            .onFailure { WeLogger.w(TAG, "failed to clear cancelled key ${key.tag}/${key.id}", it) }
         val sep = stored.indexOf('|')
         if (sep <= 0 || sep >= stored.length - 1) return null
         val at = stored.substring(0, sep).toLongOrNull() ?: return null
@@ -1030,6 +1057,46 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
         if (talker.isEmpty()) return null
         if (SystemClock.elapsedRealtime() - at > CANCELLED_KEY_TTL_MS) return null
         return talker to at
+    }
+
+    /**
+     * 无上下文的 notify 重发（拿不到 dealNotify 的会话/原文）的统一判定。
+     *
+     * 命中条件: 该 (tag,id) 在「我们刚取消过的」登记表内且 TTL 未过 + 该会话未读为 0。
+     * 三条通知路径（[NotificationManager.notify] 的三个重载）与通知使用权监听器、
+     * 定时复查共用同一份登记表与同一个未读门槛, 所以判定结果完全一致、可重复。
+     *
+     * 返回 true = 调用方应把这次 notify 整个吞掉。
+     */
+    private fun shouldSuppressContextLessRepost(key: NotificationKey, via: String): Boolean {
+        val cancelled = readCancelledKey(key) ?: return false
+        val (talker, cancelledAt) = cancelled
+        val unread = unreadCountOf(talker)
+        val cancelledAgoMs = SystemClock.elapsedRealtime() - cancelledAt
+        if (unread == 0 || (unread < 0 && cancelledAgoMs <= SUPPRESS_UNREAD_UNKNOWN_WINDOW_MS)) {
+            synchronized(stateLock) {
+                invalidatePendingNotifications { it.key == key }
+                notificationTalkers.remove(key)
+            }
+            // 这条也可能已经发出去过 (系统/另一个进程发的), 顺手撤掉, 别留在通知栏上。
+            runCatching {
+                HostInfo.application.getSystemService<NotificationManager>().cancel(key.tag, key.id)
+            }.onFailure { WeLogger.w(TAG, "failed to cancel suppressed notification ${key.tag}/${key.id}", it) }
+            WeLogger.i(
+                TAG,
+                "suppressed context-less notification re-post for $talker key=${key.tag}/${key.id} " +
+                    "(unread=$unread, cancelled ${cancelledAgoMs}ms ago, via=$via, " +
+                    "proc=${TargetProcesses.currentName})",
+            )
+            return true
+        }
+        WeLogger.i(
+            TAG,
+            "context-less notify allowed for $talker key=${key.tag}/${key.id} " +
+                "(unread=$unread, cancelled ${cancelledAgoMs}ms ago, via=$via, " +
+                "proc=${TargetProcesses.currentName})",
+        )
+        return false
     }
 
     /** 清掉过期的已取消 key 映射, 防累积。 */
@@ -1045,9 +1112,6 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                 }
         }.onFailure { WeLogger.w(TAG, "failed to prune cancelled keys", it) }
     }
-
-    /** 该会话的未读数; 读不到(表/句柄未就绪)返回 -1, 调用方据此不要做压制判断。 */
-    internal fun unreadCountOfPublic(talker: String): Int = unreadCountOf(talker)
 
     private fun unreadCountOf(talker: String): Int = runCatching {
         WeDatabaseApi.rawQuery("SELECT unReadCount, unReadMuteCount, atCount FROM rconversation WHERE username=?", arrayOf<Any>(talker))
@@ -1384,16 +1448,6 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
             var imageMode by remember { mutableStateOf(imageNotificationMode) }
             var stickerMode by remember { mutableStateOf(stickerNotificationMode) }
             var clearHistory by remember { mutableStateOf(clearHistoryAfterQuickReply) }
-            var listenerGranted by remember {
-                mutableStateOf(
-                    runCatching {
-                        android.provider.Settings.Secure.getString(
-                            context.contentResolver,
-                            "enabled_notification_listeners",
-                        )?.contains(context.packageName) == true
-                    }.getOrDefault(false)
-                )
-            }
 
             fun modeLabel(mode: ImageNotificationMode): String = when (mode) {
                 ImageNotificationMode.DISABLED -> "不显示图片消息"
@@ -1447,39 +1501,7 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                             },
                             headlineContent = { Text("快速回复后清除消息历史") },
                         )
-                        // v3.93: 幽灵通知「立即拔除」监听器的授权入口。
-                        // 事件驱动比 v3.92 的 5s 轮询快得多; 未授权时轮询兜底照常工作。
-                        ListItem(
-                            colors = dialogListItemColors(),
-                            modifier = Modifier.clickable {
-                                runCatching {
-                                    context.startActivity(
-                                        android.content.Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-                                            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    )
-                                }
-                                listenerGranted = runCatching {
-                                    android.provider.Settings.Secure.getString(
-                                        context.contentResolver,
-                                        "enabled_notification_listeners",
-                                    )?.contains(context.packageName) == true
-                                }.getOrDefault(listenerGranted)
-                            },
-                            trailingContent = {
-                                androidx.compose.material3.Switch(
-                                    checked = listenerGranted,
-                                    onCheckedChange = null,
-                                    colors = dialogSwitchColors(),
-                                )
-                            },
-                            headlineContent = { Text("通知使用权（回复后立即清除通知）") },
-                            supportingContent = {
-                                Text(
-                                    if (listenerGranted) "已开启：被回复过的通知一冒头就立即拔掉"
-                                    else "点此去系统设置授权；不授权也能用，只是通知消失最慢约 5 秒"
-                                )
-                            },
-                        )
+
                     }
                 },
                 dismissButton = {
@@ -1545,26 +1567,9 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                     // 静默放行的。判定: 该 (tag,id) 是我们最近取消过的 & 该会话未读为 0 ⇒ 拦下。
                     // 有未读(新消息)或 key 不认识时照常放行, 不会吞真通知。
                     if (notifyContext == null) {
-                        val cancelled = consumeCancelledKey(key)
-                        if (cancelled != null) {
-                            val (cancelledTalker, cancelledAt) = cancelled
-                            val unread = unreadCountOf(cancelledTalker)
-                            val cancelledAgoMs = SystemClock.elapsedRealtime() - cancelledAt
-                            if (unread == 0 || (unread < 0 && cancelledAgoMs <= SUPPRESS_UNREAD_UNKNOWN_WINDOW_MS)) {
-                                WeLogger.i(
-                                    TAG,
-                                    "suppressed context-less notification re-post for $cancelledTalker " +
-                                        "key=${key.tag}/${key.id} (unread=$unread, cancelled ${cancelledAgoMs}ms ago, " +
-                                        "proc=${TargetProcesses.currentName}, channel=${notif.channelId})",
-                                )
-                                result = null
-                                return@hookBefore
-                            }
-                            WeLogger.i(
-                                TAG,
-                                "context-less notify allowed for $cancelledTalker key=${key.tag}/${key.id} " +
-                                    "(unread=$unread, cancelled ${cancelledAgoMs}ms ago, proc=${TargetProcesses.currentName})",
-                            )
+                        if (shouldSuppressContextLessRepost(key, "notify(tag,id,notif)")) {
+                            result = null
+                            return@hookBefore
                         }
                     }
                     if (notifyContext != null) {
@@ -1586,6 +1591,42 @@ object NotificationsEvolved : ClickableFeature(), IResolveDex {
                 val originalNotify = captureOriginalMethod()
                 scheduleNotification(key, notif.clone(), notifyContext, originalNotify)
                 result = null
+            }
+
+        // ⭐ v3.94: 另外两个 notify 重载也要挂上。
+        //
+        // 通知栏上的 key 是 (tag,id), 而 Android 还有 `notify(int id, Notification)` 与
+        // `notifyAsPackage(String, String, int, Notification)` 两条发布入口, 它们发出来的通知
+        // 在通知栏上与上面那条**完全同 key**, 但我们的主钩子看不见 (v3.92 日志里"幽灵出现时零日志"
+        // 就是这一类)。不挂它们, 幽灵只能等 5 秒一档的定时复查去拔, 或者靠通知使用权监听器。
+        // 这里只做一件事: 命中"刚被我们取消过的 key + 未读为 0"就整个吞掉, 其余一律放行。
+        NotificationManager::class.reflekt()
+            .firstMethod {
+                name = "notify"
+                parameters(Int::class, Notification::class)
+            }
+            .hookBefore {
+                val key = NotificationKey(null, args[0] as Int)
+                if (shouldSuppressContextLessRepost(key, "notify(id,notif)")) {
+                    result = null
+                    return@hookBefore
+                }
+                synchronized(stateLock) {
+                    invalidatePendingNotifications { it.key == key }
+                    notificationTalkers.remove(key)
+                }
+            }
+        NotificationManager::class.reflekt()
+            .firstMethod {
+                name = "notifyAsPackage"
+                parameters(String::class, String::class, Int::class, Notification::class)
+            }
+            .hookBefore {
+                val key = NotificationKey(args[1] as String?, args[2] as Int)
+                if (shouldSuppressContextLessRepost(key, "notifyAsPackage")) {
+                    result = null
+                    return@hookBefore
+                }
             }
 
         NotificationManager::class.reflekt()
