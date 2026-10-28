@@ -42,16 +42,31 @@ object NativeLoader {
 
     fun init(hostCtx: Context) {
         ensureNativeLibrariesLoaded()
-        val mmkvDir = hostCtx.filesDir.toPath() / "mmkv"
+        initializeMmkv(hostCtx, zygiskPayload?.let { zygiskMmkvLibLoader() })
+    }
+
+    /**
+     * MMKV-only initialization for the module's own process — the settings app opened from the
+     * launcher icon. That process never runs [init]: the hook bootstrap only exists in the host
+     * (WeChat) process. Without this, the first composition that touches [WePrefs] (e.g.
+     * `ThemeSettings`) dies with "You should Call MMKV.initialize() first.".
+     *
+     * No dexkit / wekit_native is needed here, so the regular library lookup is skipped.
+     */
+    fun initModuleProcess(moduleCtx: Context) {
+        initializeMmkv(moduleCtx, null)
+    }
+
+    private fun initializeMmkv(context: Context, libLoader: MMKV.LibLoader?) {
+        val mmkvDir = context.filesDir.toPath() / "mmkv"
         if (!mmkvDir.exists()) {
             mmkvDir.createDirsSafe()
         }
 
-        val libLoader = zygiskPayload?.let { zygiskMmkvLibLoader() }
         if (libLoader == null) {
-            MMKV.initialize(hostCtx, mmkvDir.toString())
+            MMKV.initialize(context, mmkvDir.toString())
         } else {
-            MMKV.initialize(hostCtx, mmkvDir.toString(), libLoader)
+            MMKV.initialize(context, mmkvDir.toString(), libLoader)
         }
 
         MMKV.mmkvWithID(WePrefs.PREFS_NAME, MMKV.MULTI_PROCESS_MODE)
