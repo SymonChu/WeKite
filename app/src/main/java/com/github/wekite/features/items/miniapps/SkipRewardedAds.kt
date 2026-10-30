@@ -56,7 +56,10 @@ object SkipRewardedAds : SwitchFeature(), IResolveDex {
     private const val SKIP_DELAY_MS = 200
     private const val DUMP_SDK_FILES = false
 
-    private val AD_EVENT_MARKERS = listOf("ad", "video", "reward", "close", "ended", "endpage")
+    /** 非前缀的广告事件名 (精确匹配)。 */
+    private val AD_EVENT_NAMES = setOf(
+        "onAdServerInfo",
+    )
 
     /** 广告 SDK 文件 (commlib SDK 子包), 命中即尝试打补丁。 */
     private val SDK_CANDIDATES = listOf(
@@ -179,8 +182,7 @@ object SkipRewardedAds : SwitchFeature(), IResolveDex {
             val type = args.getOrNull(0) as? String ?: return@hookBefore
             val data = (args.getOrNull(1) as? String).orEmpty()
             val now = System.currentTimeMillis()
-            val looksAd = type.startsWith("mbAd_") ||
-                AD_EVENT_MARKERS.any { type.contains(it, ignoreCase = true) }
+            val looksAd = type.startsWith("mbAd_") || type in AD_EVENT_NAMES
             val inSession = now <= adEventSessionUntil.get()
             if (looksAd) {
                 adEventSessionUntil.set(now + SESSION_WINDOW_MS)
