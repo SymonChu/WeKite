@@ -522,14 +522,49 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         if (HostInfo.versionCode >= WeChatVersions.MM_8_0_67 && !HostInfo.isHostGooglePlay ||
             HostInfo.versionCode >= WeChatVersions.MM_8_0_66_PLAY && HostInfo.isHostGooglePlay
         ) {
-            methodImgUploadFeatureServiceSendImage.find(dexKit) {
+            // 8.0.80 起同类里多了一个包装方法 Rj(L…/d;)（它只是转调 Yj().N7(params)），
+            // 也含 "params" 字面量且是单参 ⇒ 原锚点撞 Multiple methods。
+            // 真 sendImage 的单参类恒有 (String md5, int 1, String selfWxId, String toUser,
+            // Object crossParams) 五参构造 —— sendImageByMd5 里 createInstance 正是这么用的，
+            // 8.0.77/79/80 三版实测成立，用它把候选卡回唯一。
+            // 老版本（8.0.67~8.0.76）本地无包可验，形状若不同则回退原锚点，不打坏旧版。
+            val sendImagePinned = methodImgUploadFeatureServiceSendImage.find(dexKit, allowFailure = true) {
                 matcher {
                     declaredClass {
                         usingEqStrings("MicroMsg.ImgUpload.MsgImgFeatureService", "taskListener", "params")
                     }
 
+                    // ⚠️ params{} 会整体替换 paramCount 建立的 ParametersMatcher（后写覆盖），
+                    // 所以「参数类必须能按 (md5, 1, selfWxId, toUser, crossParams) 构造」这条
+                    // 要写在 paramCount 之前，两条件才叠加在同一 matcher 上。
+                    params {
+                        add {
+                            type {
+                                methods {
+                                    add {
+                                        name = "<init>"
+                                        paramTypes(BString, int, BString, BString, null)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     paramCount(1)
                     usingEqStrings("params")
+                }
+            }
+
+            if (!sendImagePinned) {
+                methodImgUploadFeatureServiceSendImage.find(dexKit) {
+                    matcher {
+                        declaredClass {
+                            usingEqStrings("MicroMsg.ImgUpload.MsgImgFeatureService", "taskListener", "params")
+                        }
+
+                        paramCount(1)
+                        usingEqStrings("params")
+                    }
                 }
             }
 
