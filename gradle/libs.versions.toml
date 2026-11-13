@@ -20,7 +20,7 @@ lombok = "1.18.48"
 google-protobuf = "4.36.1"
 ksp = "2.3.12"
 okhttp = "5.5.0"
-hidden-api-bypass = "6.1"
+hidden-api-bypass = "6.2"
 runtime = "1.11.4"
 # noinspection GradleDependency
 compose-material3 = "1.5.0-alpha19" # DO NOT UPDATE. RIPPLE EFFECT BROKE AGAIN. TOUCH EFFECT BROKE TOO. FUCK. YOU. GOOGLE.
