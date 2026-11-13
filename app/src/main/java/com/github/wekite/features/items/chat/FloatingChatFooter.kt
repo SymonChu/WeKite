@@ -381,7 +381,10 @@ object FloatingChatFooter : ClickableFeature(), IResolveDex {
                 runCatching { v.post { tryInstallListenerHook(v, retry = false) } }
                 return
             }
-            WeLogger.w(TAG, "native listener hook: no OnTouchListener on ${v.javaClass.name} (${v.javaClass.simpleName})")
+            // 8.0.79 实测：微信自己的收面板监听器挂在别的视图上（guard installed 日志可证），
+            // footer 宿主上「没有 OnTouchListener」是常态而非异常，且每次进聊天页都会走到这里
+            // （真机一天 259 条）。降为 I，保留可观测性但不再刷 W。
+            WeLogger.i(TAG, "native listener hook: no OnTouchListener on ${v.javaClass.name} (${v.javaClass.simpleName})")
             return
         }
         val cls = listener.javaClass

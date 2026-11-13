@@ -65,6 +65,7 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.FileTime
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 import kotlin.io.path.Path
 import kotlin.io.path.absolutePathString
@@ -2052,6 +2053,7 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         wait: Boolean,
     ): NotificationMediaFile? {
         decodeStickerToFile(md5, destination, logFailure = false)?.let {
+            stickerNotReadyWarned.remove(md5)
             return NotificationMediaFile(it, detectImageMime(it)!!)
         }
         if (!wait) return null
@@ -2059,16 +2061,24 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         startStickerLoad(md5)
         do {
             if (SystemClock.elapsedRealtime() >= deadlineElapsedRealtime) {
-                WeLogger.w(TAG, "notification sticker was not ready before deadline: $md5")
+                // 降噪：同一条群发消息常被十几条通知同时引用，各自等满 3s 后全部超时，
+                // 真机日志实测同 md5 一天可刷 18 条 W。改为同 md5 只在首次未就绪时记 W；
+                // 任何一次解码成功即清标志，之后再次未就绪可再记一次。
+                if (stickerNotReadyWarned.add(md5)) {
+                    WeLogger.w(TAG, "notification sticker was not ready before deadline: $md5")
+                }
                 return null
             }
             decodeStickerToFile(md5, destination, logFailure = false)?.let {
+                stickerNotReadyWarned.remove(md5)
                 if (SystemClock.elapsedRealtime() >= deadlineElapsedRealtime) return null
                 return NotificationMediaFile(it, detectImageMime(it)!!)
             }
             sleepForPoll(deadlineElapsedRealtime, 50L)
         } while (true)
     }
+
+    private val stickerNotReadyWarned = ConcurrentHashMap.newKeySet<String>()
 
     private fun startStickerLoad(md5: String) {
         val loadMethod = methodLoadEmojiFile.method
