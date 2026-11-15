@@ -55,6 +55,7 @@ object SkipRewardedAds : SwitchFeature(), IResolveDex {
     private const val SESSION_WINDOW_MS = 30_000L
     private const val SKIP_DELAY_MS = 200
     private const val DUMP_SDK_FILES = false
+    private const val EVENT_VIDEO_STATE = "mbAd_MbRewardAd_UpdateVideoState"
 
     /** 非前缀的广告事件名 (精确匹配)。 */
     private val AD_EVENT_NAMES = setOf(
@@ -193,10 +194,18 @@ object SkipRewardedAds : SwitchFeature(), IResolveDex {
                 //    onAccelerometerChange 759 条 = 全文 9%。所以只有**判据命中广告特征**
                 //    （mbAd_* / AD_EVENT_MARKERS）的事件才留在 I 级（默认落盘），
                 //    仅仅「在广告窗口内」的其它事件降 D（开「详细日志」才写文件）。
-                if (looksAd) {
-                    WeLogger.i(TAG, "bridge event type=$type data=${data.take(500)}")
+                // 2026-11-15 二轮降噪: payload 全文一律降 D —— 实测 15 小时日志里
+                //    mbAd 事件占 55.4% (1430 行), 其中 1237 行是 MbRewardAd_UpdateVideoState
+                //    播放 ticker。I 级只留非 ticker 事件的类型, 排查时开详细日志拿全文。
+                val payload = "bridge event type=$type data=${data.take(500)}"
+                if (!looksAd) {
+                    WeLogger.d(TAG, payload)
+                } else if (type == EVENT_VIDEO_STATE) {
+                    // 播放进度 ticker: 实测一天 1237 条, 只在「详细日志」落盘。
+                    WeLogger.d(TAG, payload)
                 } else {
-                    WeLogger.d(TAG, "bridge event type=$type data=${data.take(500)}")
+                    WeLogger.i(TAG, "bridge event type=$type")
+                    WeLogger.d(TAG, payload)
                 }
             }
         }
