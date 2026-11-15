@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ListItem
@@ -98,14 +99,14 @@ import kotlin.math.abs
  *   User-Agent、任意额外请求头、超时/重试、忽略 TLS 校验、错误原文回显）。
  */
 @SuppressLint("DiscouragedApi")
-@Feature(
-    name = "群聊消息分析",
-    categories = ["聊天"],
-    description = "聊天页「N条新消息」胶囊旁挂同尺寸「AI分析」胶囊，点击分析该群消息（接口/模型自填，支持各类反代）"
-)
+// 2026-11-15：并入「AI 助手」合并入口（AiAssistantHub），不再单独出现在功能列表。
+// name 必须保留原值 —— 它就是 WePrefs 的键，改名会丢老用户配置。
 object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListener {
 
     init {
+        name = "群聊消息分析"
+        categories = listOf("聊天")
+        description = "聊天页「N条新消息」胶囊旁挂同尺寸「AI分析」胶囊，点击分析该群消息（接口/模型自填，支持各类反代）"
         // 「聊天」分类第一项（分类内默认顺序由 KSP 生成决定，见 BaseFeature.pinnedFirst）
         pinnedFirst = true
     }
@@ -182,6 +183,17 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         "你是微信群聊分析助手。请把下面这批群聊消息总结成一份中文报告：主要话题、讨论要点、" +
                 "值得注意的信息（含待办、决定、链接类信息）。条理清晰，不要编造。"
 
+    // ==================== 分析模板（2026-11-15 借鉴 WAuxiliary「群聊统计分析」） ====================
+
+    private const val TEMPLATE_MINUTES = "minutes"
+    private const val TEMPLATE_VIBE = "vibe"
+    private const val TEMPLATE_CUSTOM = "custom"
+
+    /** 活跃度口径（借鉴其 prompt 维度：活跃情况 / 核心话题 / 发言用户特点 / 群聊氛围）。 */
+    private const val VIBE_SYSTEM_PROMPT =
+        "你是微信群聊分析助手。请根据群聊消息分析这个群的活跃情况、核心话题、发言用户特点与群聊氛围，" +
+                "给出简洁清晰的中文报告，分点说明，不要编造。"
+
     // ==================== BYOK 配置 ====================
 
     /** 完整接口地址（优先；留空则用 base + path 拼） */
@@ -199,6 +211,9 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     private var skipTls by prefOption("ai_sum_skip_tls", false)
     private var maxMsgs by prefOption("ai_sum_max_msgs", DEFAULT_MAX_MSGS)
     private var systemPrompt by prefOption("ai_sum_system_prompt", DEFAULT_SYSTEM_PROMPT)
+
+    /** 分析模板：minutes（会话纪要，默认）/ vibe（活跃度与氛围）/ custom（用上面的自定义提示词） */
+    private var template by prefOption("ai_sum_template", TEMPLATE_MINUTES)
 
     // ==================== 挂件状态 ====================
 
@@ -582,10 +597,12 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             "analyze scope: ${if (unread > 0) "unread n=$unread" else "today"} " +
                     "(captured=$captured current=$current) conv=$convId"
         )
+        // 本地统计（零成本，先于 AI 输出）
+        val stats = buildStatsBlock(convId, raw)
         val messages = raw.filter { it.type?.isText == true }.reversed()
         if (messages.isEmpty()) {
-            return if (unread > 0) "该群当前没有未读的新消息。"
-            else "今天这个群还没有可分析的文本消息。"
+            val plain = if (unread > 0) "该群当前没有未读的新消息。" else "今天这个群还没有可分析的文本消息。"
+            return if (stats.isBlank()) plain else "$stats\n\n$plain"
         }
 
         val nameCache = HashMap<String, String>()
@@ -606,16 +623,19 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             WeLogger.i(TAG, "analyze: chunk ${index + 1}/${chunks.size} ...")
             chatCompletion(params, params.systemPrompt, chunk.joinToString("\n"))
         }
-        if (parts.size == 1) return parts.first()
-
-        onStage("汇总报告…")
-        val digest = parts.mapIndexed { index, part -> "【第 ${index + 1} 批】\n$part" }.joinToString("\n\n")
-        return chatCompletion(
-            params,
-            "你是微信群聊分析助手。以下是对同一群聊多批新消息的小结，请整合成一份完整的中文分析报告：" +
-                    "主要话题、讨论要点、值得注意的信息与结论。条理清晰，不要编造。",
-            digest
-        )
+        val report = if (parts.size == 1) {
+            parts.first()
+        } else {
+            onStage("汇总报告…")
+            val digest = parts.mapIndexed { index, part -> "【第 ${index + 1} 批】\n$part" }.joinToString("\n\n")
+            chatCompletion(
+                params,
+                "你是微信群聊分析助手。以下是对同一群聊多批新消息的小结，请整合成一份完整的中文分析报告：" +
+                        "主要话题、讨论要点、值得注意的信息与结论。条理清晰，不要编造。",
+                digest
+            )
+        }
+        return if (stats.isBlank()) report else "$stats\n\n$report"
     }
 
     /** 该群**全部未读**新消息（上限 [UNREAD_MAX]）；[unread] <= 0 则返回空。 */
@@ -796,6 +816,39 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** 群消息发送者 wxid 在内容前缀 `wxid:\n` 里（与 `stripWxId` 同一约定）。 */
     private fun senderIdOf(content: String): String =
         senderPrefixRegex.find(content)?.groupValues?.get(1).orEmpty()
+
+    /**
+     * 本地统计块（2026-11-15 借鉴 WAuxiliary「群聊统计分析」插件）：纯计数、零 AI 成本，
+     * 直接拼在 AI 报告最前面 —— 用户点一下就能看到「这个群多热闹」，AI 部分负责「在聊什么」。
+     */
+    private fun buildStatsBlock(convId: String, raw: List<WeMessage>): String {
+        if (raw.isEmpty()) return ""
+        val nameCache = HashMap<String, String>()
+        val bySender = LinkedHashMap<String, Int>()
+        raw.forEach { msg ->
+            val who = if (msg.isSend != 0) "我" else resolveSender(convId, senderIdOf(msg.content), nameCache)
+            bySender[who] = (bySender[who] ?: 0) + 1
+        }
+        val typeCount = LinkedHashMap<String, Int>()
+        raw.forEach { msg ->
+            val label = msg.type?.displayName ?: "其他"
+            typeCount[label] = (typeCount[label] ?: 0) + 1
+        }
+        val sb = StringBuilder()
+        sb.append("📊 本地统计（共 ").append(raw.size).append(" 条）\n")
+        sb.append("发言人数：").append(bySender.size).append(" 人\n")
+        val top = bySender.entries.sortedByDescending { it.value }.take(5)
+        if (top.isNotEmpty()) {
+            sb.append("发言 TOP").append(top.size).append("：")
+            sb.append(top.mapIndexed { i, e -> "${i + 1}. ${e.key} ${e.value} 条" }.joinToString("  "))
+        }
+        val types = typeCount.entries.sortedByDescending { it.value }.take(6)
+        if (types.isNotEmpty()) {
+            sb.append("\n消息类型：")
+            sb.append(types.joinToString("  ") { "${it.key} ${it.value}" })
+        }
+        return sb.toString().trimEnd()
+    }
 
     private fun resolveSender(convId: String, senderId: String, cache: HashMap<String, String>): String {
         if (senderId.isEmpty()) return "群成员"
@@ -1016,6 +1069,9 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
 
     override fun onClick(context: ComponentActivity) = openSettings(context)
 
+    /** 供「AI 助手」合并入口调用（原 openSettings 是私有的）。 */
+    fun openSettingsDialog(activity: android.app.Activity) = openSettings(activity)
+
     private fun openSettings(context: Context) {
         showComposeDialog(context) {
             // 自定义供应商清单（可加多个，用户 2026-09-25 要求）：本对话框内维护一份，改动即时落盘
@@ -1042,6 +1098,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
             var uaInput by remember { mutableStateOf(userAgent) }
             var headersInput by remember { mutableStateOf(extraHeaders) }
             var promptInput by remember { mutableStateOf(systemPrompt) }
+            var templateInput by remember { mutableStateOf(template) }
             var timeoutInput by remember { mutableStateOf(timeoutSec.toString()) }
             var retriesInput by remember { mutableStateOf(retries.toString()) }
             var maxInput by remember { mutableStateOf(maxMsgs.toString()) }
@@ -1374,8 +1431,31 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                             label = { Text("额外请求头，每行一个 key: value") },
                             modifier = Modifier.fillMaxWidth().height(96.dp)
                         )
+                        Text(
+                            "分析模板：" + when (templateInput) {
+                                TEMPLATE_VIBE -> "活跃度与氛围"
+                                TEMPLATE_CUSTOM -> "自定义提示词"
+                                else -> "会话纪要（话题/要点/待办/链接）"
+                            },
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            TextButton(onClick = {
+                                templateInput = TEMPLATE_MINUTES
+                                promptInput = DEFAULT_SYSTEM_PROMPT
+                            }) { Text("纪要") }
+                            TextButton(onClick = {
+                                templateInput = TEMPLATE_VIBE
+                                promptInput = VIBE_SYSTEM_PROMPT
+                            }) { Text("活跃度") }
+                            TextButton(onClick = { templateInput = TEMPLATE_CUSTOM }) { Text("自定义") }
+                        }
                         OutlinedTextField(
-                            value = promptInput, onValueChange = { promptInput = it },
+                            value = promptInput, onValueChange = {
+                                promptInput = it
+                                // 手改提示词即视为自定义口径
+                                templateInput = TEMPLATE_CUSTOM
+                            },
                             label = { Text("系统提示词（决定报告口径）") },
                             modifier = Modifier.fillMaxWidth().height(120.dp)
                         )
@@ -1435,6 +1515,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
                         userAgent = uaInput.trim()
                         extraHeaders = headersInput.trim()
                         systemPrompt = promptInput.trim().ifEmpty { DEFAULT_SYSTEM_PROMPT }
+                        template = templateInput
                         timeoutSec = timeoutInput.trim().toIntOrNull()?.coerceIn(10, 600) ?: 120
                         retries = retriesInput.trim().toIntOrNull()?.coerceIn(0, 5) ?: 1
                         maxMsgs = maxInput.trim().toIntOrNull()?.coerceIn(1, 1000) ?: DEFAULT_MAX_MSGS
@@ -1493,6 +1574,13 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
     /** 基址末尾的版本段（`/v1`、`/v2`、`/v4`、`/api/v3` 的尾段…）。 */
     private val VERSION_TAIL = Regex("""/v\d+$""")
 
+    /** 模板 → 实际 system prompt。 */
+    private fun effectivePrompt(): String = when (template) {
+        TEMPLATE_VIBE -> VIBE_SYSTEM_PROMPT
+        TEMPLATE_CUSTOM -> systemPrompt.ifBlank { DEFAULT_SYSTEM_PROMPT }
+        else -> DEFAULT_SYSTEM_PROMPT
+    }
+
     private fun currentParams() = AiParams(
         endpoint = endpointOf(apiUrl, apiBase, apiPath),
         apiKey = apiKey.filterNot { it.isWhitespace() },
@@ -1504,7 +1592,7 @@ object AiGroupNewMsgSummary : ClickableFeature(), WeChatNewMsgTipApi.ITipListene
         timeoutSec = timeoutSec.coerceIn(10, 600),
         retries = retries.coerceIn(0, 5),
         skipTls = skipTls,
-        systemPrompt = systemPrompt.ifBlank { DEFAULT_SYSTEM_PROMPT }
+        systemPrompt = effectivePrompt()
     )
 
     private fun clientFor(params: AiParams): OkHttpClient {

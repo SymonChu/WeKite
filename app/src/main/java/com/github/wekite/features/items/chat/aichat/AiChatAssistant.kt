@@ -48,8 +48,15 @@ import kotlinx.coroutines.withContext
  *
  * 配置：WeKite 设置 → 聊天 → AI 聊天助手（点条目进配置弹窗）。
  */
-@Feature(name = "AI 聊天助手", categories = ["聊天"], description = "新消息自动分析并给出建议回复，可全自动回复")
+// 2026-11-15：并入「AI 助手」合并入口（AiAssistantHub），不再单独出现在功能列表。
+// name 必须保留原值 —— 它就是 WePrefs 的键，改名会丢老用户配置。
 object AiChatAssistant : ClickableFeature(), WeChatMessageViewApi.ICreateViewListener {
+
+    init {
+        name = "AI 聊天助手"
+        categories = listOf("聊天")
+        description = "新消息自动分析并给出建议回复，可全自动回复"
+    }
 
     private const val TAG = "AiChatAssistant"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
