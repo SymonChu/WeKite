@@ -246,7 +246,7 @@ object WeSettingsInjector : ApiFeature(), IResolveDex, WeChatInputBarApi.IInputB
     }
 
     override fun onTextChanged(chatFooter: ChatFooter, text: String) {
-        if (text != "#wekit") return
+        if (!text.equals("#wekite", ignoreCase = true)) return
         chatFooter.lastText = ""
         openSettingsDialog(chatFooter.context)
     }

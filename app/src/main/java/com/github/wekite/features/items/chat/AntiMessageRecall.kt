@@ -72,6 +72,7 @@ object AntiMessageRecall : ClickableFeature(), WeXmlParserApi.IAfterParseListene
 
             cursor.use { cursor ->
                 if (cursor.moveToFirst()) {
+                    val msgId = cursor.getLong(cursor.getColumnIndexOrThrow("msgId"))
                     val msgInfo = MessageInfo(WeMessageApi.convertMsgInfoInstanceFromCursor(cursor))
                     val talker = msgInfo.talker
                     val createTime = msgInfo.createTime
@@ -98,7 +99,8 @@ object AntiMessageRecall : ClickableFeature(), WeXmlParserApi.IAfterParseListene
                         MessageType.SYSTEM.code,
                         talker,
                         interceptNotice,
-                        createTime + 1
+                        createTime + 1,
+                        afterMsgId = msgId
                     )
 
                     WeLogger.i(TAG, "blocked message revoke")

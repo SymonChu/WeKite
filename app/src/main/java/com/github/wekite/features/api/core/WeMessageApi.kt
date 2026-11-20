@@ -613,9 +613,28 @@ object WeMessageApi : ApiFeature(), IResolveDex {
         return msgInfo
     }
 
-    fun createSimpleMsgInfoAndInsert(type: Int, talker: String, content: String, currentTime: Long) {
+    fun createSimpleMsgInfoAndInsert(
+        type: Int,
+        talker: String,
+        content: String,
+        currentTime: Long,
+        afterMsgId: Long? = null
+    ) {
+        // afterMsgId 非空时，尝试把新消息的 msgid 插到该消息之后（取两者中点），
+        // 让它出现在会话正确位置而不是被排到最底部；msgid 相邻（无间隙）时回退为普通追加。
+        val insertMsgId = afterMsgId?.let { anchor ->
+            runCatching {
+                val next = WeDatabaseApi.rawQuery(
+                    "SELECT msgId FROM message WHERE talker = ? AND msgId > ? ORDER BY msgId LIMIT 1",
+                    arrayOf(talker, anchor)
+                ).use { if (it.moveToFirst()) it.getLong(0) else null }
+                // 中点必须严格大于 anchor 且小于 next，否则无间隙，回退追加
+                val mid = (anchor + (next ?: (anchor + 2))) / 2
+                mid.takeIf { it > anchor && (next == null || it < next) }
+            }.getOrNull()
+        }
         val values = ContentValues().apply {
-            put("msgid", 0)
+            put("msgid", insertMsgId ?: 0)
             put("msgSvrId", currentTime + Random.nextInt())
             put("type", type)
             put("status", 3)
