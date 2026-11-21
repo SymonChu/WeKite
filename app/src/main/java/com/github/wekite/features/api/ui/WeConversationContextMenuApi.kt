@@ -132,10 +132,18 @@ object WeConversationContextMenuApi : ApiFeature(), IResolveDex {
             val activity = firstFieldOrNull { type = Activity::class }?.get() as? Activity
                 ?: return null
 
-            val talker = firstFieldOrNull {
+            // talker 字段的类型随宿主版本变：老版本是自定义 BString，8.0.78+ 直接是 java.lang.String
+            // （8.0.80 实测 ui/conversation/x3 的 `g` 字段为 Ljava/lang/String;，非 final）。
+            // 只按 BString 匹配会拿到空串，菜单项的 shouldShow 随之永远为 false —— 功能静默失效。
+            val talker = (firstFieldOrNull {
                 type = BString
                 modifiers { !it.contains(Modifiers.FINAL) }
-            }?.get() as? String ?: ""
+            }?.get() as? String)
+                ?: (firstFieldOrNull {
+                    type = String::class
+                    modifiers { !it.contains(Modifiers.FINAL) }
+                }?.get() as? String)
+                ?: ""
 
             val conversation = firstFieldOrNull {
                 type { it.name.startsWith("com.tencent.mm.storage") }

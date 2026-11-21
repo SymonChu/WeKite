@@ -6,6 +6,8 @@ import android.content.ContentValues
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -83,6 +85,15 @@ import java.util.concurrent.atomic.AtomicLong
  * - 长按菜单（复用本仓库 `WeConversationContextMenuApi`）：`MicroMsg.ConversationLongClickListener`
  *   + `onCreateContextMenu, contact is null` → 8.0.80 为 `ui/conversation/x3`；
  *   选中回调锚 `yuanbao_set_top` → `ui/conversation/v3::onMMMenuItemSelected`。
+ *
+ * ## 8.0.80 额外实测（决定下面三处实现细节）
+ * - `ui/conversation/x3` 的 talker 字段是 `java.lang.String`（不是老版本的 `BString`），
+ *   所以 `WeConversationContextMenuApi.resolveContext` 必须两种类型都认，否则长按菜单静默失效。
+ * - 宿主改 parentRef 走 `storage/m4::Q([String,String,boolean,boolean)` / `M(String)` 的 **execSQL**，
+ *   `ContentValues` 更新监听收不到 ⇒ 额外挂钩这两个方法做延迟收敛。
+ * - 列表查询本身按 parentRef 过滤（`m4::s` 的 `where parentRef = '<arg>'`、`m4::C` 的
+ *   `parentRef is null or parentRef = '' or …`），所以 `hidden_conv_parent` 单独就够藏群，
+ *   不需要再改列表 SQL。
  */
 @Feature(
     name = "群聊归拢",
@@ -109,6 +120,17 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
 
     private const val SNAPSHOT_TTL_MS = 1_500L
     private const val REAPPLY_INTERVAL_MS = 60_000L
+
+    /** 宿主打回 parentRef 后，延迟这么久再收敛一次（避开宿主本次写入的同一批 SQL）。 */
+    private const val SETTLE_DELAY_MS = 900L
+
+    /**
+     * rconversation.flag 的编码（8.0.80 实测：`storage/m4::<init>` 里做 `update rconversation set
+     * flag = conversationTime…`，即低 56 位存 conversationTime、高 8 位是置顶/前移位）。
+     * 入口行必须自己把时间写进低 56 位，否则排不进列表、也顶不住（微X 那种「置顶取消不掉」的坑）。
+     */
+    private const val FLAG_TIME_MASK = 0x00FFFFFFFFFFFFFFL
+    private const val FLAG_HIGH_MASK = FLAG_TIME_MASK.inv()
 
     private const val MENU_ID_MOVE = 0x4B01
     private const val MENU_ID_RENAME = 0x4B02
@@ -191,6 +213,28 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             if (parent.isNullOrEmpty()) values.put("parentRef", HIDDEN_PARENT)
         }
 
+    /**
+     * 宿主改 parentRef 的真实通道（8.0.80 实测）：`storage/m4::Q([String,String,boolean,boolean)`
+     * 拼 `Update rconversation set parentRef = '…'` 走 **execSQL**，`ContentValues` 监听收不到。
+     * 这两条一挂钩，宿主把群从「不显示」改回去后我们会很快再收敛一次，群不会停留在主页。
+     */
+    private val methodStorageSetParentRef by dexMethod(allowFailure = true) {
+        searchPackages("com.tencent.mm.storage")
+        matcher {
+            usingStrings("Update rconversation set parentRef = '")
+            paramCount = 4
+        }
+    }
+
+    /** `storage/m4::M(String)`：`Update rconversation set parentRef = '', unReadCount = 0`。 */
+    private val methodStorageClearParentRef by dexMethod(allowFailure = true) {
+        searchPackages("com.tencent.mm.storage")
+        matcher {
+            usingStrings("Update rconversation set parentRef = '', unReadCount = 0")
+            paramCount = 1
+        }
+    }
+
     /** 主页长按菜单：群 →「移入分组」；分组条目 →「重命名分组」。 */
     private val menuProvider = object : WeConversationContextMenuApi.IMenuItemsProvider {
         override fun getMenuItems(): List<WeConversationContextMenuApi.MenuItem> = listOf(
@@ -224,6 +268,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         )
         hookBind()
         hookClick()
+        hookParentRefWrites()
         WeDatabaseListenerApi.addListener(conversationUpdateListener)
         runCatching { WeConversationContextMenuApi.addProvider(menuProvider) }
             .onFailure { WeLogger.w(TAG, "context menu provider unavailable", it) }
@@ -267,6 +312,23 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             result = buildEntryView(username, state)
             maybeReapply()
         }
+    }
+
+    private fun hookParentRefWrites() {
+        listOf(methodStorageSetParentRef, methodStorageClearParentRef).forEach { target ->
+            if (target.isPlaceholder) return@forEach
+            target.hookAfter { scheduleReapply() }
+        }
+    }
+
+    private val settleHandler by lazy { Handler(Looper.getMainLooper()) }
+    private val settleTask = Runnable { reapplyNow() }
+
+    /** 宿主刚把 parentRef 改回去时，等它这一批写库结束再收敛，避免和它互相踩。 */
+    private fun scheduleReapply() {
+        if (!isEnabled || applying || restoring) return
+        settleHandler.removeCallbacks(settleTask)
+        settleHandler.postDelayed(settleTask, SETTLE_DELAY_MS)
     }
 
     private fun hookClick() {
@@ -417,7 +479,9 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 name = folder.name,
                 members = members,
                 unread = rows.sumOf { it.unread },
-                muteUnread = rows.sumOf { it.muteUnread }
+                // 群消息的未读全部记在 unReadCount（群聊行不填 unReadMuteCount，8.0.80 实测 +
+                // WCX 同款结论），所以这里不再做「免打扰未读」拆分，灰点逻辑一并去掉。
+                muteUnread = 0
             )
         }
 
@@ -429,7 +493,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 name = otherName,
                 members = rest.map { it.wxId },
                 unread = rest.sumOf { it.unread },
-                muteUnread = rest.sumOf { it.muteUnread }
+                muteUnread = 0
             )
         }
         entryCache = out
@@ -500,10 +564,14 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 arrayOf("$ENTRY_PREFIX%", *keep.toTypedArray())
             )
             purgeLegacyRows()
-            desired.forEach { state ->
+            // 入口行之间按分组顺序排：第 1 个分组拿最新时间，依次后退；flag 低 56 位同步写时间，
+            // 高位（置顶）保持宿主/用户设置过的值不动。
+            desired.forEachIndexed { index, state ->
+                val time = System.currentTimeMillis() - index * 60_000L
                 WeDatabaseApi.execStatement(
-                    "UPDATE rconversation SET conversationTime = ? WHERE username = ?",
-                    arrayOf(System.currentTimeMillis(), state.username)
+                    "UPDATE rconversation SET conversationTime = ?, flag = (flag & ?) | ? " +
+                        "WHERE username = ?",
+                    arrayOf(time, FLAG_HIGH_MASK, time and FLAG_TIME_MASK, state.username)
                 )
             }
             WeDatabaseApi.execStatement(
@@ -606,6 +674,8 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 "status" to "0",
                 "isSend" to "0",
                 "conversationTime" to now.toString(),
+                // 低 56 位必须是时间、高位保留原有的置顶状态，否则这一行排不进列表或置顶失控。
+                "flag" to entryFlag(state.username, now).toString(),
                 "content" to "",
                 "msgType" to "",
                 "digest" to "",
@@ -618,6 +688,18 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         if (!contactOk || !conversationOk) return false
         runCatching { WeConversationApi.setPinned(state.username, true) }
         return true
+    }
+
+    /** 入口行的 flag：沿用现有行的高位（置顶/前移），低 56 位写本次时间。 */
+    private fun entryFlag(username: String, time: Long): Long {
+        val liveHigh = runCatching {
+            WeDatabaseApi.rawQuery(
+                "SELECT flag FROM rconversation WHERE username = ? LIMIT 1", arrayOf(username)
+            ).use { cursor ->
+                if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
+            }
+        }.getOrNull()?.and(FLAG_HIGH_MASK) ?: 0L
+        return liveHigh or (time and FLAG_TIME_MASK)
     }
 
     /**
@@ -838,6 +920,12 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                             dialog.dismiss()
                             showRenameDialog(activity, entryUsername.removePrefix(ENTRY_PREFIX))
                         }) { Text("重命名") }
+                        if (entryUsername.removePrefix(ENTRY_PREFIX) != OTHER_ID) {
+                            TextButton(onClick = {
+                                dialog.dismiss()
+                                deleteFolder(entryUsername.removePrefix(ENTRY_PREFIX))
+                            }) { Text("删除分组") }
+                        }
                         TextButton(onClick = { dialog.dismiss() }) { Text("关闭") }
                     }
                 }
@@ -913,6 +1001,15 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 dismissButton = { TextButton(onClick = { dialog.dismiss() }) { Text("取消") } }
             )
         }
+    }
+
+    /** 删除分组：成员不删，自然回落到「其他群」。 */
+    private fun deleteFolder(folderId: String) {
+        val folders = loadFolders()
+        val removed = folders.removeAll { it.id == folderId }
+        if (!removed) return
+        saveFolders(folders)
+        reapplyNow()
     }
 
     private fun showRenameDialog(activity: Activity, folderId: String) {
