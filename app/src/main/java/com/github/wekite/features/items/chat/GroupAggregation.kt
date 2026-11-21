@@ -2,7 +2,9 @@ package com.github.wekite.features.items.chat
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ContentValues
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
@@ -12,6 +14,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HeaderViewListAdapter
 import android.widget.LinearLayout
@@ -24,26 +27,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextField
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.ujhhgtg.reflekt.reflekt
+import dev.ujhhgtg.reflekt.utils.toClass
 import com.github.wekite.dexkit.abc.IResolveDex
 import com.github.wekite.dexkit.dsl.DexMethodDelegate
 import com.github.wekite.dexkit.dsl.dexMethod
-import com.github.wekite.features.api.core.WeApi
 import com.github.wekite.features.api.core.WeConversationApi
 import com.github.wekite.features.api.core.WeDatabaseApi
 import com.github.wekite.features.api.core.WeDatabaseListenerApi
@@ -53,7 +50,6 @@ import com.github.wekite.features.core.Feature
 import com.github.wekite.preferences.WePrefs
 import com.github.wekite.preferences.WePrefs.Companion.prefOption
 import com.github.wekite.ui.content.AlertDialogContent
-import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.HostInfo
@@ -70,78 +66,68 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * 群聊归拢 —— 把主页列表里的群聊按「分组」收进若干入口条目，点开进入该分组的群聊列表。
+ * 群聊归拢 —— 把主页列表里的群聊按「分组」收进若干入口条目，点条目进入微信原生的会话盒子页。
  *
- * ## 形态
- * - 每个分组 = `rconversation` 里一条自己的真会话行（`username = wekite_groupagg_<id>`）+ `rcontact` 昵称。
- *   用真行而不是「往 adapter 里多插一个位置」，是为了不碰 `position → 会话` 的偏移修正
- *   （ListView / RecyclerView 两条路径、滚动恢复、长按菜单、搜索都不用改）。
- * - 未分组的群自动进「其他群」兜底条目，所以主页列表里**只剩好友会话 + 若干分组条目**。
- * - 真实群聊行的摘除用微信自己的「不显示该聊天」机制（`parentRef = hidden_conv_parent`），不删数据。
- * - 分组归属在主页长按群 →「移入分组」里设置；长按分组条目可改名。
+ * ## 形态（v4.05 起：宿主进程里**不再有任何 Compose UI**）
+ * - 每个分组 = `rconversation` 里一条真会话行（`username = wekite_groupagg_<id>`）+ `rcontact` 昵称。
+ *   这条行同时充当两个角色：主页列表里的入口条目、以及容器页的「父会话」。
+ * - 该分组的成员群行 `parentRef = wekite_groupagg_<id>`（微信自己的「不显示该聊天」机制），
+ *   于是它们从主页消失、但又归属在这个父会话下。
+ * - 点入口条目 → 启动 `com.tencent.mm.ui.conversation.ConvBoxServiceConversationUI`（8.0.80 实测存在），
+ *   并把 `Contact_User` 传成这个父会话 id。容器页查询时把 parentRef 换成它，就能列出该分组的群。
+ *   **这样二级页完全由微信原生渲染**：不会因为 Compose 组合期异常把微信带崩（v4.04 的闪退就是这样死的）。
+ * - 分组长按菜单、重命名、移入分组全部用 framework `AlertDialog`，同样不引入 Compose。
  *
- * ## 锚点核验（2026-11-21，8.0.80/3220 与 8.0.79 Play 双版本字节级扫描）
+ * ## 锚点核验（2026-11-21，8.0.80/3220 与 8.0.79 Play，字节级扫描）
  * - 列表 bind：宿主去重日志 `Get Item duplicated: positionMaps: …` **全 APK 唯一**命中
- *   `getView(int,View,ViewGroup)`（8.0.80 `Lcp5/a1;`，8.0.79 `Liq5/a1;`）。只锚日志串，不写死混淆名。
+ *   `getView(int,View,ViewGroup)`（8.0.80 `Lcp5/a1;`，8.0.79 `Liq5/a1;`）。只锚日志串。
  *   ⚠️ `ConversationWithCacheAdapter` 在 8.0.80 已无 getView/getCount，微X 那套 superclass.getCount 不再成立。
  * - 点击：`com.tencent.mm.ui.conversation.b3::onItemClick`，锚 `MicroMsg.ConversationClickListener`。
+ * - 父级查询：`com.tencent.mm.storage.m4::s(int,List,String parentRef,int) -> Cursor`，
+ *   锚 `select * from rconversation where ` + ` order by flag desc, conversationTime desc`。
+ * - 宿主写 parentRef 走 `m4::Q([String,String,boolean,boolean)` / `M(String)` 的 execSQL
+ *   （ContentValues 监听收不到）⇒ 额外挂钩这两个方法做延迟收敛。
  * - 长按菜单（复用本仓库 `WeConversationContextMenuApi`）：`MicroMsg.ConversationLongClickListener`
- *   + `onCreateContextMenu, contact is null` → 8.0.80 为 `ui/conversation/x3`；
- *   选中回调锚 `yuanbao_set_top` → `ui/conversation/v3::onMMMenuItemSelected`。
- *
- * ## 8.0.80 额外实测（决定下面三处实现细节）
- * - `ui/conversation/x3` 的 talker 字段是 `java.lang.String`（不是老版本的 `BString`），
- *   所以 `WeConversationContextMenuApi.resolveContext` 必须两种类型都认，否则长按菜单静默失效。
- * - 宿主改 parentRef 走 `storage/m4::Q([String,String,boolean,boolean)` / `M(String)` 的 **execSQL**，
- *   `ContentValues` 更新监听收不到 ⇒ 额外挂钩这两个方法做延迟收敛。
- * - 列表查询本身按 parentRef 过滤（`m4::s` 的 `where parentRef = '<arg>'`、`m4::C` 的
- *   `parentRef is null or parentRef = '' or …`），所以 `hidden_conv_parent` 单独就够藏群，
- *   不需要再改列表 SQL。
+ *   → 8.0.80 为 `ui/conversation/x3`；talker 字段是 `java.lang.String`（不是 `BString`）。
+ * - `rconversation.flag` 低 56 位是 conversationTime、高 8 位是置顶/前移（`m4::<init>` 里可见）。
  */
 @Feature(
     name = "群聊归拢",
     categories = ["聊天"],
-    description = "把群聊按分组收进主页若干条目，点开进入该分组的群聊列表"
+    description = "把群聊按分组收进主页若干条目，点条目进入原生群聊列表"
 )
 object GroupAggregation : ClickableFeature(), IResolveDex {
 
     private const val TAG = "GroupAggregation"
 
     private const val ENTRY_PREFIX = "wekite_groupagg_"
-
-    /**
-     * 早期构建用过的前缀（品牌拼写修正前）。这两个前缀共存的唯一后果是列表里多一条打不开的
-     * 僵尸条目，所以每次 apply / restore 都顺手清掉，不做迁移。
-     */
     private const val LEGACY_ENTRY_PREFIX = "wekit_groupagg_"
     private const val OTHER_ID = "other"
 
-    private const val HIDDEN_PARENT = "hidden_conv_parent"
+    /** 微信自己的会话盒子页：渲染某个 parentRef 下的会话列表。8.0.80 实测存在（未混淆）。 */
+    private const val CONTAINER_UI = "com.tencent.mm.ui.conversation.ConvBoxServiceConversationUI"
 
     private const val DUP_ANCHOR =
         "Get Item duplicated: positionMaps: %s username [%s, %d] Map: %s datas: %d"
 
     private const val SNAPSHOT_TTL_MS = 1_500L
     private const val REAPPLY_INTERVAL_MS = 60_000L
-
-    /** 宿主打回 parentRef 后，延迟这么久再收敛一次（避开宿主本次写入的同一批 SQL）。 */
     private const val SETTLE_DELAY_MS = 900L
-
-    /** 首次启用时宿主可能还没打开会话库：有限次重试，避免「开了开关却一直不生效」。 */
     private const val MAX_DB_RETRIES = 10
     private const val DB_RETRY_DELAY_MS = 3_000L
 
     /**
-     * rconversation.flag 的编码（8.0.80 实测：`storage/m4::<init>` 里做 `update rconversation set
-     * flag = conversationTime…`，即低 56 位存 conversationTime、高 8 位是置顶/前移位）。
-     * 入口行必须自己把时间写进低 56 位，否则排不进列表、也顶不住（微X 那种「置顶取消不掉」的坑）。
+     * rconversation.flag 的编码：低 56 位 conversationTime、高 8 位置顶/前移。
+     * 入口行必须自己把时间写进低 56 位，否则排不进列表、也顶不住（微X「置顶取消不掉」的坑）。
      */
     private const val FLAG_TIME_MASK = 0x00FFFFFFFFFFFFFFL
     private const val FLAG_HIGH_MASK = FLAG_TIME_MASK.inv()
 
-    // 菜单 id 取大值，避免和微信原生菜单项的 id 撞车（撞了的话点原生项会触发我们的回调）。
     private const val MENU_ID_MOVE = 0x7E4B0001
     private const val MENU_ID_RENAME = 0x7E4B0002
+
+    /** 入口行最多横排几个群头像。 */
+    private const val MAX_AVATARS = 3
 
     // ---------------------------------------------------------------- 偏好
 
@@ -160,7 +146,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         val wxId: String,
         val name: String,
         val unread: Int,
-        val muteUnread: Int,
         val time: Long
     )
 
@@ -170,11 +155,13 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         val name: String,
         val members: List<String>,
         val unread: Int,
-        val muteUnread: Int
+        /** 前 [MAX_AVATARS] 个成员的显示名，用于入口行横向头像（避免在 bind 里再查库）。 */
+        val labels: List<String>
     )
 
     @Volatile
     private var entryCache: List<EntryState>? = null
+
     @Volatile
     private var entryCacheAt = 0L
 
@@ -184,6 +171,10 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
     /** 还原过程中要让宿主的 parentRef 写入通过，否则刚还原的行会被监听器立刻藏回去。 */
     @Volatile
     private var restoring = false
+
+    /** 当前打开的容器页对应的分组 id，由容器页 onCreate/onDestroy 维护。 */
+    @Volatile
+    private var activeFolderId: String? = null
 
     private val getItemMethods = WeakHashMap<Class<*>, Method>()
     private val usernameFields = WeakHashMap<Class<*>, Field>()
@@ -216,22 +207,21 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         }
     }
 
-    /** 宿主写会话行时会把 `parentRef` 抹掉（收到新消息就重写整行）——当场改回去，群不会闪回主页。 */
-    private val conversationUpdateListener =
-        WeDatabaseListenerApi.IUpdateListener { table, values, _where, whereArgs, _conflict ->
-            if (table != "rconversation") return@IUpdateListener
-            if (!isEnabled || restoring) return@IUpdateListener
-            val talker = values.getAsString("username") ?: whereArgs?.firstOrNull()
-            if (talker == null || !talker.endsWith("@chatroom")) return@IUpdateListener
-            if (!values.containsKey("parentRef")) return@IUpdateListener
-            val parent = values.getAsString("parentRef")
-            if (parent.isNullOrEmpty()) values.put("parentRef", HIDDEN_PARENT)
+    /** 容器页按 parentRef 列会话：`select * from rconversation where … order by flag desc, conversationTime desc`。 */
+    private val methodConversationQueryByParent by dexMethod(allowFailure = true) {
+        searchPackages("com.tencent.mm.storage")
+        matcher {
+            usingStrings(
+                "select * from rconversation where ",
+                " order by flag desc, conversationTime desc"
+            )
+            paramTypes("int", "java.util.List", "java.lang.String", "int")
         }
+    }
 
     /**
-     * 宿主改 parentRef 的真实通道（8.0.80 实测）：`storage/m4::Q([String,String,boolean,boolean)`
-     * 拼 `Update rconversation set parentRef = '…'` 走 **execSQL**，`ContentValues` 监听收不到。
-     * 这两条一挂钩，宿主把群从「不显示」改回去后我们会很快再收敛一次，群不会停留在主页。
+     * 宿主改 parentRef 的真实通道（8.0.80 实测）：`storage/m4::Q(...)` 拼
+     * `Update rconversation set parentRef = '…'` 走 **execSQL**，`ContentValues` 监听收不到。
      */
     private val methodStorageSetParentRef by dexMethod(allowFailure = true) {
         searchPackages("com.tencent.mm.storage")
@@ -250,6 +240,24 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         }
     }
 
+    /** 宿主写会话行（ContentValues 路径）时的兜底：把被抹掉的 parentRef 改回来。 */
+    private val conversationUpdateListener =
+        WeDatabaseListenerApi.IUpdateListener { table, values, _where, whereArgs, _conflict ->
+            if (table != "rconversation") return@IUpdateListener
+            if (!isEnabled || restoring) return@IUpdateListener
+            val talker = values.getAsString("username") ?: whereArgs?.firstOrNull()
+            if (talker == null || !talker.endsWith("@chatroom")) return@IUpdateListener
+            if (!values.containsKey("parentRef")) return@IUpdateListener
+            val parent = values.getAsString("parentRef")
+            if (parent.isNullOrEmpty()) {
+                // 只用快照，不在数据库回调里再查库（会重入同一条连接）。
+                val folder = entryCache
+                    ?.firstOrNull { state -> state.members.contains(talker) }
+                    ?.username ?: return@IUpdateListener
+                values.put("parentRef", folder)
+            }
+        }
+
     /** 主页长按菜单：群 →「移入分组」；分组条目 →「重命名分组」。 */
     private val menuProvider = object : WeConversationContextMenuApi.IMenuItemsProvider {
         override fun getMenuItems(): List<WeConversationContextMenuApi.MenuItem> = listOf(
@@ -266,8 +274,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 drawable = ColorDrawable(Color.TRANSPARENT),
                 shouldShow = { context, _ -> context.talker.startsWith(ENTRY_PREFIX) },
                 onClick = { context ->
-                    val folderId = context.talker.removePrefix(ENTRY_PREFIX)
-                    showRenameDialog(context.activity, folderId)
+                    showRenameDialog(context.activity, context.talker.removePrefix(ENTRY_PREFIX))
                 }
             )
         )
@@ -280,12 +287,14 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             TAG,
             "anchor host=${HostInfo.versionName} getView=${describe(methodConversationGetView)} " +
                 "onItemClick=${describe(methodConversationOnItemClick)} " +
+                "queryByParent=${describe(methodConversationQueryByParent)} " +
                 "setParentRef=${describe(methodStorageSetParentRef)} " +
                 "clearParentRef=${describe(methodStorageClearParentRef)}"
         )
         hookBind()
         hookClick()
         hookParentRefWrites()
+        hookContainerPage()
         WeDatabaseListenerApi.addListener(conversationUpdateListener)
         val menuBound = runCatching { WeConversationContextMenuApi.addProvider(menuProvider) }
             .onFailure { WeLogger.w(TAG, "context menu provider unavailable", it) }
@@ -294,6 +303,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             TAG,
             "hooks getView=${!methodConversationGetView.isPlaceholder} " +
                 "click=${!methodConversationOnItemClick.isPlaceholder} " +
+                "queryByParent=${!methodConversationQueryByParent.isPlaceholder} " +
                 "menu=$menuBound"
         )
         runCatching { applyAggregation() }
@@ -307,9 +317,9 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             .onFailure { WeLogger.e(TAG, "restore failed", it) }
     }
 
-    /** 设置页里点开：查看全部分组。 */
+    /** 设置页里点开：列出全部分组（这里是我们自己的 Activity 进程，Compose 安全）。 */
     override fun onClick(context: ComponentActivity) {
-        showAllEntriesDialog(context)
+        showFoldersOverview(context)
     }
 
     private fun describe(target: DexMethodDelegate): String =
@@ -322,8 +332,8 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         val target = methodConversationGetView
         if (target.isPlaceholder) return
         target.hookAfter {
-            // 任意一行 bind 都是一次「主页列表活着」的信号：用它兜住「首次启用时数据库还没就绪」
-            // 和「宿主把 parentRef 改回去」两种情况（内部 60 秒节流，不会刷库）。
+            // 任意一行 bind 都是一次「主页列表活着」的信号：兜住「首次启用时数据库还没就绪」
+            // 与「宿主把 parentRef 改回去」两种情况（内部 60 秒节流，不会刷库）。
             maybeReapply()
             val position = args.getOrNull(0) as? Int ?: return@hookAfter
             val adapter = thisObject ?: return@hookAfter
@@ -337,23 +347,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             }
             result = buildEntryView(username, state)
         }
-    }
-
-    private fun hookParentRefWrites() {
-        listOf(methodStorageSetParentRef, methodStorageClearParentRef).forEach { target ->
-            if (target.isPlaceholder) return@forEach
-            target.hookAfter { scheduleReapply() }
-        }
-    }
-
-    private val settleHandler by lazy { Handler(Looper.getMainLooper()) }
-    private val settleTask = Runnable { reapplyNow() }
-
-    /** 宿主刚把 parentRef 改回去时，等它这一批写库结束再收敛，避免和它互相踩。 */
-    private fun scheduleReapply() {
-        if (!isEnabled || applying || restoring) return
-        settleHandler.removeCallbacks(settleTask)
-        settleHandler.postDelayed(settleTask, SETTLE_DELAY_MS)
     }
 
     private fun hookClick() {
@@ -378,8 +371,44 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             // 必须吃掉这次点击：否则微信会拿这行去 startChatting，打开一个不存在的会话。
             result = null
             val activity = findActivityOwningView(view) ?: return@hookBefore
-            showEntryDialog(activity, username)
+            openFolder(activity, username)
         }
+    }
+
+    /** 容器页打开/关闭时维护 [activeFolderId]，只在这期间替换父级查询的 parentRef。 */
+    private fun hookContainerPage() {
+        runCatching {
+            val cls = CONTAINER_UI.toClass()
+            cls.reflekt().firstMethod { name = "onCreate"; parameters(android.os.Bundle::class) }.hookBefore {
+                activeFolderId = (thisObject as? Activity)?.intent?.getStringExtra("Contact_User")
+                WeLogger.i(TAG, "container opened, folder=$activeFolderId")
+            }
+            cls.reflekt().firstMethod { name = "onDestroy" }.hookAfter {
+                activeFolderId = null
+            }
+            if (!methodConversationQueryByParent.isPlaceholder) {
+                methodConversationQueryByParent.hookBefore {
+                    val folder = activeFolderId ?: return@hookBefore
+                    if (args.getOrNull(2) is String) args[2] = folder
+                }
+            }
+        }.onFailure { WeLogger.w(TAG, "container page hook failed", it) }
+    }
+
+    private fun hookParentRefWrites() {
+        listOf(methodStorageSetParentRef, methodStorageClearParentRef).forEach { target ->
+            if (target.isPlaceholder) return@forEach
+            target.hookAfter { scheduleReapply() }
+        }
+    }
+
+    private val settleHandler by lazy { Handler(Looper.getMainLooper()) }
+    private val settleTask = Runnable { reapplyNow() }
+
+    private fun scheduleReapply() {
+        if (!isEnabled || applying || restoring) return
+        settleHandler.removeCallbacks(settleTask)
+        settleHandler.postDelayed(settleTask, SETTLE_DELAY_MS)
     }
 
     // ---------------------------------------------------------------- 列表结构读取
@@ -455,8 +484,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         val folders = loadFolders()
         folders.forEach { it.members.remove(talker) }
         if (folderId != OTHER_ID) {
-            val target = folders.firstOrNull { it.id == folderId }
-                ?: return
+            val target = folders.firstOrNull { it.id == folderId } ?: return
             target.members += talker
         }
         saveFolders(folders)
@@ -474,6 +502,13 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         folders += folder
         saveFolders(folders)
         return folder
+    }
+
+    private fun deleteFolder(folderId: String) {
+        val folders = loadFolders()
+        if (!folders.removeAll { it.id == folderId }) return
+        saveFolders(folders)
+        reapplyNow()
     }
 
     // ---------------------------------------------------------------- 归拢 / 还原
@@ -504,9 +539,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 name = folder.name,
                 members = members,
                 unread = rows.sumOf { it.unread },
-                // 群消息的未读全部记在 unReadCount（群聊行不填 unReadMuteCount，8.0.80 实测 +
-                // WCX 同款结论），所以这里不再做「免打扰未读」拆分，灰点逻辑一并去掉。
-                muteUnread = 0
+                labels = members.take(MAX_AVATARS).map { byId[it]?.name ?: it }
             )
         }
 
@@ -518,7 +551,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 name = otherName,
                 members = rest.map { it.wxId },
                 unread = rest.sumOf { it.unread },
-                muteUnread = 0
+                labels = rest.take(MAX_AVATARS).map { it.name }
             )
         }
         entryCache = out
@@ -528,11 +561,11 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
 
     private fun groupsInDb(): List<GroupRow> = runCatching {
         WeDatabaseApi.executeQuery(
-            "SELECT c.username AS username, c.unReadCount AS u, c.unReadMuteCount AS m, " +
-                "c.conversationTime AS t, IFNULL(r.nickname, '') AS nick " +
+            "SELECT c.username AS username, c.unReadCount AS u, c.conversationTime AS t, " +
+                "IFNULL(r.nickname, '') AS nick " +
                 "FROM rconversation c LEFT JOIN rcontact r ON r.username = c.username " +
                 "WHERE c.username LIKE '%@chatroom' " +
-                "AND (c.parentRef IS NULL OR c.parentRef = '' OR c.parentRef = '$HIDDEN_PARENT') " +
+                "AND (c.parentRef IS NULL OR c.parentRef = '' OR c.parentRef LIKE '$ENTRY_PREFIX%') " +
                 "ORDER BY c.unReadCount DESC, c.conversationTime DESC"
         ).mapNotNull { row ->
             val wxId = row["username"] as? String ?: return@mapNotNull null
@@ -542,7 +575,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 wxId = wxId,
                 name = nick.ifEmpty { wxId },
                 unread = (row["u"] as? Long)?.toInt() ?: 0,
-                muteUnread = (row["m"] as? Long)?.toInt() ?: 0,
                 time = (row["t"] as? Long) ?: 0L
             )
         }
@@ -575,7 +607,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             invalidateSnapshot()
             val desired = entries()
             if (desired.isEmpty()) {
-                // 没有群聊时不需要任何入口行，也不能把已有改动留在那儿。
                 if (applied) restoreAll()
                 return
             }
@@ -588,7 +619,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 if (applied) restoreAll()
                 return
             }
-            // 清掉已不存在的分组条目（分组被删空 / 改名后 id 不变，不会误删）
             val keep = desired.map { it.username }
             val placeholders = keep.joinToString(", ") { "?" }
             WeDatabaseApi.execStatement(
@@ -600,8 +630,22 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 arrayOf("$ENTRY_PREFIX%", *keep.toTypedArray())
             )
             purgeLegacyRows()
-            // 入口行之间按分组顺序排：第 1 个分组拿最新时间，依次后退；flag 低 56 位同步写时间，
-            // 高位（置顶）保持宿主/用户设置过的值不动。
+
+            // 每个成员群挂到自己分组的父会话下（不是统一的隐藏值），容器页才能按 parentRef 列出来。
+            val mapping = desired.flatMap { state -> state.members.map { it to state.username } }
+            WeDatabaseApi.transaction {
+                WeDatabaseApi.execStatement(
+                    "UPDATE rconversation SET parentRef = '' WHERE parentRef LIKE ?",
+                    arrayOf("$ENTRY_PREFIX%")
+                )
+                mapping.forEach { (talker, entry) ->
+                    WeDatabaseApi.execStatement(
+                        "UPDATE rconversation SET parentRef = ? WHERE username = ?",
+                        arrayOf(entry, talker)
+                    )
+                }
+            }
+            // 入口行之间按分组顺序排：第 1 个分组拿最新时间，依次后退；flag 低 56 位同步写时间。
             desired.forEachIndexed { index, state ->
                 val time = System.currentTimeMillis() - index * 60_000L
                 WeDatabaseApi.execStatement(
@@ -610,33 +654,27 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                     arrayOf(time, FLAG_HIGH_MASK, time and FLAG_TIME_MASK, state.username)
                 )
             }
-            WeDatabaseApi.execStatement(
-                "UPDATE rconversation SET parentRef = ? " +
-                    "WHERE username LIKE '%@chatroom' AND (parentRef IS NULL OR parentRef = '')",
-                arrayOf(HIDDEN_PARENT)
-            )
             WeConversationApi.reloadConversations()
             applied = true
             lastApply.set(System.currentTimeMillis())
             WeLogger.i(
                 TAG,
                 "applied entries=${desired.map { it.name to it.members.size }} " +
-                    "hiddenGroups=${countByParent(HIDDEN_PARENT)} " +
-                    "rootGroups=${countRootGroups()}"
+                    "foldedGroups=${countFoldedGroups()} rootGroups=${countRootGroups()}"
             )
+        } catch (ex: Throwable) {
+            WeLogger.e(TAG, "apply failed", ex)
         } finally {
             applying = false
         }
     }
 
-    /** 观察用：某个 parentRef 下有多少会话行。 */
-    private fun countByParent(parent: String): Int = runCatching {
+    private fun countFoldedGroups(): Int = runCatching {
         WeDatabaseApi.rawQuery(
-            "SELECT COUNT(*) FROM rconversation WHERE parentRef = ?", arrayOf(parent)
+            "SELECT COUNT(*) FROM rconversation WHERE parentRef LIKE ?", arrayOf("$ENTRY_PREFIX%")
         ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
     }.getOrDefault(-1)
 
-    /** 观察用：还有多少群聊行停留在根级（正常情况下应趋近 0）。 */
     private fun countRootGroups(): Int = runCatching {
         WeDatabaseApi.rawQuery(
             "SELECT COUNT(*) FROM rconversation WHERE username LIKE '%@chatroom' " +
@@ -649,10 +687,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         val now = System.currentTimeMillis()
         if (now - lastApply.get() < REAPPLY_INTERVAL_MS) return
         lastApply.set(now)
-        // 这条路径由列表 bind 触发，跑在 UI 线程上；写库 + reload 全部挪到后台线程，
-        // reloadConversations 自己会把 notify 抛回主线程。
-        runCatching { worker.execute { runCatching { applyAggregation() } } }
-            .onFailure { WeLogger.e(TAG, "schedule reapply failed", it) }
+        reapplyNow()
     }
 
     /**
@@ -662,7 +697,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
      */
     internal fun recoverIfNeeded() {
         if (!applied) return
-        // 用偏好值而不是 isEnabled:守护条目可能比本功能的 startup 先跑。
         if (!WePrefs.getBoolOrDef(name, defaultEnabled)) {
             WeLogger.i(TAG, "feature disabled but state applied, restoring")
             runCatching { restoreAll() }
@@ -687,8 +721,8 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         restoring = true
         try {
             WeDatabaseApi.execStatement(
-                "UPDATE rconversation SET parentRef = '' WHERE parentRef = ?",
-                arrayOf(HIDDEN_PARENT)
+                "UPDATE rconversation SET parentRef = '' WHERE parentRef LIKE ?",
+                arrayOf("$ENTRY_PREFIX%")
             )
             WeDatabaseApi.execStatement(
                 "DELETE FROM rconversation WHERE username LIKE ?", arrayOf("$ENTRY_PREFIX%")
@@ -708,6 +742,10 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
     /** 清掉品牌拼写修正前（`wekit_` 前缀）留下的入口行，避免列表里多一条打不开的僵尸条目。 */
     private fun purgeLegacyRows() {
         runCatching {
+            WeDatabaseApi.execStatement(
+                "UPDATE rconversation SET parentRef = '' WHERE parentRef LIKE ?",
+                arrayOf("$LEGACY_ENTRY_PREFIX%")
+            )
             WeDatabaseApi.execStatement(
                 "DELETE FROM rconversation WHERE username LIKE ?", arrayOf("$LEGACY_ENTRY_PREFIX%")
             )
@@ -733,7 +771,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 "status" to "0",
                 "isSend" to "0",
                 "conversationTime" to now.toString(),
-                // 低 56 位必须是时间、高位保留原有的置顶状态，否则这一行排不进列表或置顶失控。
                 "flag" to entryFlag(state.username, now).toString(),
                 "content" to "",
                 "msgType" to "",
@@ -789,14 +826,13 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         out
     }.getOrDefault(emptySet())
 
-    // ---------------------------------------------------------------- 入口行自绘
+    // ---------------------------------------------------------------- 入口行自绘（横向多头像）
 
     @SuppressLint("SetTextI18n")
     private fun buildEntryView(username: String, state: EntryState?): View {
         val context = HostInfo.application
         val density = context.resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()
-        // 自绘行不继承宿主列表项的主题色，深色模式下必须自己换，否则黑字黑底看不见。
         val dark = context.isDarkMode
         val titleColor = if (dark) 0xFFEDEDED.toInt() else 0xFF111111.toInt()
         val subtitleColor = if (dark) 0xFF8C8C8C.toInt() else 0xFF888888.toInt()
@@ -808,9 +844,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         }
         val count = state?.members?.size ?: 0
         val unread = state?.unread ?: 0
-        val muteUnread = state?.muteUnread ?: 0
-        val badge = if (unread > 0) unread else muteUnread
-        val muted = unread == 0 && muteUnread > 0
 
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -818,24 +851,41 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             setPadding(dp(16), dp(10), dp(16), dp(10))
         }
 
-        val iconBox = FrameLayout(context)
-        iconBox.background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(0xFF07C160.toInt())
+        // 横向叠放最多 MAX_AVATARS 个群头像（用群名首字 + 稳定配色，避免依赖宿主头像加载器）。
+        val avatarBox = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
-        iconBox.addView(TextView(context).apply {
-            text = name.take(1)
-            setTextColor(Color.WHITE)
-            textSize = 18f
-            gravity = Gravity.CENTER
-        }, FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-        ).apply { gravity = Gravity.CENTER })
-        row.addView(iconBox, LinearLayout.LayoutParams(dp(48), dp(48)))
+        val labels = state?.labels.orEmpty()
+        if (labels.isEmpty()) {
+            avatarBox.addView(avatar(context, name.take(1), 0, density), LinearLayout.LayoutParams(dp(32), dp(32)))
+        } else {
+            labels.forEachIndexed { index, label ->
+                val view = avatar(context, label.take(1), index, density)
+                if (index > 0) {
+                    val lp = LinearLayout.LayoutParams(dp(32), dp(32))
+                    lp.marginStart = -dp(10)
+                    avatarBox.addView(view, lp)
+                } else {
+                    avatarBox.addView(view, LinearLayout.LayoutParams(dp(32), dp(32)))
+                }
+            }
+            if (count > labels.size) {
+                avatarBox.addView(TextView(context).apply {
+                    text = "+${count - labels.size}"
+                    textSize = 11f
+                    setTextColor(subtitleColor)
+                    gravity = Gravity.CENTER
+                }, LinearLayout.LayoutParams(dp(26), dp(32)))
+            }
+        }
+        row.addView(avatarBox, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)
+        ))
 
         val texts = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), 0, 0, 0)
+            setPadding(dp(12), 0, dp(8), 0)
         }
         texts.addView(TextView(context).apply {
             text = name
@@ -847,7 +897,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         texts.addView(TextView(context).apply {
             text = buildString {
                 append(count).append(" 个群聊")
-                if (unread + muteUnread > 0) append(" · ").append(unread + muteUnread).append(" 条未读")
+                if (unread > 0) append(" · ").append(unread).append(" 条未读")
             }
             textSize = 13f
             setTextColor(subtitleColor)
@@ -855,49 +905,148 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         })
         row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        if (badge > 0) {
-            val badgeView = TextView(context).apply {
-                text = if (badge > 99) "99+" else badge.toString()
+        if (unread > 0) {
+            row.addView(TextView(context).apply {
+                text = if (unread > 99) "99+" else unread.toString()
                 textSize = 11f
                 setTextColor(Color.WHITE)
                 gravity = Gravity.CENTER
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.RECTANGLE
                     cornerRadius = dp(9).toFloat()
-                    setColor(if (muted) 0xFFB0B0B0.toInt() else 0xFFFA5151.toInt())
+                    setColor(0xFFFA5151.toInt())
                 }
                 minWidth = dp(18)
                 setPadding(dp(5), 0, dp(5), 0)
-            }
-            row.addView(
-                badgeView,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(18))
-            )
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(18)))
         }
         return row
     }
 
-    // ---------------------------------------------------------------- 弹窗
+    private fun avatar(
+        context: android.content.Context,
+        letter: String,
+        index: Int,
+        density: Float
+    ): TextView {
+        val palette = intArrayOf(0xFF07C160.toInt(), 0xFF576B95.toInt(), 0xFFFA9D3B.toInt(), 0xFF7F6BFF.toInt())
+        val stroke = (2 * density).toInt()
+        return TextView(context).apply {
+            text = letter
+            textSize = 13f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(palette[index % palette.size])
+                setStroke(stroke, 0xFFFFFFFF.toInt())
+            }
+        }
+    }
 
-    /** 所有分组一览（点功能行时打开）。 */
-    private fun showAllEntriesDialog(activity: Activity) {
+    // ---------------------------------------------------------------- 宿主进程里的弹窗（framework，不用 Compose）
+
+    private fun openFolder(activity: Activity, entryUsername: String) {
+        activeFolderId = entryUsername
+        runCatching {
+            activity.startActivity(Intent().apply {
+                setClassName(HostInfo.packageName, CONTAINER_UI)
+                putExtra("Contact_User", entryUsername)
+                putExtra("Contact_ChatRoomId", entryUsername)
+                putExtra("room_name", entryUsername)
+            })
+        }.onFailure {
+            activeFolderId = null
+            WeLogger.e(TAG, "open container failed: $entryUsername", it)
+        }
+    }
+
+    /** 群 →「移入分组」。用 framework AlertDialog 的 items 列表，避免 Compose 在宿主进程里崩。 */
+    private fun showMoveDialog(activity: Activity, talker: String) {
+        val folders = loadFolders()
+        val labels = folders.map { it.name } +
+            listOf("＋ 新建分组…", "移出分组（回到「$otherName」）")
+        runCatching {
+            AlertDialog.Builder(activity)
+                .setTitle("移入分组")
+                .setItems(labels.toTypedArray()) { _, which ->
+                    when {
+                        which < folders.size -> moveGroupTo(talker, folders[which].id)
+                        which == folders.size -> promptNewFolder(activity, talker)
+                        else -> moveGroupTo(talker, OTHER_ID)
+                    }
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }.onFailure { WeLogger.e(TAG, "show move dialog failed", it) }
+    }
+
+    private fun promptNewFolder(activity: Activity, talker: String) {
+        val input = EditText(activity).apply { hint = "分组名称" }
+        runCatching {
+            AlertDialog.Builder(activity)
+                .setTitle("新建分组")
+                .setView(input)
+                .setPositiveButton("确定") { _, _ ->
+                    val name = input.text?.toString()?.trim().orEmpty()
+                    createFolder(name, talker)
+                    reapplyNow()
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }.onFailure { WeLogger.e(TAG, "show new folder dialog failed", it) }
+    }
+
+    private fun showRenameDialog(activity: Activity, folderId: String) {
+        val current = if (folderId == OTHER_ID) otherName
+        else loadFolders().firstOrNull { it.id == folderId }?.name ?: return
+        val input = EditText(activity).apply {
+            setText(current)
+            setSelection(current.length)
+        }
+        runCatching {
+            AlertDialog.Builder(activity)
+                .setTitle("重命名分组")
+                .setView(input)
+                .setPositiveButton("确定") { _, _ ->
+                    val name = input.text?.toString()?.trim().orEmpty()
+                    if (name.isNotEmpty()) {
+                        if (folderId == OTHER_ID) {
+                            otherName = name
+                        } else {
+                            val folders = loadFolders()
+                            folders.firstOrNull { it.id == folderId }?.name = name
+                            saveFolders(folders)
+                        }
+                        invalidateSnapshot()
+                        reapplyNow()
+                    }
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }.onFailure { WeLogger.e(TAG, "show rename dialog failed", it) }
+    }
+
+    /** 设置页里的分组一览：这里是我们自己的 Activity 进程，用 Compose 弹窗是安全的。 */
+    private fun showFoldersOverview(activity: ComponentActivity) {
         val states = entries()
         showComposeDialog(activity) {
+            val list = remember { states }
             AlertDialogContent(
                 title = { Text("群聊归拢") },
                 text = {
-                    if (states.isEmpty()) {
+                    if (list.isEmpty()) {
                         Text("当前没有群聊可归拢。", style = MaterialTheme.typography.bodyMedium)
                     } else {
                         Box(Modifier.heightIn(max = 420.dp)) {
                             LazyColumn(Modifier.fillMaxWidth()) {
-                                items(states, key = { it.username }) { state ->
+                                items(list, key = { it.username }) { state ->
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clickable {
                                                 dialog.dismiss()
-                                                showEntryDialog(activity, state.username)
+                                                deleteFolderIfNotOther(state.folderId)
                                             }
                                             .padding(horizontal = 4.dp, vertical = 10.dp),
                                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -925,208 +1074,9 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         }
     }
 
-    /** 某个分组的群列表。 */
-    private fun showEntryDialog(activity: Activity, entryUsername: String) {
-        val state = entries().firstOrNull { it.username == entryUsername }
-        val groups = groupsInDb()
-        val byId = groups.associateBy { it.wxId }
-        val rows = state?.members?.mapNotNull { byId[it] } ?: emptyList()
-        val title = state?.name ?: "分组"
-        showComposeDialog(activity) {
-            AlertDialogContent(
-                title = { Text(title) },
-                text = {
-                    Box(Modifier.heightIn(max = 420.dp)) {
-                        LazyColumn(Modifier.fillMaxWidth()) {
-                            items(rows, key = { it.wxId }) { group ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            dialog.dismiss()
-                                            openChat(activity, group.wxId)
-                                        }
-                                        .padding(horizontal = 4.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        text = group.name,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        fontWeight = if (group.unread > 0) FontWeight.SemiBold
-                                        else FontWeight.Normal,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    if (group.unread > 0) {
-                                        Box(
-                                            modifier = Modifier.size(24.dp),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text(
-                                                text = if (group.unread > 99) "99+"
-                                                else group.unread.toString(),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.error
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                dismissButton = {
-                    Row {
-                        TextButton(onClick = {
-                            dialog.dismiss()
-                            showRenameDialog(activity, entryUsername.removePrefix(ENTRY_PREFIX))
-                        }) { Text("重命名") }
-                        if (entryUsername.removePrefix(ENTRY_PREFIX) != OTHER_ID) {
-                            TextButton(onClick = {
-                                dialog.dismiss()
-                                deleteFolder(entryUsername.removePrefix(ENTRY_PREFIX))
-                            }) { Text("删除分组") }
-                        }
-                        TextButton(onClick = { dialog.dismiss() }) { Text("关闭") }
-                    }
-                }
-            )
-        }
-    }
-
-    /** 群 →「移入分组」。 */
-    private fun showMoveDialog(activity: Activity, talker: String) {
-        val folders = loadFolders()
-        showComposeDialog(activity) {
-            AlertDialogContent(
-                title = { Text("移入分组") },
-                text = {
-                    Box(Modifier.heightIn(max = 420.dp)) {
-                        LazyColumn(Modifier.fillMaxWidth()) {
-                            items(folders, key = { it.id }) { folder ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            dialog.dismiss()
-                                            moveGroupTo(talker, folder.id)
-                                        }
-                                        .padding(horizontal = 4.dp, vertical = 10.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        text = folder.name,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    if (talker in folder.members) {
-                                        Text("已在此", style = MaterialTheme.typography.labelSmall)
-                                    }
-                                }
-                            }
-                            item {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            dialog.dismiss()
-                                            showTextInputDialog(
-                                                activity, "新建分组", "",
-                                                onConfirm = { createdName, _ ->
-                                                    val folder = createFolder(createdName, talker)
-                                                    reapplyNow()
-                                                    WeLogger.i(TAG, "folder created: ${folder.name}")
-                                                }
-                                            )
-                                        }
-                                        .padding(horizontal = 4.dp, vertical = 10.dp)
-                                ) { Text("＋ 新建分组…", style = MaterialTheme.typography.bodyMedium) }
-                            }
-                            item {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            dialog.dismiss()
-                                            moveGroupTo(talker, OTHER_ID)
-                                        }
-                                        .padding(horizontal = 4.dp, vertical = 10.dp)
-                                ) { Text("移出分组（回到「$otherName」）", style = MaterialTheme.typography.bodyMedium) }
-                            }
-                        }
-                    }
-                },
-                dismissButton = { TextButton(onClick = { dialog.dismiss() }) { Text("取消") } }
-            )
-        }
-    }
-
-    /** 删除分组：成员不删，自然回落到「其他群」。 */
-    private fun deleteFolder(folderId: String) {
-        val folders = loadFolders()
-        val removed = folders.removeAll { it.id == folderId }
-        if (!removed) return
-        saveFolders(folders)
-        reapplyNow()
-    }
-
-    private fun showRenameDialog(activity: Activity, folderId: String) {
-        val current = if (folderId == OTHER_ID) otherName else
-            loadFolders().firstOrNull { it.id == folderId }?.name ?: return
-        showTextInputDialog(activity, "重命名分组", current) { name, _ ->
-            if (name.isEmpty()) return@showTextInputDialog
-            if (folderId == OTHER_ID) {
-                otherName = name
-            } else {
-                val folders = loadFolders()
-                folders.firstOrNull { it.id == folderId }?.name = name
-                saveFolders(folders)
-            }
-            invalidateSnapshot()
-            reapplyNow()
-        }
-    }
-
-    private fun showTextInputDialog(
-        activity: Activity,
-        title: String,
-        initial: String,
-        onConfirm: (String, Activity) -> Unit
-    ) {
-        showComposeDialog(activity) {
-            var text by remember { mutableStateOf(initial) }
-            AlertDialogContent(
-                title = { Text(title) },
-                text = {
-                    DefaultColumn {
-                        TextField(
-                            value = text,
-                            onValueChange = { text = it },
-                            singleLine = true,
-                            label = { Text("名称") }
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        val value = text.trim()
-                        dialog.dismiss()
-                        onConfirm(value, activity)
-                    }) { Text("确定") }
-                },
-                dismissButton = { TextButton(onClick = { dialog.dismiss() }) { Text("取消") } }
-            )
-        }
-    }
-
-    private fun openChat(activity: Activity, wxId: String) {
-        runCatching {
-            WeApi.openContact(activity, wxId, WeApi.OpenContactDestination.CONVERSATION)
-        }.onFailure { WeLogger.e(TAG, "open chat failed: $wxId", it) }
+    /** 设置页里点某个分组＝删除它（成员回落到「其他群」）。「其他群」不可删。 */
+    private fun deleteFolderIfNotOther(folderId: String) {
+        if (folderId == OTHER_ID) return
+        deleteFolder(folderId)
     }
 }
