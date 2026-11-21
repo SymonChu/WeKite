@@ -16,7 +16,7 @@ mp3lame-encoder = "0.2"
 anyhow = "1"
 sha2 = { version = "0.11", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
-rasterlottie = { version = "0.2", default-features = false, features = ["images", "text"] }
+rasterlottie = { version = "0.3", default-features = false, features = ["images", "text"] }
 gif = "0.14"
 webm-iterable = "0.6"
 
