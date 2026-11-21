@@ -68,7 +68,7 @@ import java.util.concurrent.atomic.AtomicLong
  * 群聊归拢 —— 把主页列表里的群聊按「分组」收进若干入口条目，点开进入该分组的群聊列表。
  *
  * ## 形态
- * - 每个分组 = `rconversation` 里一条自己的真会话行（`username = wekit_groupagg_<id>`）+ `rcontact` 昵称。
+ * - 每个分组 = `rconversation` 里一条自己的真会话行（`username = wekite_groupagg_<id>`）+ `rcontact` 昵称。
  *   用真行而不是「往 adapter 里多插一个位置」，是为了不碰 `position → 会话` 的偏移修正
  *   （ListView / RecyclerView 两条路径、滚动恢复、长按菜单、搜索都不用改）。
  * - 未分组的群自动进「其他群」兜底条目，所以主页列表里**只剩好友会话 + 若干分组条目**。
@@ -93,7 +93,13 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
 
     private const val TAG = "GroupAggregation"
 
-    private const val ENTRY_PREFIX = "wekit_groupagg_"
+    private const val ENTRY_PREFIX = "wekite_groupagg_"
+
+    /**
+     * 早期构建用过的前缀（品牌拼写修正前）。这两个前缀共存的唯一后果是列表里多一条打不开的
+     * 僵尸条目，所以每次 apply / restore 都顺手清掉，不做迁移。
+     */
+    private const val LEGACY_ENTRY_PREFIX = "wekit_groupagg_"
     private const val OTHER_ID = "other"
 
     private const val HIDDEN_PARENT = "hidden_conv_parent"
@@ -493,6 +499,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 "DELETE FROM rcontact WHERE username LIKE ? AND username NOT IN ($placeholders)",
                 arrayOf("$ENTRY_PREFIX%", *keep.toTypedArray())
             )
+            purgeLegacyRows()
             desired.forEach { state ->
                 WeDatabaseApi.execStatement(
                     "UPDATE rconversation SET conversationTime = ? WHERE username = ?",
@@ -562,12 +569,25 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             WeDatabaseApi.execStatement(
                 "DELETE FROM rcontact WHERE username LIKE ?", arrayOf("$ENTRY_PREFIX%")
             )
+            purgeLegacyRows()
         } finally {
             restoring = false
         }
         invalidateSnapshot()
         WeConversationApi.reloadConversations()
         WeLogger.i(TAG, "groups restored")
+    }
+
+    /** 清掉品牌拼写修正前（`wekit_` 前缀）留下的入口行，避免列表里多一条打不开的僵尸条目。 */
+    private fun purgeLegacyRows() {
+        runCatching {
+            WeDatabaseApi.execStatement(
+                "DELETE FROM rconversation WHERE username LIKE ?", arrayOf("$LEGACY_ENTRY_PREFIX%")
+            )
+            WeDatabaseApi.execStatement(
+                "DELETE FROM rcontact WHERE username LIKE ?", arrayOf("$LEGACY_ENTRY_PREFIX%")
+            )
+        }.onFailure { WeLogger.w(TAG, "purge legacy entry rows failed", it) }
     }
 
     private fun ensureEntryRow(state: EntryState): Boolean {

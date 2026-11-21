@@ -30,7 +30,7 @@
 
 ## 实现要点
 
-- 每条入口行是 `rconversation` 里一条 `username = wekit_groupagg_<分组 id>` 的真实会话行（配一条 `rcontact` 昵称），
+- 每条入口行是 `rconversation` 里一条 `username = wekite_groupagg_<分组 id>` 的真实会话行（配一条 `rcontact` 昵称），
   由微信按正常会话行渲染，本模块只把这一行的视图换成自绘样式。
   用真行而不是「往 adapter 里多插一个位置」，是为了避免所有 `position → 会话` 的偏移修正
   （ListView / RecyclerView 两条路径、滚动恢复、长按菜单、搜索都不需要改）。
