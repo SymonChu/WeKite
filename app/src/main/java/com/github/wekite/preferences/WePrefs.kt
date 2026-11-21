@@ -53,7 +53,7 @@ abstract class WePrefs protected constructor() : SharedPreferences, SharedPrefer
     abstract val isPersistent: Boolean
 
     companion object {
-        const val PREFS_NAME = "wekit_prefs"
+        const val PREFS_NAME = "wekite_prefs"
 
         val default by lazy { MmkvPrefsImpl(PREFS_NAME) }
 

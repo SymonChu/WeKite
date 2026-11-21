@@ -215,7 +215,7 @@ object SkipRewardedAds : SwitchFeature(), IResolveDex {
         if (!DUMP_SDK_FILES) return
         if (!dumpedNames.add(path)) return
         runCatching {
-            val dir = File(HostInfo.application.filesDir, "wekit_skip_rewarded_js").apply { mkdirs() }
+            val dir = File(HostInfo.application.filesDir, "wekite_skip_rewarded_js").apply { mkdirs() }
             val safeName = path.substringAfterLast('/').ifBlank { path.hashCode().toString() }
             val target = File(dir, safeName)
             target.writeText(content)

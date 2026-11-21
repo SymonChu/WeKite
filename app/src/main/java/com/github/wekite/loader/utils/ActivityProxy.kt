@@ -149,7 +149,7 @@ object ActivityProxy {
     // --- Inner types ---
 
     object ActProxyMgr {
-        const val ACTIVITY_PROXY_INTENT_TOKEN = "wekit_target_intent_token"
+        const val ACTIVITY_PROXY_INTENT_TOKEN = "wekite_target_intent_token"
         const val SETTINGS_PROXY = "${PackageNames.WECHAT}.app.WeChatSplashActivity"
         const val TRANSPARENT_PROXY = "${PackageNames.WECHAT}.plugin.appbrand.ipc.AppBrandProxyTransparentUI"
 

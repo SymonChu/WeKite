@@ -492,8 +492,8 @@ class MainActivity : ComponentActivity() {
                     val paths = remember {
                         @Suppress("SdCardPath")
                         listOf(
-                            "/data/data/${PackageNames.WECHAT}/files/mmkv/wekit_prefs",
-                            "/data/data/${PackageNames.WECHAT}/files/mmkv/wekit_prefs.crc",
+                            "/data/data/${PackageNames.WECHAT}/files/mmkv/wekite_prefs",
+                            "/data/data/${PackageNames.WECHAT}/files/mmkv/wekite_prefs.crc",
                         )
                     }
 

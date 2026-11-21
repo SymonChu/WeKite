@@ -152,7 +152,7 @@ object WeSettingsInjector : ApiFeature(), IResolveDex, WeChatInputBarApi.IInputB
 
     private const val TAG = "WeSettingsInjector"
 
-    private const val PREFS_KEY = "wekit_settings_entry"
+    private const val PREFS_KEY = "wekite_settings_entry"
     private const val PREFS_TITLE = "${BuildConfig.TAG} 设置"
     private const val PREFERENCE_CLASS_NAME = "com.tencent.mm.ui.base.preference.Preference"
 
