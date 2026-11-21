@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ContentValues
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
@@ -26,7 +27,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -40,87 +45,113 @@ import com.github.wekite.features.api.core.WeApi
 import com.github.wekite.features.api.core.WeConversationApi
 import com.github.wekite.features.api.core.WeDatabaseApi
 import com.github.wekite.features.api.core.WeDatabaseListenerApi
+import com.github.wekite.features.api.ui.WeConversationContextMenuApi
 import com.github.wekite.features.core.ClickableFeature
 import com.github.wekite.features.core.Feature
 import com.github.wekite.preferences.WePrefs
 import com.github.wekite.preferences.WePrefs.Companion.prefOption
 import com.github.wekite.ui.content.AlertDialogContent
+import com.github.wekite.ui.content.DefaultColumn
 import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.HostInfo
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.findActivityOwningView
+import org.json.JSONArray
+import org.json.JSONObject
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * 群聊归拢 —— 把主页列表里的群聊收进一个「群聊」入口条目，点开进入自建的群聊列表。
+ * 群聊归拢 —— 把主页列表里的群聊按「分组」收进若干入口条目，点开进入该分组的群聊列表。
  *
- * ## 整体形态（照微X / WechatChatroomHelper 那一类实现）
- * 1. **入口行**：在 `rconversation` 落一条 `username = wekit_groupagg` 的真行（`rcontact` 里配一条
- *    昵称），置顶。用真行而不是「adapter 里 +1 个位置」的好处是：位置天然正确，ListView /
- *    RecyclerView 两条路径、滚动恢复、长按菜单、搜索都不需要做 position 偏移修正——微X 那
- *    760 行 adapter 代码几乎全在补这个偏移。
- * 2. **自绘**：`getView` 钩子里认到这一行就返回自绘视图（图标 + 标题 + 「N 个群聊 · M 条未读」+ 角标）。
- * 3. **隐藏真实群聊**：把根级群聊行的 `parentRef` 改成 `hidden_conv_parent`——这是微信自己的
- *    「不显示该聊天」机制（本仓库 `WeConversationApi.setConversationsVisibility` 已在用），
- *    取消归拢时改回 `''` 即完整还原，不删任何数据。
- * 4. **点开**：`ConversationClickListener.onItemClick` 钩子里认到入口行 → 消费掉事件 + 弹群聊列表。
+ * ## 形态
+ * - 每个分组 = `rconversation` 里一条自己的真会话行（`username = wekit_groupagg_<id>`）+ `rcontact` 昵称。
+ *   用真行而不是「往 adapter 里多插一个位置」，是为了不碰 `position → 会话` 的偏移修正
+ *   （ListView / RecyclerView 两条路径、滚动恢复、长按菜单、搜索都不用改）。
+ * - 未分组的群自动进「其他群」兜底条目，所以主页列表里**只剩好友会话 + 若干分组条目**。
+ * - 真实群聊行的摘除用微信自己的「不显示该聊天」机制（`parentRef = hidden_conv_parent`），不删数据。
+ * - 分组归属在主页长按群 →「移入分组」里设置；长按分组条目可改名。
  *
- * ## 锚点核验（2026-11-21，8.0.80/versionCode 3220 与 8.0.79 Play 双版本字节级扫描）
- * - 会话列表 bind：**全 APK 唯一**命中宿主去重日志
- *   `Get Item duplicated: positionMaps: %s username [%s, %d] Map: %s datas: %d`，
- *   8.0.80 = `Lcp5/a1;::getView(int,View,ViewGroup)`，8.0.79 = `Liq5/a1;::getView(...)`（混淆名变、
- *   日志串不变 ⇒ 只锚日志串）。
- * - 注意：`ConversationWithCacheAdapter`（`Lcp5/e;`）在 8.0.80 只剩 8 个方法、**没有** getView/getCount，
- *   所以微X 那种「钩 ConversationWithCacheAdapter.superclass.getCount」的做法在新宿主上不成立。
- * - 点击：`com.tencent.mm.ui.conversation.b3::onItemClick(AdapterView,View,int,long)`，锚
- *   `MicroMsg.ConversationClickListener`（79/80 同名，仍只锚日志串）。
+ * ## 锚点核验（2026-11-21，8.0.80/3220 与 8.0.79 Play 双版本字节级扫描）
+ * - 列表 bind：宿主去重日志 `Get Item duplicated: positionMaps: …` **全 APK 唯一**命中
+ *   `getView(int,View,ViewGroup)`（8.0.80 `Lcp5/a1;`，8.0.79 `Liq5/a1;`）。只锚日志串，不写死混淆名。
+ *   ⚠️ `ConversationWithCacheAdapter` 在 8.0.80 已无 getView/getCount，微X 那套 superclass.getCount 不再成立。
+ * - 点击：`com.tencent.mm.ui.conversation.b3::onItemClick`，锚 `MicroMsg.ConversationClickListener`。
+ * - 长按菜单（复用本仓库 `WeConversationContextMenuApi`）：`MicroMsg.ConversationLongClickListener`
+ *   + `onCreateContextMenu, contact is null` → 8.0.80 为 `ui/conversation/x3`；
+ *   选中回调锚 `yuanbao_set_top` → `ui/conversation/v3::onMMMenuItemSelected`。
  */
 @Feature(
     name = "群聊归拢",
     categories = ["聊天"],
-    description = "把所有群聊收进主页一个「群聊」条目，点开进入群聊列表"
+    description = "把群聊按分组收进主页若干条目，点开进入该分组的群聊列表"
 )
 object GroupAggregation : ClickableFeature(), IResolveDex {
 
     private const val TAG = "GroupAggregation"
 
-    /** 入口行的会话 username。不能带 `@`，否则会被微信当成群/公众号。 */
-    private const val ENTRY_USERNAME = "wekit_groupagg"
+    private const val ENTRY_PREFIX = "wekit_groupagg_"
+    private const val OTHER_ID = "other"
 
-    /** 微信自己的「不显示该聊天」parentRef 值，用来把真实群聊从主页摘掉。 */
     private const val HIDDEN_PARENT = "hidden_conv_parent"
 
     private const val DUP_ANCHOR =
         "Get Item duplicated: positionMaps: %s username [%s, %d] Map: %s datas: %d"
 
-    private const val STATS_TTL_MS = 1_500L
+    private const val SNAPSHOT_TTL_MS = 1_500L
+    private const val REAPPLY_INTERVAL_MS = 60_000L
 
-    private var entryTitle by prefOption("group_agg_entry_title", "群聊")
+    private const val MENU_ID_MOVE = 0x4B01
+    private const val MENU_ID_RENAME = 0x4B02
 
-    /** 上一次归拢是否落地。用来在异常/被微信清行后自我修复。 */
+    // ---------------------------------------------------------------- 偏好
+
+    /** 分组定义：`[{"id":"...","name":"工作","members":["xxx@chatroom"]}]`。未分组的群进「其他群」。 */
+    private var foldersJson by prefOption("group_agg_folders", "[]")
+
+    private var otherName by prefOption("group_agg_other_name", "其他群")
+
     private var applied by prefOption("group_agg_applied", false)
 
-    private var statsCache: Triple<Int, Int, Int>? = null
-    private var statsAt = 0L
+    // ---------------------------------------------------------------- 运行时状态
 
-    private val getItemMethods = WeakHashMap<Class<*>, Method>()
-    private val usernameFields = WeakHashMap<Class<*>, Field>()
+    private data class Folder(val id: String, var name: String, val members: LinkedHashSet<String>)
 
-    private val lastBindLog = AtomicLong()
+    private data class GroupRow(
+        val wxId: String,
+        val name: String,
+        val unread: Int,
+        val muteUnread: Int,
+        val time: Long
+    )
 
-    /** 增量归拢的节流：新入群/新会话会自动被收进入口行，但不必每次 bind 都写库。 */
-    private val lastApply = AtomicLong()
-    private const val REAPPLY_INTERVAL_MS = 60_000L
+    private data class EntryState(
+        val username: String,
+        val folderId: String,
+        val name: String,
+        val members: List<String>,
+        val unread: Int,
+        val muteUnread: Int
+    )
+
+    @Volatile
+    private var entryCache: List<EntryState>? = null
+    private var entryCacheAt = 0L
+
     @Volatile
     private var applying = false
 
     /** 还原过程中要让宿主的 parentRef 写入通过，否则刚还原的行会被监听器立刻藏回去。 */
     @Volatile
     private var restoring = false
+
+    private val getItemMethods = WeakHashMap<Class<*>, Method>()
+    private val usernameFields = WeakHashMap<Class<*>, Field>()
+    private val lastBindLog = AtomicLong()
+    private val lastApply = AtomicLong()
 
     // ---------------------------------------------------------------- dex 锚点
 
@@ -142,10 +173,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         }
     }
 
-    /**
-     * 宿主写会话行时会把 `parentRef` 抹掉（收到新消息就重写整行）——在这里直接改回
-     * [HIDDEN_PARENT]，比「等下一次 60 秒节流再补一遍」快，群不会先闪回主页列表。
-     */
+    /** 宿主写会话行时会把 `parentRef` 抹掉（收到新消息就重写整行）——当场改回去，群不会闪回主页。 */
     private val conversationUpdateListener =
         WeDatabaseListenerApi.IUpdateListener { table, values, _where, whereArgs, _conflict ->
             if (table != "rconversation") return@IUpdateListener
@@ -154,59 +182,83 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             if (talker == null || !talker.endsWith("@chatroom")) return@IUpdateListener
             if (!values.containsKey("parentRef")) return@IUpdateListener
             val parent = values.getAsString("parentRef")
-            if (parent.isNullOrEmpty()) {
-                values.put("parentRef", HIDDEN_PARENT)
-            }
+            if (parent.isNullOrEmpty()) values.put("parentRef", HIDDEN_PARENT)
         }
+
+    /** 主页长按菜单：群 →「移入分组」；分组条目 →「重命名分组」。 */
+    private val menuProvider = object : WeConversationContextMenuApi.IMenuItemsProvider {
+        override fun getMenuItems(): List<WeConversationContextMenuApi.MenuItem> = listOf(
+            WeConversationContextMenuApi.MenuItem(
+                id = MENU_ID_MOVE,
+                text = "移入分组",
+                drawable = ColorDrawable(Color.TRANSPARENT),
+                shouldShow = { context, _ -> context.talker.endsWith("@chatroom") },
+                onClick = { context -> showMoveDialog(context.activity, context.talker) }
+            ),
+            WeConversationContextMenuApi.MenuItem(
+                id = MENU_ID_RENAME,
+                text = "重命名分组",
+                drawable = ColorDrawable(Color.TRANSPARENT),
+                shouldShow = { context, _ -> context.talker.startsWith(ENTRY_PREFIX) },
+                onClick = { context ->
+                    val folderId = context.talker.removePrefix(ENTRY_PREFIX)
+                    showRenameDialog(context.activity, folderId)
+                }
+            )
+        )
+    }
 
     // ---------------------------------------------------------------- 生命周期
 
     override fun onEnable() {
         WeLogger.i(
             TAG,
-            "anchor host=${HostInfo.versionName} getView=${descriptorOf(methodConversationGetView)} " +
-                "onItemClick=${descriptorOf(methodConversationOnItemClick)}"
+            "anchor host=${HostInfo.versionName} getView=${describe(methodConversationGetView)} " +
+                "onItemClick=${describe(methodConversationOnItemClick)}"
         )
         hookBind()
         hookClick()
         WeDatabaseListenerApi.addListener(conversationUpdateListener)
+        runCatching { WeConversationContextMenuApi.addProvider(menuProvider) }
+            .onFailure { WeLogger.w(TAG, "context menu provider unavailable", it) }
         runCatching { applyAggregation() }
             .onFailure { WeLogger.e(TAG, "apply aggregation failed", it) }
     }
 
     override fun onDisable() {
         WeDatabaseListenerApi.removeListener(conversationUpdateListener)
+        runCatching { WeConversationContextMenuApi.removeProvider(menuProvider) }
         runCatching { restoreAll() }
             .onFailure { WeLogger.e(TAG, "restore failed", it) }
     }
 
-    /** 设置页里点开：手动刷新 / 查看群聊列表。 */
+    /** 设置页里点开：查看全部分组。 */
     override fun onClick(context: ComponentActivity) {
-        showGroupListDialog(context)
+        showAllEntriesDialog(context)
     }
 
-    private fun descriptorOf(target: DexMethodDelegate): String =
-        if (target.isPlaceholder) "<placeholder>" else runCatching { target.method.toString() }
-            .getOrElse { "<resolve-failed>" }
+    private fun describe(target: DexMethodDelegate): String =
+        if (target.isPlaceholder) "<placeholder>"
+        else runCatching { target.method.toString() }.getOrElse { "<resolve-failed>" }
 
     // ---------------------------------------------------------------- 钩子
 
-    private fun hookBind() = hookBindInternal(methodConversationGetView)
-
-    private fun hookBindInternal(target: DexMethodDelegate) {
+    private fun hookBind() {
+        val target = methodConversationGetView
         if (target.isPlaceholder) return
         target.hookAfter {
             val position = args.getOrNull(0) as? Int ?: return@hookAfter
             val adapter = thisObject ?: return@hookAfter
             val username = usernameAt(adapter, position) ?: return@hookAfter
-            if (username != ENTRY_USERNAME) return@hookAfter
+            if (!username.startsWith(ENTRY_PREFIX)) return@hookAfter
+            val state = entries().firstOrNull { it.username == username }
+            if (state == null && !username.startsWith(ENTRY_PREFIX)) return@hookAfter
             val now = System.currentTimeMillis()
-            val last = lastBindLog.get()
-            if (now - last > 5_000) {
+            if (now - lastBindLog.get() > 5_000) {
                 lastBindLog.set(now)
-                WeLogger.d(TAG, "entry row bound, pos=$position count=${countOf(adapter)}")
+                WeLogger.d(TAG, "entry bound: $username")
             }
-            result = buildEntryView()
+            result = buildEntryView(username, state)
             maybeReapply()
         }
     }
@@ -221,8 +273,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             val listAdapter = parent.adapter ?: return@hookBefore
             val header = if (listAdapter is HeaderViewListAdapter) {
                 runCatching {
-                    listAdapter.javaClass.getMethod("getHeaderViewsCount")
-                        .invoke(listAdapter) as Int
+                    listAdapter.javaClass.getMethod("getHeaderViewsCount").invoke(listAdapter) as Int
                 }.getOrDefault(0)
             } else {
                 0
@@ -230,12 +281,11 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             val adapter = if (listAdapter is HeaderViewListAdapter) listAdapter.wrappedAdapter
             else listAdapter
             val username = usernameAt(adapter, position - header) ?: return@hookBefore
-            if (username != ENTRY_USERNAME) return@hookBefore
+            if (!username.startsWith(ENTRY_PREFIX)) return@hookBefore
             // 必须吃掉这次点击：否则微信会拿这行去 startChatting，打开一个不存在的会话。
             result = null
             val activity = findActivityOwningView(view) ?: return@hookBefore
-            WeLogger.d(TAG, "entry row clicked")
-            showGroupListDialog(activity)
+            showEntryDialog(activity, username)
         }
     }
 
@@ -271,12 +321,142 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         return runCatching { field.get(conversation) as? String }.getOrNull()
     }
 
-    private fun countOf(adapter: Any): Int? = runCatching {
-        adapter.javaClass.methods.first { it.name == "getCount" && it.parameterCount == 0 }
-            .invoke(adapter) as Int
-    }.getOrNull()
+    // ---------------------------------------------------------------- 分组配置
+
+    private fun loadFolders(): MutableList<Folder> {
+        val out = mutableListOf<Folder>()
+        runCatching {
+            val array = JSONArray(foldersJson)
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                val id = obj.optString("id")
+                if (id.isEmpty()) continue
+                val members = linkedSetOf<String>()
+                val memberArray = obj.optJSONArray("members") ?: JSONArray()
+                for (j in 0 until memberArray.length()) {
+                    val member = memberArray.optString(j)
+                    if (member.isNotEmpty()) members += member
+                }
+                out += Folder(id, obj.optString("name").ifEmpty { "分组" }, members)
+            }
+        }.onFailure { WeLogger.e(TAG, "parse folders failed", it) }
+        return out
+    }
+
+    private fun saveFolders(folders: List<Folder>) {
+        val array = JSONArray()
+        folders.forEach { folder ->
+            array.put(
+                JSONObject().apply {
+                    put("id", folder.id)
+                    put("name", folder.name)
+                    put("members", JSONArray(folder.members.toList()))
+                }
+            )
+        }
+        foldersJson = array.toString()
+        invalidateSnapshot()
+    }
+
+    private fun moveGroupTo(talker: String, folderId: String) {
+        val folders = loadFolders()
+        folders.forEach { it.members.remove(talker) }
+        if (folderId != OTHER_ID) {
+            val target = folders.firstOrNull { it.id == folderId }
+                ?: return
+            target.members += talker
+        }
+        saveFolders(folders)
+        reapplyNow()
+    }
+
+    private fun createFolder(name: String, talker: String?): Folder {
+        val folders = loadFolders()
+        val folder = Folder(
+            id = System.currentTimeMillis().toString(36),
+            name = name.ifEmpty { "分组" },
+            members = linkedSetOf()
+        )
+        if (talker != null) folder.members += talker
+        folders += folder
+        saveFolders(folders)
+        return folder
+    }
 
     // ---------------------------------------------------------------- 归拢 / 还原
+
+    private fun invalidateSnapshot() {
+        entryCache = null
+    }
+
+    /** 当前应该有哪几个入口条目（含「其他群」兜底）。 */
+    private fun entries(): List<EntryState> {
+        val cached = entryCache
+        val now = System.currentTimeMillis()
+        if (cached != null && now - entryCacheAt < SNAPSHOT_TTL_MS) return cached
+        val groups = groupsInDb()
+        val byId = groups.associateBy { it.wxId }
+        val folders = loadFolders()
+        val assigned = HashSet<String>()
+        val out = mutableListOf<EntryState>()
+
+        folders.forEach { folder ->
+            val members = folder.members.filter { byId.containsKey(it) }
+            assigned += members
+            if (members.isEmpty()) return@forEach
+            val rows = members.mapNotNull { byId[it] }
+            out += EntryState(
+                username = ENTRY_PREFIX + folder.id,
+                folderId = folder.id,
+                name = folder.name,
+                members = members,
+                unread = rows.sumOf { it.unread },
+                muteUnread = rows.sumOf { it.muteUnread }
+            )
+        }
+
+        val rest = groups.filter { it.wxId !in assigned }
+        if (rest.isNotEmpty()) {
+            out += EntryState(
+                username = ENTRY_PREFIX + OTHER_ID,
+                folderId = OTHER_ID,
+                name = otherName,
+                members = rest.map { it.wxId },
+                unread = rest.sumOf { it.unread },
+                muteUnread = rest.sumOf { it.muteUnread }
+            )
+        }
+        entryCache = out
+        entryCacheAt = now
+        return out
+    }
+
+    private fun groupsInDb(): List<GroupRow> = runCatching {
+        WeDatabaseApi.executeQuery(
+            "SELECT c.username AS username, c.unReadCount AS u, c.unReadMuteCount AS m, " +
+                "c.conversationTime AS t, IFNULL(r.nickname, '') AS nick " +
+                "FROM rconversation c LEFT JOIN rcontact r ON r.username = c.username " +
+                "WHERE c.username LIKE '%@chatroom' " +
+                "AND (c.parentRef IS NULL OR c.parentRef = '' OR c.parentRef = '$HIDDEN_PARENT') " +
+                "ORDER BY c.unReadCount DESC, c.conversationTime DESC"
+        ).mapNotNull { row ->
+            val wxId = row["username"] as? String ?: return@mapNotNull null
+            if (wxId.isEmpty()) return@mapNotNull null
+            val nick = (row["nick"] as? String).orEmpty()
+            GroupRow(
+                wxId = wxId,
+                name = nick.ifEmpty { wxId },
+                unread = (row["u"] as? Long)?.toInt() ?: 0,
+                muteUnread = (row["m"] as? Long)?.toInt() ?: 0,
+                time = (row["t"] as? Long) ?: 0L
+            )
+        }
+    }.getOrDefault(emptyList())
+
+    private fun reapplyNow() {
+        runCatching { applyAggregation() }
+            .onFailure { WeLogger.e(TAG, "reapply failed", it) }
+    }
 
     private fun applyAggregation() {
         if (applying) return
@@ -286,26 +466,48 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         }
         applying = true
         try {
-            if (!ensureEntryRow()) {
-                WeLogger.w(TAG, "entry row unavailable")
-                // 入口行都建不出来时绝不能把群聊藏起来——否则用户没有任何入口能看到群。
+            invalidateSnapshot()
+            val desired = entries()
+            if (desired.isEmpty()) {
+                // 没有群聊时不需要任何入口行，也不能把已有改动留在那儿。
                 if (applied) restoreAll()
                 return
+            }
+            var entryFailed = false
+            desired.forEach { state ->
+                if (!ensureEntryRow(state)) entryFailed = true
+            }
+            if (entryFailed) {
+                WeLogger.w(TAG, "entry row unavailable, keeping conversations untouched")
+                if (applied) restoreAll()
+                return
+            }
+            // 清掉已不存在的分组条目（分组被删空 / 改名后 id 不变，不会误删）
+            val keep = desired.map { it.username }
+            val placeholders = keep.joinToString(", ") { "?" }
+            WeDatabaseApi.execStatement(
+                "DELETE FROM rconversation WHERE username LIKE ? AND username NOT IN ($placeholders)",
+                arrayOf("$ENTRY_PREFIX%", *keep.toTypedArray())
+            )
+            WeDatabaseApi.execStatement(
+                "DELETE FROM rcontact WHERE username LIKE ? AND username NOT IN ($placeholders)",
+                arrayOf("$ENTRY_PREFIX%", *keep.toTypedArray())
+            )
+            desired.forEach { state ->
+                WeDatabaseApi.execStatement(
+                    "UPDATE rconversation SET conversationTime = ? WHERE username = ?",
+                    arrayOf(System.currentTimeMillis(), state.username)
+                )
             }
             WeDatabaseApi.execStatement(
                 "UPDATE rconversation SET parentRef = ? " +
                     "WHERE username LIKE '%@chatroom' AND (parentRef IS NULL OR parentRef = '')",
                 arrayOf(HIDDEN_PARENT)
             )
-            WeDatabaseApi.execStatement(
-                "UPDATE rconversation SET conversationTime = ? WHERE username = ?",
-                arrayOf(System.currentTimeMillis(), ENTRY_USERNAME)
-            )
             WeConversationApi.reloadConversations()
             applied = true
             lastApply.set(System.currentTimeMillis())
-            statsCache = null
-            WeLogger.i(TAG, "groups folded; stats=${stats()}")
+            WeLogger.i(TAG, "entries=${desired.map { it.username to it.members.size }}")
         } finally {
             applying = false
         }
@@ -316,33 +518,31 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         val now = System.currentTimeMillis()
         if (now - lastApply.get() < REAPPLY_INTERVAL_MS) return
         lastApply.set(now)
-        runCatching { applyAggregation() }
-            .onFailure { WeLogger.e(TAG, "incremental apply failed", it) }
+        reapplyNow()
     }
 
     /**
      * 异常自愈，由 [GroupAggregationGuard] 在每次微信启动时调用：
-     * - 功能已关闭但上次留下的改动还在 → 还原（用户关掉开关后不该继续藏群）
+     * - 功能已关闭但上次留下的改动还在 → 还原
      * - 入口行被微信清掉 → 还原，避免「群被藏了又没有入口」的死局
      */
     internal fun recoverIfNeeded() {
         if (!applied) return
-        // 用偏好值而不是 isEnabled:守护条目可能比本功能的 startup 先跑，那时 isEnabled 还是 false。
+        // 用偏好值而不是 isEnabled:守护条目可能比本功能的 startup 先跑。
         if (!WePrefs.getBoolOrDef(name, defaultEnabled)) {
             WeLogger.i(TAG, "feature disabled but state applied, restoring")
             runCatching { restoreAll() }
             return
         }
-        // 数据库还没就绪时什么都不做:此时 restore 写不进去,却会把 applied 标记清掉,状态就再也对不上了。
         if (!WeDatabaseApi.isReady) return
         val rowExists = runCatching {
             WeDatabaseApi.executeQuery(
-                "SELECT 1 AS ok FROM rconversation WHERE username = ? LIMIT 1",
-                arrayOf(ENTRY_USERNAME)
+                "SELECT 1 AS ok FROM rconversation WHERE username LIKE ? LIMIT 1",
+                arrayOf("$ENTRY_PREFIX%")
             ).isNotEmpty()
         }.getOrDefault(false)
         if (!rowExists) {
-            WeLogger.w(TAG, "entry row missing on startup, restoring groups")
+            WeLogger.w(TAG, "entry rows missing on startup, restoring groups")
             runCatching { restoreAll() }
         }
     }
@@ -357,29 +557,29 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 arrayOf(HIDDEN_PARENT)
             )
             WeDatabaseApi.execStatement(
-                "DELETE FROM rconversation WHERE username = ?", arrayOf(ENTRY_USERNAME)
+                "DELETE FROM rconversation WHERE username LIKE ?", arrayOf("$ENTRY_PREFIX%")
             )
             WeDatabaseApi.execStatement(
-                "DELETE FROM rcontact WHERE username = ?", arrayOf(ENTRY_USERNAME)
+                "DELETE FROM rcontact WHERE username LIKE ?", arrayOf("$ENTRY_PREFIX%")
             )
         } finally {
             restoring = false
         }
+        invalidateSnapshot()
         WeConversationApi.reloadConversations()
         WeLogger.i(TAG, "groups restored")
     }
 
-    /** 插入/刷新入口行；返回入口行是否可用。 */
-    private fun ensureEntryRow(): Boolean {
-        val okContact = insertOrReplace(
+    private fun ensureEntryRow(state: EntryState): Boolean {
+        val contactOk = insertOrReplace(
             "rcontact",
-            linkedMapOf("username" to ENTRY_USERNAME, "nickname" to entryTitle)
+            linkedMapOf("username" to state.username, "nickname" to state.name)
         )
         val now = System.currentTimeMillis()
-        val okConversation = insertOrReplace(
+        val conversationOk = insertOrReplace(
             "rconversation",
             linkedMapOf(
-                "username" to ENTRY_USERNAME,
+                "username" to state.username,
                 "unReadCount" to "0",
                 "unReadMuteCount" to "0",
                 "atCount" to "0",
@@ -395,33 +595,27 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 "parentRef" to ""
             )
         )
-        if (!okContact || !okConversation) return false
-        runCatching { WeConversationApi.setPinned(ENTRY_USERNAME, true) }
+        if (!contactOk || !conversationOk) return false
+        runCatching { WeConversationApi.setPinned(state.username, true) }
         return true
     }
 
     /**
      * 按宿主真实表结构裁剪后再写入：不同版本 `rconversation` 列集合会变，硬写全部列会整条失败。
-     * 只写「表里确实存在」的列，其余交给 SQLite 默认值。
      */
-    private fun insertOrReplace(table: String, values: Map<String, String>): Boolean {
-        return runCatching {
-            val columns = tableColumns(table)
-            if (columns.isEmpty()) {
-                WeLogger.w(TAG, "no columns for $table")
-                return false
-            }
-            val usable = values.filterKeys { it in columns }
-            if (usable.isEmpty()) return false
-            val names = usable.keys.joinToString(", ")
-            val placeholders = usable.keys.joinToString(", ") { "?" }
-            WeDatabaseApi.execStatement(
-                "INSERT OR REPLACE INTO $table ($names) VALUES ($placeholders)",
-                usable.values.toTypedArray()
-            )
-            true
-        }.onFailure { WeLogger.e(TAG, "insert into $table failed", it) }.getOrDefault(false)
-    }
+    private fun insertOrReplace(table: String, values: Map<String, String>): Boolean = runCatching {
+        val columns = tableColumns(table)
+        if (columns.isEmpty()) return false
+        val usable = values.filterKeys { it in columns }
+        if (usable.isEmpty()) return false
+        val names = usable.keys.joinToString(", ")
+        val placeholders = usable.keys.joinToString(", ") { "?" }
+        WeDatabaseApi.execStatement(
+            "INSERT OR REPLACE INTO $table ($names) VALUES ($placeholders)",
+            usable.values.toTypedArray()
+        )
+        true
+    }.onFailure { WeLogger.e(TAG, "insert into $table failed", it) }.getOrDefault(false)
 
     private fun tableColumns(table: String): Set<String> = runCatching {
         val out = linkedSetOf<String>()
@@ -434,67 +628,22 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         out
     }.getOrDefault(emptySet())
 
-    // ---------------------------------------------------------------- 统计 / 群列表
-
-    /** (群数量, 未读数, 免打扰未读数) */
-    private fun stats(): Triple<Int, Int, Int> {
-        val now = System.currentTimeMillis()
-        statsCache?.let { if (now - statsAt < STATS_TTL_MS) return it }
-        val value = runCatching {
-            WeDatabaseApi.executeQuery(
-                "SELECT COUNT(*) AS c, " +
-                    "IFNULL(SUM(unReadCount), 0) AS u, " +
-                    "IFNULL(SUM(unReadMuteCount), 0) AS m " +
-                    "FROM rconversation WHERE username LIKE '%@chatroom' " +
-                    "AND (parentRef IS NULL OR parentRef = '' OR parentRef = '$HIDDEN_PARENT')"
-            ).firstOrNull()?.let { row ->
-                val c = (row["c"] as? Long)?.toInt() ?: 0
-                val u = (row["u"] as? Long)?.toInt() ?: 0
-                val m = (row["m"] as? Long)?.toInt() ?: 0
-                Triple(c, u, m)
-            }
-        }.getOrNull() ?: Triple(0, 0, 0)
-        statsCache = value
-        statsAt = now
-        return value
-    }
-
-    private data class GroupEntry(
-        val wxId: String,
-        val name: String,
-        val unread: Int,
-        val time: Long
-    )
-
-    private fun loadGroups(): List<GroupEntry> = runCatching {
-        WeDatabaseApi.executeQuery(
-            "SELECT c.username AS username, c.unReadCount AS u, c.conversationTime AS t, " +
-                "IFNULL(r.nickname, '') AS nick " +
-                "FROM rconversation c LEFT JOIN rcontact r ON r.username = c.username " +
-                "WHERE c.username LIKE '%@chatroom' " +
-                "AND (c.parentRef IS NULL OR c.parentRef = '' OR c.parentRef = '$HIDDEN_PARENT') " +
-                "ORDER BY c.unReadCount DESC, c.conversationTime DESC"
-        ).map { row ->
-            val wxId = row["username"] as? String ?: ""
-            val nick = (row["nick"] as? String).orEmpty()
-            GroupEntry(
-                wxId = wxId,
-                name = nick.ifEmpty { wxId },
-                unread = (row["u"] as? Long)?.toInt() ?: 0,
-                time = (row["t"] as? Long) ?: 0L
-            )
-        }.filter { it.wxId.isNotEmpty() }
-    }.getOrDefault(emptyList())
-
     // ---------------------------------------------------------------- 入口行自绘
 
     @SuppressLint("SetTextI18n")
-    private fun buildEntryView(): View {
+    private fun buildEntryView(username: String, state: EntryState?): View {
         val context = HostInfo.application
         val density = context.resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()
 
-        val (count, unread, muteUnread) = stats()
+        val name = state?.name ?: run {
+            val folderId = username.removePrefix(ENTRY_PREFIX)
+            if (folderId == OTHER_ID) otherName
+            else loadFolders().firstOrNull { it.id == folderId }?.name ?: "分组"
+        }
+        val count = state?.members?.size ?: 0
+        val unread = state?.unread ?: 0
+        val muteUnread = state?.muteUnread ?: 0
         val badge = if (unread > 0) unread else muteUnread
         val muted = unread == 0 && muteUnread > 0
 
@@ -504,15 +653,13 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             setPadding(dp(16), dp(10), dp(16), dp(10))
         }
 
-        // 图标：圆形底 + 「群」字（不依赖宿主资源，避免跨版本 drawable 失效）
         val iconBox = FrameLayout(context)
-        val circle = GradientDrawable().apply {
+        iconBox.background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(0xFF07C160.toInt())
         }
-        iconBox.background = circle
         iconBox.addView(TextView(context).apply {
-            text = "群"
+            text = name.take(1)
             setTextColor(Color.WHITE)
             textSize = 18f
             gravity = Gravity.CENTER
@@ -526,7 +673,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             setPadding(dp(12), 0, 0, 0)
         }
         texts.addView(TextView(context).apply {
-            text = entryTitle
+            text = name
             textSize = 16f
             setTextColor(0xFF111111.toInt())
             maxLines = 1
@@ -557,37 +704,82 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 minWidth = dp(18)
                 setPadding(dp(5), 0, dp(5), 0)
             }
-            row.addView(badgeView, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, dp(18)
-            ))
+            row.addView(
+                badgeView,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(18))
+            )
         }
         return row
     }
 
-    // ---------------------------------------------------------------- 群聊列表弹窗
+    // ---------------------------------------------------------------- 弹窗
 
-    private fun showGroupListDialog(activity: Activity) {
-        val groups = loadGroups()
+    /** 所有分组一览（点功能行时打开）。 */
+    private fun showAllEntriesDialog(activity: Activity) {
+        val states = entries()
         showComposeDialog(activity) {
             AlertDialogContent(
-                title = { Text(entryTitle) },
+                title = { Text("群聊归拢") },
+                text = {
+                    if (states.isEmpty()) {
+                        Text("当前没有群聊可归拢。", style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        Box(Modifier.heightIn(max = 420.dp)) {
+                            LazyColumn(Modifier.fillMaxWidth()) {
+                                items(states, key = { it.username }) { state ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                dialog.dismiss()
+                                                showEntryDialog(activity, state.username)
+                                            }
+                                            .padding(horizontal = 4.dp, vertical = 10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = state.name,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Text(
+                                            text = "${state.members.size} 个群",
+                                            style = MaterialTheme.typography.labelMedium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                dismissButton = { TextButton(onClick = { dialog.dismiss() }) { Text("关闭") } }
+            )
+        }
+    }
+
+    /** 某个分组的群列表。 */
+    private fun showEntryDialog(activity: Activity, entryUsername: String) {
+        val state = entries().firstOrNull { it.username == entryUsername }
+        val groups = groupsInDb()
+        val byId = groups.associateBy { it.wxId }
+        val rows = state?.members?.mapNotNull { byId[it] } ?: emptyList()
+        val title = state?.name ?: "分组"
+        showComposeDialog(activity) {
+            AlertDialogContent(
+                title = { Text(title) },
                 text = {
                     Box(Modifier.heightIn(max = 420.dp)) {
                         LazyColumn(Modifier.fillMaxWidth()) {
-                            items(groups, key = { it.wxId }) { group ->
+                            items(rows, key = { it.wxId }) { group ->
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable {
                                             dialog.dismiss()
-                                            runCatching {
-                                                WeApi.openContact(
-                                                    activity, group.wxId,
-                                                    WeApi.OpenContactDestination.CONVERSATION
-                                                )
-                                            }.onFailure {
-                                                WeLogger.e(TAG, "open chat failed: ${group.wxId}", it)
-                                            }
+                                            openChat(activity, group.wxId)
                                         }
                                         .padding(horizontal = 4.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -604,13 +796,12 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                                     )
                                     if (group.unread > 0) {
                                         Box(
-                                            modifier = Modifier
-                                                .size(18.dp)
-                                                .padding(start = 8.dp),
+                                            modifier = Modifier.size(24.dp),
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Text(
-                                                text = if (group.unread > 99) "99+" else group.unread.toString(),
+                                                text = if (group.unread > 99) "99+"
+                                                else group.unread.toString(),
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.error
                                             )
@@ -622,9 +813,140 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { dialog.dismiss() }) { Text("关闭") }
+                    Row {
+                        TextButton(onClick = {
+                            dialog.dismiss()
+                            showRenameDialog(activity, entryUsername.removePrefix(ENTRY_PREFIX))
+                        }) { Text("重命名") }
+                        TextButton(onClick = { dialog.dismiss() }) { Text("关闭") }
+                    }
                 }
             )
         }
+    }
+
+    /** 群 →「移入分组」。 */
+    private fun showMoveDialog(activity: Activity, talker: String) {
+        val folders = loadFolders()
+        showComposeDialog(activity) {
+            AlertDialogContent(
+                title = { Text("移入分组") },
+                text = {
+                    Box(Modifier.heightIn(max = 420.dp)) {
+                        LazyColumn(Modifier.fillMaxWidth()) {
+                            items(folders, key = { it.id }) { folder ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            dialog.dismiss()
+                                            moveGroupTo(talker, folder.id)
+                                        }
+                                        .padding(horizontal = 4.dp, vertical = 10.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = folder.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (talker in folder.members) {
+                                        Text("已在此", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            }
+                            item {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            dialog.dismiss()
+                                            showTextInputDialog(
+                                                activity, "新建分组", "",
+                                                onConfirm = { createdName, _ ->
+                                                    val folder = createFolder(createdName, talker)
+                                                    reapplyNow()
+                                                    WeLogger.i(TAG, "folder created: ${folder.name}")
+                                                }
+                                            )
+                                        }
+                                        .padding(horizontal = 4.dp, vertical = 10.dp)
+                                ) { Text("＋ 新建分组…", style = MaterialTheme.typography.bodyMedium) }
+                            }
+                            item {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            dialog.dismiss()
+                                            moveGroupTo(talker, OTHER_ID)
+                                        }
+                                        .padding(horizontal = 4.dp, vertical = 10.dp)
+                                ) { Text("移出分组（回到「$otherName」）", style = MaterialTheme.typography.bodyMedium) }
+                            }
+                        }
+                    }
+                },
+                dismissButton = { TextButton(onClick = { dialog.dismiss() }) { Text("取消") } }
+            )
+        }
+    }
+
+    private fun showRenameDialog(activity: Activity, folderId: String) {
+        val current = if (folderId == OTHER_ID) otherName else
+            loadFolders().firstOrNull { it.id == folderId }?.name ?: return
+        showTextInputDialog(activity, "重命名分组", current) { name, _ ->
+            if (name.isEmpty()) return@showTextInputDialog
+            if (folderId == OTHER_ID) {
+                otherName = name
+            } else {
+                val folders = loadFolders()
+                folders.firstOrNull { it.id == folderId }?.name = name
+                saveFolders(folders)
+            }
+            invalidateSnapshot()
+            reapplyNow()
+        }
+    }
+
+    private fun showTextInputDialog(
+        activity: Activity,
+        title: String,
+        initial: String,
+        onConfirm: (String, Activity) -> Unit
+    ) {
+        showComposeDialog(activity) {
+            var text by remember { mutableStateOf(initial) }
+            AlertDialogContent(
+                title = { Text(title) },
+                text = {
+                    DefaultColumn {
+                        TextField(
+                            value = text,
+                            onValueChange = { text = it },
+                            singleLine = true,
+                            label = { Text("名称") }
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val value = text.trim()
+                        dialog.dismiss()
+                        onConfirm(value, activity)
+                    }) { Text("确定") }
+                },
+                dismissButton = { TextButton(onClick = { dialog.dismiss() }) { Text("取消") } }
+            )
+        }
+    }
+
+    private fun openChat(activity: Activity, wxId: String) {
+        runCatching {
+            WeApi.openContact(activity, wxId, WeApi.OpenContactDestination.CONVERSATION)
+        }.onFailure { WeLogger.e(TAG, "open chat failed: $wxId", it) }
     }
 }
