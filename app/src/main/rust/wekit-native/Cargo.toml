@@ -18,7 +18,7 @@ sha2 = { version = "0.11", default-features = false }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 rasterlottie = { version = "0.2", default-features = false, features = ["images", "text"] }
 gif = "0.14"
-webm-iterable = "0.6"
+webm-iterable = "0.7"
 
 [build-dependencies]
 bindgen = "0.72"
