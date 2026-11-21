@@ -37,7 +37,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.ujhhgtg.reflekt.reflekt
-import dev.ujhhgtg.reflekt.utils.toClass
 import com.github.wekite.dexkit.abc.IResolveDex
 import com.github.wekite.dexkit.dsl.DexMethodDelegate
 import com.github.wekite.dexkit.dsl.dexMethod
@@ -54,7 +53,6 @@ import com.github.wekite.ui.content.TextButton
 import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.HostInfo
 import com.github.wekite.utils.WeLogger
-import com.github.wekite.utils.android.findActivityOwningView
 import com.github.wekite.utils.android.isDarkMode
 import org.json.JSONArray
 import org.json.JSONObject
@@ -73,10 +71,12 @@ import java.util.concurrent.atomic.AtomicLong
  *   这条行同时充当两个角色：主页列表里的入口条目、以及容器页的「父会话」。
  * - 该分组的成员群行 `parentRef = wekite_groupagg_<id>`（微信自己的「不显示该聊天」机制），
  *   于是它们从主页消失、但又归属在这个父会话下。
- * - 点入口条目 → 启动 `com.tencent.mm.ui.conversation.ConvBoxServiceConversationUI`（8.0.80 实测存在），
- *   并把 `Contact_User` 传成这个父会话 id。容器页查询时把 parentRef 换成它，就能列出该分组的群。
- *   **这样二级页完全由微信原生渲染**：不会因为 Compose 组合期异常把微信带崩（v4.04 的闪退就是这样死的）。
- * - 分组长按菜单、重命名、移入分组全部用 framework `AlertDialog`，同样不引入 Compose。
+ * - 点入口条目 → **就地展开/收起**：展开时把该分组成员群的 `parentRef` 清空，它们直接回到主页列表；
+ *   再点一次重新收起。不打开任何二级页面。
+ *   这条交互是刻意的：v4.04 用自建 Compose 弹窗、v4.05 用宿主会话盒子页，两次都把微信搞崩
+ *   （前者是组合期异常，后者是 `ConvBoxServiceConversationUI` 不接受我们的假父会话，宿主自己 NPE）。
+ *   展开/收起只改数据库字段 + 触发一次列表刷新，宿主 UI 完全不参与，因此不可能因为本功能闪退。
+ * - 分组长按菜单、重命名、移入分组用 framework `AlertDialog`（非 Compose）。
  *
  * ## 锚点核验（2026-11-21，8.0.80/3220 与 8.0.79 Play，字节级扫描）
  * - 列表 bind：宿主去重日志 `Get Item duplicated: positionMaps: …` **全 APK 唯一**命中
@@ -104,8 +104,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
     private const val LEGACY_ENTRY_PREFIX = "wekit_groupagg_"
     private const val OTHER_ID = "other"
 
-    /** 微信自己的会话盒子页：渲染某个 parentRef 下的会话列表。8.0.80 实测存在（未混淆）。 */
-    private const val CONTAINER_UI = "com.tencent.mm.ui.conversation.ConvBoxServiceConversationUI"
 
     private const val DUP_ANCHOR =
         "Get Item duplicated: positionMaps: %s username [%s, %d] Map: %s datas: %d"
@@ -135,6 +133,9 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
     private var otherName by prefOption("group_agg_other_name", "其他群")
 
     private var applied by prefOption("group_agg_applied", false)
+
+    /** 已「就地展开」的分组 id 列表：展开的组，成员群直接回到主页列表。 */
+    private var expandedJson by prefOption("group_agg_expanded", "[]")
 
     // ---------------------------------------------------------------- 运行时状态
 
@@ -168,9 +169,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
     @Volatile
     private var restoring = false
 
-    /** 当前打开的容器页对应的分组 id，由容器页 onCreate/onDestroy 维护。 */
-    @Volatile
-    private var activeFolderId: String? = null
 
     private val getItemMethods = WeakHashMap<Class<*>, Method>()
     private val usernameFields = WeakHashMap<Class<*>, Field>()
@@ -200,18 +198,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             name = "onItemClick"
             paramTypes("android.widget.AdapterView", "android.view.View", "int", "long")
             usingEqStrings("MicroMsg.ConversationClickListener")
-        }
-    }
-
-    /** 容器页按 parentRef 列会话：`select * from rconversation where … order by flag desc, conversationTime desc`。 */
-    private val methodConversationQueryByParent by dexMethod(allowFailure = true) {
-        searchPackages("com.tencent.mm.storage")
-        matcher {
-            usingStrings(
-                "select * from rconversation where ",
-                " order by flag desc, conversationTime desc"
-            )
-            paramTypes("int", "java.util.List", "java.lang.String", "int")
         }
     }
 
@@ -283,14 +269,12 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             TAG,
             "anchor host=${HostInfo.versionName} getView=${describe(methodConversationGetView)} " +
                 "onItemClick=${describe(methodConversationOnItemClick)} " +
-                "queryByParent=${describe(methodConversationQueryByParent)} " +
                 "setParentRef=${describe(methodStorageSetParentRef)} " +
                 "clearParentRef=${describe(methodStorageClearParentRef)}"
         )
         hookBind()
         hookClick()
         hookParentRefWrites()
-        hookContainerPage()
         WeDatabaseListenerApi.addListener(conversationUpdateListener)
         val menuBound = runCatching { WeConversationContextMenuApi.addProvider(menuProvider) }
             .onFailure { WeLogger.w(TAG, "context menu provider unavailable", it) }
@@ -299,7 +283,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             TAG,
             "hooks getView=${!methodConversationGetView.isPlaceholder} " +
                 "click=${!methodConversationOnItemClick.isPlaceholder} " +
-                "queryByParent=${!methodConversationQueryByParent.isPlaceholder} " +
                 "menu=$menuBound"
         )
         runCatching { applyAggregation() }
@@ -366,29 +349,8 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             if (!username.startsWith(ENTRY_PREFIX)) return@hookBefore
             // 必须吃掉这次点击：否则微信会拿这行去 startChatting，打开一个不存在的会话。
             result = null
-            val activity = findActivityOwningView(view) ?: return@hookBefore
-            openFolder(activity, username)
+            toggleFolder(username.removePrefix(ENTRY_PREFIX))
         }
-    }
-
-    /** 容器页打开/关闭时维护 [activeFolderId]，只在这期间替换父级查询的 parentRef。 */
-    private fun hookContainerPage() {
-        runCatching {
-            val cls = CONTAINER_UI.toClass()
-            cls.reflekt().firstMethod { name = "onCreate"; parameters(android.os.Bundle::class) }.hookBefore {
-                activeFolderId = (thisObject as? Activity)?.intent?.getStringExtra("Contact_User")
-                WeLogger.i(TAG, "container opened, folder=$activeFolderId")
-            }
-            cls.reflekt().firstMethod { name = "onDestroy" }.hookAfter {
-                activeFolderId = null
-            }
-            if (!methodConversationQueryByParent.isPlaceholder) {
-                methodConversationQueryByParent.hookBefore {
-                    val folder = activeFolderId ?: return@hookBefore
-                    if (args.getOrNull(2) is String) args[2] = folder
-                }
-            }
-        }.onFailure { WeLogger.w(TAG, "container page hook failed", it) }
     }
 
     private fun hookParentRefWrites() {
@@ -626,17 +588,19 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             purgeLegacyRows()
 
             // 每个成员群挂到自己分组的父会话下（不是统一的隐藏值），容器页才能按 parentRef 列出来。
-            val mapping = desired.flatMap { state -> state.members.map { it to state.username } }
             WeDatabaseApi.transaction {
                 WeDatabaseApi.execStatement(
                     "UPDATE rconversation SET parentRef = '' WHERE parentRef LIKE ?",
                     arrayOf("$ENTRY_PREFIX%")
                 )
-                mapping.forEach { (talker, entry) ->
-                    WeDatabaseApi.execStatement(
-                        "UPDATE rconversation SET parentRef = ? WHERE username = ?",
-                        arrayOf(entry, talker)
-                    )
+                // 展开的分组不隔离成员：群直接回到主页列表；折叠的才挂到自己分组的父会话下。
+                desired.filterNot { isExpanded(it.folderId) }.forEach { state ->
+                    state.members.forEach { talker ->
+                        WeDatabaseApi.execStatement(
+                            "UPDATE rconversation SET parentRef = ? WHERE username = ?",
+                            arrayOf(state.username, talker)
+                        )
+                    }
                 }
             }
             // 入口行之间按分组顺序排：第 1 个分组拿最新时间，依次后退；flag 低 56 位同步写时间。
@@ -863,6 +827,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             text = buildString {
                 append(count).append(" 个群聊")
                 if (unread > 0) append(" · ").append(unread).append(" 条未读")
+                append(if (isExpanded(username.removePrefix(ENTRY_PREFIX))) " · 已展开，点此收起" else " · 点此展开")
             }
             textSize = 13f
             setTextColor(subtitleColor)
@@ -911,19 +876,29 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
 
     // ---------------------------------------------------------------- 宿主进程里的弹窗（framework，不用 Compose）
 
-    private fun openFolder(activity: Activity, entryUsername: String) {
-        activeFolderId = entryUsername
+    // ---- 就地展开/收起（不打开任何页面，零宿主 UI 依赖，因此不可能因此崩溃）
+
+    private fun isExpanded(folderId: String): Boolean =
         runCatching {
-            activity.startActivity(Intent().apply {
-                setClassName(HostInfo.packageName, CONTAINER_UI)
-                putExtra("Contact_User", entryUsername)
-                putExtra("Contact_ChatRoomId", entryUsername)
-                putExtra("room_name", entryUsername)
-            })
-        }.onFailure {
-            activeFolderId = null
-            WeLogger.e(TAG, "open container failed: $entryUsername", it)
-        }
+            val array = JSONArray(expandedJson)
+            (0 until array.length()).any { array.optString(it) == folderId }
+        }.getOrDefault(false)
+
+    private fun setExpanded(folderId: String, expanded: Boolean) {
+        val current = runCatching {
+            val array = JSONArray(expandedJson)
+            (0 until array.length()).map { array.optString(it) }.filter { it.isNotEmpty() }.toMutableSet()
+        }.getOrDefault(mutableSetOf())
+        if (expanded) current += folderId else current -= folderId
+        expandedJson = JSONArray(current.toList()).toString()
+        invalidateSnapshot()
+    }
+
+    private fun toggleFolder(folderId: String) {
+        val next = !isExpanded(folderId)
+        setExpanded(folderId, next)
+        WeLogger.i(TAG, "toggle folder=$folderId expanded=$next")
+        reapplyNow()
     }
 
     /** 群 →「移入分组」。用 framework AlertDialog 的 items 列表，避免 Compose 在宿主进程里崩。 */
