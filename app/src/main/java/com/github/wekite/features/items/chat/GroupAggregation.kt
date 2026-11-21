@@ -126,8 +126,6 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
     private const val MENU_ID_MOVE = 0x7E4B0001
     private const val MENU_ID_RENAME = 0x7E4B0002
 
-    /** 入口行最多横排几个群头像。 */
-    private const val MAX_AVATARS = 3
 
     // ---------------------------------------------------------------- 偏好
 
@@ -154,9 +152,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         val folderId: String,
         val name: String,
         val members: List<String>,
-        val unread: Int,
-        /** 前 [MAX_AVATARS] 个成员的显示名，用于入口行横向头像（避免在 bind 里再查库）。 */
-        val labels: List<String>
+        val unread: Int
     )
 
     @Volatile
@@ -538,8 +534,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 folderId = folder.id,
                 name = folder.name,
                 members = members,
-                unread = rows.sumOf { it.unread },
-                labels = members.take(MAX_AVATARS).map { byId[it]?.name ?: it }
+                unread = rows.sumOf { it.unread }
             )
         }
 
@@ -550,8 +545,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 folderId = OTHER_ID,
                 name = otherName,
                 members = rest.map { it.wxId },
-                unread = rest.sumOf { it.unread },
-                labels = rest.take(MAX_AVATARS).map { it.name }
+                unread = rest.sumOf { it.unread }
             )
         }
         entryCache = out
@@ -851,37 +845,8 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             setPadding(dp(16), dp(10), dp(16), dp(10))
         }
 
-        // 横向叠放最多 MAX_AVATARS 个群头像（用群名首字 + 稳定配色，避免依赖宿主头像加载器）。
-        val avatarBox = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val labels = state?.labels.orEmpty()
-        if (labels.isEmpty()) {
-            avatarBox.addView(avatar(context, name.take(1), 0, density), LinearLayout.LayoutParams(dp(32), dp(32)))
-        } else {
-            labels.forEachIndexed { index, label ->
-                val view = avatar(context, label.take(1), index, density)
-                if (index > 0) {
-                    val lp = LinearLayout.LayoutParams(dp(32), dp(32))
-                    lp.marginStart = -dp(10)
-                    avatarBox.addView(view, lp)
-                } else {
-                    avatarBox.addView(view, LinearLayout.LayoutParams(dp(32), dp(32)))
-                }
-            }
-            if (count > labels.size) {
-                avatarBox.addView(TextView(context).apply {
-                    text = "+${count - labels.size}"
-                    textSize = 11f
-                    setTextColor(subtitleColor)
-                    gravity = Gravity.CENTER
-                }, LinearLayout.LayoutParams(dp(26), dp(32)))
-            }
-        }
-        row.addView(avatarBox, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)
-        ))
+        // 单个圆形图标（首字）+ 名字 + 未读角标；暂不做横向多头像。
+        row.addView(avatar(context, name.take(1), 0, density), LinearLayout.LayoutParams(dp(48), dp(48)))
 
         val texts = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -933,7 +898,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         val stroke = (2 * density).toInt()
         return TextView(context).apply {
             text = letter
-            textSize = 13f
+            textSize = 18f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
