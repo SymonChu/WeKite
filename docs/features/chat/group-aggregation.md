@@ -43,3 +43,7 @@
   `MicroMsg.ConversationLongClickListener` —— 都不写死混淆类名。
 - 异常自愈（`群聊归拢守护`，常驻）：微信启动时若发现「开关已关但改动还在」或「入口行被微信清掉」，
   自动还原群聊显示，避免「群被藏了又没有入口」的死局。
+
+## 验证
+
+装机后的分步验证、日志判据与失败诊断表见 `docs/testing/group-aggregation-checklist.md`。

@@ -264,14 +264,23 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         WeLogger.i(
             TAG,
             "anchor host=${HostInfo.versionName} getView=${describe(methodConversationGetView)} " +
-                "onItemClick=${describe(methodConversationOnItemClick)}"
+                "onItemClick=${describe(methodConversationOnItemClick)} " +
+                "setParentRef=${describe(methodStorageSetParentRef)} " +
+                "clearParentRef=${describe(methodStorageClearParentRef)}"
         )
         hookBind()
         hookClick()
         hookParentRefWrites()
         WeDatabaseListenerApi.addListener(conversationUpdateListener)
-        runCatching { WeConversationContextMenuApi.addProvider(menuProvider) }
+        val menuBound = runCatching { WeConversationContextMenuApi.addProvider(menuProvider) }
             .onFailure { WeLogger.w(TAG, "context menu provider unavailable", it) }
+            .isSuccess
+        WeLogger.i(
+            TAG,
+            "hooks getView=${!methodConversationGetView.isPlaceholder} " +
+                "click=${!methodConversationOnItemClick.isPlaceholder} " +
+                "menu=$menuBound"
+        )
         runCatching { applyAggregation() }
             .onFailure { WeLogger.e(TAG, "apply aggregation failed", it) }
     }
@@ -582,11 +591,31 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
             WeConversationApi.reloadConversations()
             applied = true
             lastApply.set(System.currentTimeMillis())
-            WeLogger.i(TAG, "entries=${desired.map { it.username to it.members.size }}")
+            WeLogger.i(
+                TAG,
+                "applied entries=${desired.map { it.name to it.members.size }} " +
+                    "hiddenGroups=${countByParent(HIDDEN_PARENT)} " +
+                    "rootGroups=${countRootGroups()}"
+            )
         } finally {
             applying = false
         }
     }
+
+    /** 观察用：某个 parentRef 下有多少会话行。 */
+    private fun countByParent(parent: String): Int = runCatching {
+        WeDatabaseApi.rawQuery(
+            "SELECT COUNT(*) FROM rconversation WHERE parentRef = ?", arrayOf(parent)
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
+    }.getOrDefault(-1)
+
+    /** 观察用：还有多少群聊行停留在根级（正常情况下应趋近 0）。 */
+    private fun countRootGroups(): Int = runCatching {
+        WeDatabaseApi.rawQuery(
+            "SELECT COUNT(*) FROM rconversation WHERE username LIKE '%@chatroom' " +
+                "AND (parentRef IS NULL OR parentRef = '')"
+        ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
+    }.getOrDefault(-1)
 
     private fun maybeReapply() {
         if (applying) return
