@@ -59,11 +59,14 @@ import com.github.wekite.ui.utils.showComposeDialog
 import com.github.wekite.utils.HostInfo
 import com.github.wekite.utils.WeLogger
 import com.github.wekite.utils.android.findActivityOwningView
+import com.github.wekite.utils.android.isDarkMode
 import org.json.JSONArray
 import org.json.JSONObject
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.util.WeakHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -124,6 +127,10 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
     /** 宿主打回 parentRef 后，延迟这么久再收敛一次（避开宿主本次写入的同一批 SQL）。 */
     private const val SETTLE_DELAY_MS = 900L
 
+    /** 首次启用时宿主可能还没打开会话库：有限次重试，避免「开了开关却一直不生效」。 */
+    private const val MAX_DB_RETRIES = 10
+    private const val DB_RETRY_DELAY_MS = 3_000L
+
     /**
      * rconversation.flag 的编码（8.0.80 实测：`storage/m4::<init>` 里做 `update rconversation set
      * flag = conversationTime…`，即低 56 位存 conversationTime、高 8 位是置顶/前移位）。
@@ -132,8 +139,9 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
     private const val FLAG_TIME_MASK = 0x00FFFFFFFFFFFFFFL
     private const val FLAG_HIGH_MASK = FLAG_TIME_MASK.inv()
 
-    private const val MENU_ID_MOVE = 0x4B01
-    private const val MENU_ID_RENAME = 0x4B02
+    // 菜单 id 取大值，避免和微信原生菜单项的 id 撞车（撞了的话点原生项会触发我们的回调）。
+    private const val MENU_ID_MOVE = 0x7E4B0001
+    private const val MENU_ID_RENAME = 0x7E4B0002
 
     // ---------------------------------------------------------------- 偏好
 
@@ -167,6 +175,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
 
     @Volatile
     private var entryCache: List<EntryState>? = null
+    @Volatile
     private var entryCacheAt = 0L
 
     @Volatile
@@ -180,6 +189,12 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
     private val usernameFields = WeakHashMap<Class<*>, Field>()
     private val lastBindLog = AtomicLong()
     private val lastApply = AtomicLong()
+    private val dbRetries = AtomicInteger()
+
+    /** 写库 + 重算都放这条单线程上，避免在列表 bind（UI 线程）里做数据库工作。 */
+    private val worker = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "wekite-group-agg").apply { isDaemon = true }
+    }
 
     // ---------------------------------------------------------------- dex 锚点
 
@@ -307,19 +322,20 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         val target = methodConversationGetView
         if (target.isPlaceholder) return
         target.hookAfter {
+            // 任意一行 bind 都是一次「主页列表活着」的信号：用它兜住「首次启用时数据库还没就绪」
+            // 和「宿主把 parentRef 改回去」两种情况（内部 60 秒节流，不会刷库）。
+            maybeReapply()
             val position = args.getOrNull(0) as? Int ?: return@hookAfter
             val adapter = thisObject ?: return@hookAfter
             val username = usernameAt(adapter, position) ?: return@hookAfter
             if (!username.startsWith(ENTRY_PREFIX)) return@hookAfter
             val state = entries().firstOrNull { it.username == username }
-            if (state == null && !username.startsWith(ENTRY_PREFIX)) return@hookAfter
             val now = System.currentTimeMillis()
             if (now - lastBindLog.get() > 5_000) {
                 lastBindLog.set(now)
                 WeLogger.d(TAG, "entry bound: $username")
             }
             result = buildEntryView(username, state)
-            maybeReapply()
         }
     }
 
@@ -533,16 +549,27 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
     }.getOrDefault(emptyList())
 
     private fun reapplyNow() {
-        runCatching { applyAggregation() }
-            .onFailure { WeLogger.e(TAG, "reapply failed", it) }
+        runCatching {
+            worker.execute {
+                runCatching { applyAggregation() }
+                    .onFailure { WeLogger.e(TAG, "reapply failed", it) }
+            }
+        }.onFailure { WeLogger.e(TAG, "schedule reapply failed", it) }
     }
 
     private fun applyAggregation() {
         if (applying) return
         if (!WeDatabaseApi.isReady) {
-            WeLogger.w(TAG, "database not ready, skip")
+            val attempt = dbRetries.incrementAndGet()
+            if (attempt <= MAX_DB_RETRIES) {
+                WeLogger.w(TAG, "database not ready, retry #$attempt in ${DB_RETRY_DELAY_MS}ms")
+                settleHandler.postDelayed(settleTask, DB_RETRY_DELAY_MS)
+            } else {
+                WeLogger.w(TAG, "database still not ready after $MAX_DB_RETRIES retries")
+            }
             return
         }
+        dbRetries.set(0)
         applying = true
         try {
             invalidateSnapshot()
@@ -622,7 +649,10 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         val now = System.currentTimeMillis()
         if (now - lastApply.get() < REAPPLY_INTERVAL_MS) return
         lastApply.set(now)
-        reapplyNow()
+        // 这条路径由列表 bind 触发，跑在 UI 线程上；写库 + reload 全部挪到后台线程，
+        // reloadConversations 自己会把 notify 抛回主线程。
+        runCatching { worker.execute { runCatching { applyAggregation() } } }
+            .onFailure { WeLogger.e(TAG, "schedule reapply failed", it) }
     }
 
     /**
@@ -766,6 +796,10 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         val context = HostInfo.application
         val density = context.resources.displayMetrics.density
         fun dp(value: Int) = (value * density).toInt()
+        // 自绘行不继承宿主列表项的主题色，深色模式下必须自己换，否则黑字黑底看不见。
+        val dark = context.isDarkMode
+        val titleColor = if (dark) 0xFFEDEDED.toInt() else 0xFF111111.toInt()
+        val subtitleColor = if (dark) 0xFF8C8C8C.toInt() else 0xFF888888.toInt()
 
         val name = state?.name ?: run {
             val folderId = username.removePrefix(ENTRY_PREFIX)
@@ -806,7 +840,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
         texts.addView(TextView(context).apply {
             text = name
             textSize = 16f
-            setTextColor(0xFF111111.toInt())
+            setTextColor(titleColor)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
         })
@@ -816,7 +850,7 @@ object GroupAggregation : ClickableFeature(), IResolveDex {
                 if (unread + muteUnread > 0) append(" · ").append(unread + muteUnread).append(" 条未读")
             }
             textSize = 13f
-            setTextColor(0xFF888888.toInt())
+            setTextColor(subtitleColor)
             maxLines = 1
         })
         row.addView(texts, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
